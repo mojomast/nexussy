@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, re, pathlib, shutil, hashlib
+import asyncio, json, logging, os, re, pathlib, shutil, hashlib
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from nexussy.api.schemas import (
@@ -23,6 +23,7 @@ from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.swarm.roles import enforce_tool
 
+logger = logging.getLogger(__name__)
 STAGES=[StageName.interview,StageName.design,StageName.validate,StageName.plan,StageName.review,StageName.develop]
 
 def slugify(name: str) -> str:
@@ -163,6 +164,7 @@ class Engine:
         except Exception as e:
             er=ErrorResponse(error_code=ErrorCode.stage_failed,message=str(e),retryable=False)
             self.paused.pop(run.run_id, None)
+            logger.exception("pipeline run %s failed at stage %s: %s", run.run_id, prev, e)
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=? WHERE run_id=?",("failed",now_utc().isoformat(),run.run_id)))
             await self.emit(SSEEventType.pipeline_error, detail.session.session_id, run.run_id, er)
             await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.failed,summary="pipeline failed",artifacts=artifacts,usage=TokenUsage(),error=er))
@@ -501,13 +503,16 @@ class Engine:
         commit=commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
         return {"worker":worker,"idx":idx,"wid":wid,"wt":wt,"branch":branch,"commit":commit}
 
-    async def _run_worker_rpc(self, rid, sid, worker, idx, cfg, role, main, wt):
+    async def _run_worker_rpc(self, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0):
+        if _depth >= 3:
+            raise RuntimeError("worker RPC max resume depth exceeded")
         rpc=await spawn_pi_worker(cfg,rid,worker.worker_id,role.value,str(main),wt)
         self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
         req_id=await rpc.request(worker.task_title, "nexussy develop task")
         paused_for_resume=False
         try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
         except TimeoutError:
+            logger.warning("worker %s timed out for run %s", worker.worker_id, rid)
             if self.paused.get(rid): paused_for_resume=True
             else: raise
         finally:
@@ -525,7 +530,7 @@ class Engine:
             worker.status=WorkerStatus.running; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
             await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
             await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
-            await self._run_worker_rpc(rid, sid, worker, idx, cfg, role, main, wt)
+            await self._run_worker_rpc(rid, sid, worker, idx, cfg, role, main, wt, _depth=_depth+1)
 
     async def _merge_single_worker(self, result, req, detail, rid, root, context):
         sid=context["sid"]; main=context["main"]; base=context["base"]; roles=context["roles"]; workers=context["workers"]; merged=context["merged"]
