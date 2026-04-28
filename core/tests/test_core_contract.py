@@ -571,6 +571,36 @@ def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
         assert "OPENROUTER_API_KEY=sk-openrouter-secret" in (tmp_path / ".env").read_text()
 
 
+def test_secret_updates_invalidate_provider_env_cache(monkeypatch, tmp_path):
+    class BrokenKeyring:
+        def get_password(self, service, name): raise RuntimeError("no keyring")
+        def set_password(self, service, name, value): raise RuntimeError("no keyring")
+        def delete_password(self, service, name): raise RuntimeError("no keyring")
+    seen=[]
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+        seen.append((_env or {}).get("OPENAI_API_KEY"))
+        if "Generate a JSON array" in prompt:
+            return ProviderResult('[{"id":"q_name","question":"Name?"},{"id":"q_lang","question":"Language?"},{"id":"q_desc","question":"Description?"},{"id":"q_type","question":"Type?"}]', {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
+        return ProviderResult('{"q_name":"Demo","q_lang":"Python","q_desc":"API","q_type":"API"}', {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
+    monkeypatch.setitem(sys.modules, "keyring", BrokenKeyring())
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)
+    server.config = load_config({"providers":{"default_model":"openai/gpt-5.5-fast"}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        assert c.put("/secrets/OPENAI_API_KEY", json={"value":"sk-old"}).status_code == 200
+        first = c.post("/pipeline/start", json={"project_name":"Cache One","description":"small api","auto_approve_interview":True,"stop_after_stage":"interview","metadata":{"mock_provider":True}}).json()
+        _wait_done(c, first["run_id"])
+        assert c.put("/secrets/OPENAI_API_KEY", json={"value":"sk-new"}).status_code == 200
+        second = c.post("/pipeline/start", json={"project_name":"Cache Two","description":"small api","auto_approve_interview":True,"stop_after_stage":"interview","metadata":{"mock_provider":True}}).json()
+        _wait_done(c, second["run_id"])
+    assert "sk-old" in seen
+    assert seen[-1] == "sk-new"
+
+
 @pytest.mark.asyncio
 async def test_fake_provider_production_path(monkeypatch):
     monkeypatch.setenv("NEXUSSY_PROVIDER_MODE", "fake")

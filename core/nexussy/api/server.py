@@ -396,7 +396,9 @@ async def put_secret(request):
         if not isinstance(data, dict) or not isinstance(data.get("value"), str):
             raise ValueError([{"loc":["body","value"],"msg":"value must be a string","type":"value_error"}])
         env_path=pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", str(pathlib.Path(config.home_dir).expanduser()/".env"))).expanduser()
-        return JSONResponse(dump(set_secret(name, data["value"], env_path=env_path, service=config.security.keyring_service)))
+        result=set_secret(name, data["value"], env_path=env_path, service=config.security.keyring_service)
+        engine.invalidate_provider_cache()
+        return JSONResponse(dump(result))
     return await endpoint(request, inner)
 async def del_secret(request):
     async def inner(r):
@@ -404,6 +406,7 @@ async def del_secret(request):
         env_path=pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", str(pathlib.Path(config.home_dir).expanduser()/".env"))).expanduser()
         if not delete_secret(name, env_path=env_path, service=config.security.keyring_service):
             raise KeyError(name)
+        engine.invalidate_provider_cache()
         return JSONResponse(dump(ControlResponse(run_id=name,status=RunStatus.cancelled,message="secret deleted")))
     return await endpoint(request, inner)
 async def memory_list(request):

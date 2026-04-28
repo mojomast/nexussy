@@ -46,6 +46,9 @@ class Engine:
     def __init__(self, db, config):
         self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None
 
+    def invalidate_provider_cache(self):
+        self.provider_env_cache=None
+
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
         await self.db.write(lambda con: con.execute(
