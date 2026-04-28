@@ -120,13 +120,14 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None, service: 
 def delete_secret(name: str, *, env_path: Path | None = None, service: str = "nexussy") -> bool:
     validate_secret_name(name)
     path = env_path or env_file_path()
-    existed = bool(os.environ.get(name) or read_env_file(path).get(name) or keyring_get(name, service))
+    existed = False
     keyring = _keyring_module()
     if keyring:
         sentinel = object()
         deleted = _run_keyring_with_timeout(lambda: keyring.delete_password(service, name), default=sentinel)
         if deleted is not sentinel:
             existed = True
+    existed = existed or bool(os.environ.get(name) or read_env_file(path).get(name))
     os.environ.pop(name, None)
     _write_env_file_value(path, name, None)
     return existed

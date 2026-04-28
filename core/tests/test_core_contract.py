@@ -16,6 +16,7 @@ from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
+from nexussy.providers import delete_secret
 from nexussy.providers import ProviderResult
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
@@ -527,6 +528,19 @@ def test_secrets_api_uses_keyring_without_echo(monkeypatch, tmp_path):
         assert secret not in json.dumps(listed)
         assert c.delete("/secrets/OPENAI_API_KEY").status_code == 200
         assert c.delete("/secrets/OPENAI_API_KEY").status_code == 404
+
+
+def test_delete_secret_reports_keyring_only_secret_existed(monkeypatch, tmp_path):
+    store = {("nexussy", "OPENAI_API_KEY"): "sk-keyring-only"}
+    fake_keyring = types.SimpleNamespace(
+        get_password=lambda service, name: store.get((service, name)),
+        delete_password=lambda service, name: store.pop((service, name)),
+    )
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env = tmp_path / ".env"; env.write_text("")
+    assert delete_secret("OPENAI_API_KEY", env_path=env, service="nexussy") is True
+    assert store == {}
 
 
 def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path):
