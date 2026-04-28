@@ -184,16 +184,21 @@ async def _handle_run(msg: dict[str, Any]) -> None:
     try:
         result = await _run_agent(task, str(params.get("context") or ""))
     except Exception as exc:
-        # The bundled worker must remain useful in fresh installs before a
-        # provider key is configured.  Surface the agent failure, then provide a
-        # minimal deterministic completion so the core RPC path can continue.
-        _event("stderr", {"line": scrub_log(str(exc))})
-        role = os.environ.get("NEXUSSY_WORKER_ROLE", "worker")
-        worker_id = os.environ.get("NEXUSSY_WORKER_ID", role)
-        marker = _root() / f"{role}.txt"
-        marker.write_text(f"{worker_id} completed {task}\n")
-        _event("content_delta", {"delta": f"{role} worker completed fallback task: {task}"})
-        result = {"status": "ok", "summary": "completed with bundled fallback", "worker_id": worker_id, "role": role}
+        scrubbed = scrub_log(str(exc))
+        _event("stderr", {"line": scrubbed})
+        _send({
+            "jsonrpc": "2.0",
+            "id": msg.get("id"),
+            "error": {"code": -32000, "message": scrubbed, "data": {"status": "error", "summary": scrubbed}},
+        })
+        return
+    if isinstance(result, dict) and result.get("status") == "error":
+        _send({
+            "jsonrpc": "2.0",
+            "id": msg.get("id"),
+            "error": {"code": -32001, "message": result.get("summary", "agent error"), "data": result},
+        })
+        return
     _send({"jsonrpc": "2.0", "id": msg.get("id"), "result": result})
 
 

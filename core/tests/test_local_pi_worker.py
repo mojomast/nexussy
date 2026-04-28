@@ -1,7 +1,9 @@
+import json
 import os
 import pytest
 
 from nexussy.config import load_config
+from nexussy.swarm import local_pi_worker
 from nexussy.swarm.local_pi_worker import _block_dangerous_bash, run_tool
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 
@@ -29,6 +31,39 @@ async def test_local_pi_worker_tools_are_worktree_scoped(tmp_path, monkeypatch):
 def test_local_pi_worker_blocks_dangerous_bash():
     with pytest.raises(ValueError, match="command_rejected"):
         _block_dangerous_bash("sudo rm -rf /")
+
+
+@pytest.mark.asyncio
+async def test_handle_run_sends_json_rpc_error_when_agent_raises(monkeypatch, capsys):
+    async def fail_agent(task, context):
+        raise RuntimeError("no api key")
+
+    monkeypatch.setattr(local_pi_worker, "_run_agent", fail_agent)
+
+    await local_pi_worker._handle_run({"jsonrpc": "2.0", "id": "req-1", "method": "agent.run", "params": {}})
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    response = lines[-1]
+    assert response["id"] == "req-1"
+    assert "error" in response
+    assert "result" not in response
+    assert response["error"]["data"]["status"] == "error"
+    assert "no api key" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_handle_run_converts_agent_error_result_to_json_rpc_error(monkeypatch, capsys):
+    async def error_agent(task, context):
+        return {"status": "error", "summary": "max agent turns exceeded"}
+
+    monkeypatch.setattr(local_pi_worker, "_run_agent", error_agent)
+
+    await local_pi_worker._handle_run({"jsonrpc": "2.0", "id": "req-2", "method": "agent.run", "params": {}})
+
+    response = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert response["id"] == "req-2"
+    assert response["error"]["code"] == -32001
+    assert "result" not in response
 
 
 @pytest.mark.asyncio

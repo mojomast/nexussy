@@ -833,15 +833,17 @@ async def test_pi_missing_command_precise_error(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_bundled_pi_fallback_when_local_worker_command_missing(tmp_path, monkeypatch):
+async def test_bundled_pi_returns_error_when_local_worker_command_missing_provider(tmp_path, monkeypatch):
     monkeypatch.delenv("NEXUSSY_DISABLE_BUNDLED_PI", raising=False)
     cfg = load_config({"pi":{"command":"local-pi-worker","args":[],"shutdown_timeout_s":0}})
     rpc = await spawn_pi_worker(cfg, "run", "backend-abcdef", "backend", str(tmp_path), str(tmp_path))
     req_id = await rpc.request("Build API", "ctx")
     response = await rpc.wait_response(req_id, 5)
     await rpc.stop(timeout_s=.1)
-    assert response["result"]["status"] == "ok"
-    assert (tmp_path / "backend.txt").exists()
+    assert "error" in response
+    assert "result" not in response
+    assert response["error"]["data"]["status"] == "error"
+    assert not (tmp_path / "backend.txt").exists()
 
 
 def test_pipeline_develop_uses_fake_pi_and_worktrees(monkeypatch, tmp_path):
