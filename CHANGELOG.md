@@ -1,11 +1,20 @@
 # Changelog
 
+## [Unreleased] — gap-sprint-2
+
+### Fixed
+
+- **Worker sandbox**: replaced bypassable bash denylist with stripped-env subprocess + 64KB output cap
+- **Database**: SQLite read connection pool (3 connections, query_only) eliminates per-read connection overhead
+
+### Added
+
+- **Web UI**: Full pipeline control surface (stage stepper, workers table, blockers, interview form, pause/resume/cancel, API key auth)
+
 ## [Unreleased] — 2026-04-28
 
 ### Fixed
 
-- Worker sandbox: replaced bypassable bash denylist with stripped-env subprocess + 64KB output cap
-- Database: SQLite read connection pool (3 connections, query_only) eliminates per-read connection overhead; pool closed on shutdown
 - **P0** Remove unused `aiosqlite` dependency from `pyproject.toml`
 - **P0** Fix `_startup_lock` initialization race condition on cold start in `server.py`
 - **P0** `local_pi_worker`: agent failures now propagate as JSON-RPC errors instead of silent `status=ok`
@@ -19,7 +28,6 @@
 
 ### Added
 
-- Web UI: Full pipeline control surface replacing the minimal stub (stage stepper, workers, blockers, interview form, controls)
 - `Dockerfile` for containerized deployment (enforces `--workers 1`)
 - `.github/workflows/ci.yml` — automated lint, test, and Docker build on push/PR
 - `Database.cleanup_expired()` method for rate limit housekeeping
