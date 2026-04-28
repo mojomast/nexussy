@@ -40,6 +40,8 @@ def test_schema_forbids_extra():
 def test_security_helpers(tmp_path):
     assert sanitize_relative_path("a/b.txt") == "a/b.txt"
     with pytest.raises(ValueError):
+        sanitize_relative_path("")
+    with pytest.raises(ValueError):
         sanitize_relative_path("../x")
     assert "[REDACTED]" in scrub_log("Authorization: Bearer abc.def.ghi password=secret")
     assert "[REDACTED]" in scrub_log("token=" + "a" * 40)
