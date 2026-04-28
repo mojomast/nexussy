@@ -18,6 +18,8 @@ def scrub_log(text: str) -> str:
     return out
 
 def sanitize_relative_path(path: str) -> str:
+    if not path or not path.strip():
+        raise ValueError("path_rejected")
     if "\x00" in path or path.startswith("/"):
         raise ValueError("path_rejected")
     p = pathlib.PurePosixPath(path)

@@ -8,7 +8,7 @@ from nexussy.api.schemas import ErrorCode, ErrorResponse, SecretSummary
 
 logger = logging.getLogger(__name__)
 
-DISCOVERY = {"OPENAI_API_KEY":"openai", "ANTHROPIC_API_KEY":"anthropic", "OPENROUTER_API_KEY":"openrouter", "GROQ_API_KEY":"groq", "GEMINI_API_KEY":"google", "MISTRAL_API_KEY":"mistral", "TOGETHER_API_KEY":"together", "FIREWORKS_API_KEY":"fireworks", "XAI_API_KEY":"xai", "GLM_API_KEY":"zai", "ZAI_API_KEY":"zai", "REQUESTY_API_KEY":"requesty", "AETHER_API_KEY":"aether", "OLLAMA_BASE_URL":"ollama"}
+DISCOVERY = {"OPENAI_API_KEY":"openai", "ANTHROPIC_API_KEY":"anthropic", "OPENROUTER_API_KEY":"openrouter", "GROQ_API_KEY":"groq", "GEMINI_API_KEY":"google", "MISTRAL_API_KEY":"mistral", "TOGETHER_API_KEY":"together", "FIREWORKS_API_KEY":"fireworks", "XAI_API_KEY":"xai", "GLM_API_KEY":"zai", "ZAI_API_KEY":"zai", "REQUESTY_API_KEY":"requesty", "AETHER_API_KEY":"aether", "OLLAMA_BASE_URL":"ollama"}  # GLM is an alias for ZAI provider.
 
 def secret_names() -> list[str]:
     return sorted(DISCOVERY)
@@ -120,13 +120,14 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None, service: 
 def delete_secret(name: str, *, env_path: Path | None = None, service: str = "nexussy") -> bool:
     validate_secret_name(name)
     path = env_path or env_file_path()
-    existed = bool(os.environ.get(name) or read_env_file(path).get(name) or keyring_get(name, service))
+    existed = False
     keyring = _keyring_module()
     if keyring:
         sentinel = object()
         deleted = _run_keyring_with_timeout(lambda: keyring.delete_password(service, name), default=sentinel)
         if deleted is not sentinel:
             existed = True
+    existed = existed or bool(os.environ.get(name) or read_env_file(path).get(name))
     os.environ.pop(name, None)
     _write_env_file_value(path, name, None)
     return existed

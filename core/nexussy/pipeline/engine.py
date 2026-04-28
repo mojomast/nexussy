@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, json, logging, os, re, pathlib, shutil, hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from nexussy.api.schemas import (
@@ -24,7 +25,12 @@ from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.swarm.roles import enforce_tool
 
 logger = logging.getLogger(__name__)
-STAGES=[StageName.interview,StageName.design,StageName.validate,StageName.plan,StageName.review,StageName.develop]
+STAGES=[StageName(s) for s in STAGE_ORDER]
+
+@dataclass
+class WorkerMergeResult:
+    worker: Worker
+    worker_id: str
 
 def slugify(name: str) -> str:
     s=re.sub(r"[^a-z0-9]+","-",name.lower()).strip("-")[:63]
@@ -32,7 +38,9 @@ def slugify(name: str) -> str:
 
 def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
     d=desc.lower(); signals={}; score=0
-    checks=[("multiple_languages",10, any(w in d for w in ["frontend and backend","typescript","python","java","go "])),("persistence",10, any(w in d for w in ["database","sqlite","postgres","persist"])),("auth",15, any(w in d for w in ["auth","security","password"])),("external_api",10,"api" in d),("ui_backend",15, any(w in d for w in ["ui","dashboard","web","tui"])),("deployment",10, any(w in d for w in ["deploy","docker","infra"])),("existing_repo",10, existing),("qa",10, any(w in d for w in ["test","qa"])),("ambiguous",15, len(desc.split())<8)]
+    def has(pattern: str) -> bool:
+        return re.search(pattern, d) is not None
+    checks=[("multiple_languages",10, has(r"\bfrontend\b\s+and\s+\bbackend\b|\btypescript\b|\bpython\b|\bjava\b|\bgo\b|\bgolang\b")),("persistence",10, has(r"\bdatabase\b|\bsqlite\b|\bpostgres\b|\bpersist\b")),("auth",15, has(r"\bauth(entication|orization)?\b|\bsecurity\b|\bpassword\b")),("external_api",10,has(r"\bapi\b")),("ui_backend",15, has(r"\bui\b|\bdashboard\b|\bweb\b|\btui\b")),("deployment",10, has(r"\bdeploy\b|\bdocker\b|\binfra\b")),("existing_repo",10, existing),("qa",10, has(r"\btest\b|\bqa\b")),("ambiguous",15, len(desc.split())<8)]
     if not any(c[2] for c in checks): signals["simple"]=5; score+=5
     for k,pts,on in checks:
         if on: signals[k]=pts; score+=pts
@@ -46,17 +54,22 @@ class Engine:
     def __init__(self, db, config):
         self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None
 
+    def invalidate_provider_cache(self):
+        self.provider_env_cache=None
+
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
-        await self.db.write(lambda con: con.execute(
-            "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
-            "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
-            (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
-        ))
-        rows=await self.db.read("SELECT sequence FROM events WHERE event_id=?",(env.event_id,))
-        if rows:
-            env.sequence=rows[0]["sequence"]
-            await self.db.write(lambda con: con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id)))
+        def tx(con):
+            con.execute(
+                "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
+                "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
+                (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
+            )
+            row=con.execute("SELECT sequence FROM events WHERE event_id=?",(env.event_id,)).fetchone()
+            if row:
+                env.sequence=row["sequence"]
+                con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id))
+        await self.db.write(tx)
 
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         env=EventEnvelope(sequence=0,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
@@ -483,18 +496,20 @@ class Engine:
             try: roles.append(WorkerRole(raw))
             except Exception: pass
         roles=roles[: max(1, min(self.config.swarm.max_workers, self.config.swarm.default_worker_count if not req.metadata.get("worker_roles") else len(roles)))] or [WorkerRole.backend]
-        workers=[]; merged=[]; last_merge=None
         orch_model=self.config.stages.develop.orchestrator_model or selected_models.get("develop") or self.config.providers.default_model
         orch=Worker(worker_id=f"orchestrator-{uuid4().hex[:6]}",run_id=rid,role=WorkerRole.orchestrator,status=WorkerStatus.running,task_id=f"task-{uuid4().hex[:6]}",task_title="Orchestrate develop run",worktree_path=str(main),branch_name="main",model=orch_model)
-        await self._persist_worker(orch); await self.emit(SSEEventType.worker_spawned,sid,rid,orch); workers.append(orch)
-        return {"sid":sid,"main":main,"workers_root":workers_root,"artifacts_dir":main/".nexussy"/"artifacts","base":base,"cfg":cfg,"roles":roles,"workers":workers,"merged":merged,"orch":orch,"selected_models":selected_models}
+        await self._persist_worker(orch); await self.emit(SSEEventType.worker_spawned,sid,rid,orch)
+        return {"sid":sid,"main":main,"workers_root":workers_root,"artifacts_dir":main/".nexussy"/"artifacts","base":base,"cfg":cfg,"roles":roles,"orch":orch,"selected_models":selected_models}
 
     async def _merge_workers(self, req, detail, rid, root, context):
-        sid=context["sid"]; main=context["main"]; workers_root=context["workers_root"]; artifacts_dir=context["artifacts_dir"]; base=context["base"]; cfg=context["cfg"]; roles=context["roles"]; workers=context["workers"]; merged=context["merged"]; orch=context["orch"]; selected_models=context["selected_models"]
+        sid=context["sid"]; main=context["main"]; artifacts_dir=context["artifacts_dir"]; base=context["base"]; roles=context["roles"]; orch=context["orch"]
+        workers=[orch]; merged=[]
+        # Workers run concurrently; merge state is collected locally and updated serially below.
         worker_results=await asyncio.gather(*[self._run_single_worker(req, detail, rid, root, role, idx, context) for idx, role in enumerate(roles, start=1)], return_exceptions=True)
         for result in worker_results:
             if isinstance(result, Exception): raise result
-            await self._merge_single_worker(result, req, detail, rid, root, context)
+            merge_result=await self._merge_single_worker(result, req, detail, rid, root, context, workers, merged)
+            workers.append(merge_result.worker); merged.append(merge_result.worker_id)
         await prune_worktrees(str(main)); manifest=await extract_changed_files(str(main),base,str(artifacts_dir/"changed-files"),rid)
         orch.status=WorkerStatus.finished; await self._persist_worker(orch); await self.emit(SSEEventType.worker_status,sid,rid,orch)
         merge_report=MergeReport(run_id=rid,base_commit=base,merge_commit=manifest.merge_commit,merged_workers=merged,passed=True)
@@ -522,18 +537,19 @@ class Engine:
         rpc=await spawn_pi_worker(cfg,rid,worker.worker_id,role.value,str(main),wt)
         self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
         req_id=await rpc.request(worker.task_title, "nexussy develop task")
-        paused_for_resume=False
+        was_paused_on_timeout=False
         try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
         except TimeoutError:
+            # Capture pause state before cleanup can race with an external resume.
+            was_paused_on_timeout=bool(self.paused.get(rid))
             logger.warning("worker %s timed out for run %s", worker.worker_id, rid)
-            if self.paused.get(rid): paused_for_resume=True
-            else: raise
+            if not was_paused_on_timeout: raise
         finally:
             for frame in rpc.frames:
                 await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
             await rpc.stop(self.config.pi.shutdown_timeout_s)
             if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
-        if paused_for_resume or self.paused.get(rid):
+        if was_paused_on_timeout:
             worker.status=WorkerStatus.paused; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
             await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.queued)
             await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.queued))
@@ -545,8 +561,8 @@ class Engine:
             await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
             await self._run_worker_rpc(rid, sid, worker, idx, cfg, role, main, wt, _depth=_depth+1)
 
-    async def _merge_single_worker(self, result, req, detail, rid, root, context):
-        sid=context["sid"]; main=context["main"]; base=context["base"]; roles=context["roles"]; workers=context["workers"]; merged=context["merged"]
+    async def _merge_single_worker(self, result, req, detail, rid, root, context, workers, merged) -> WorkerMergeResult:
+        sid=context["sid"]; main=context["main"]; base=context["base"]; roles=context["roles"]
         worker=result["worker"]; idx=result["idx"]; wid=result["wid"]; wt=result["wt"]; branch=result["branch"]; commit=result["commit"]
         await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_started,worker_id=wid,branch_name=branch,commit_sha=commit,message="merge started"))
         mr=await merge_no_ff(str(main), branch)
@@ -555,10 +571,11 @@ class Engine:
             await self._save_art(rid,sid,root,"merge_report",MergeReport(run_id=rid,base_commit=base,merged_workers=merged,conflicts=mr.conflicts,passed=False).model_dump_json(indent=2))
             await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=False,workers=workers+[worker],tasks_total=len(roles),tasks_passed=len(merged),tasks_failed=1).model_dump_json(indent=2))
             raise RuntimeError("merge conflict")
-        merged.append(wid); await remove_worktree(str(main), wt, branch); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_removed,worker_id=wid,branch_name=branch,message="worktree removed"))
-        worker.status=WorkerStatus.finished; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker); workers.append(worker)
+        await remove_worktree(str(main), wt, branch); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_removed,worker_id=wid,branch_name=branch,message="worktree removed"))
+        worker.status=WorkerStatus.finished; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
         await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.passed)
         await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.passed))
+        return WorkerMergeResult(worker=worker, worker_id=wid)
 
     async def _persist_worker(self, w: Worker):
         await self.db.write(lambda con: con.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(w.worker_id,w.run_id,w.role,w.status,w.task_id,w.worktree_path,w.branch_name,w.pid,w.usage.model_dump_json(),w.last_error.model_dump_json() if w.last_error else None,w.model_dump_json())))

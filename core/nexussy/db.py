@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS checkpoints(checkpoint_id TEXT PRIMARY KEY, run_id TE
 CREATE TABLE IF NOT EXISTS workers(worker_id TEXT PRIMARY KEY, run_id TEXT, role TEXT, status TEXT, task_id TEXT, worktree_path TEXT, branch_name TEXT, pid INTEGER, usage_json TEXT, last_error_json TEXT, worker_json TEXT);
 CREATE TABLE IF NOT EXISTS worker_tasks(task_id TEXT PRIMARY KEY, run_id TEXT, worker_id TEXT, phase_number INTEGER, title TEXT, status TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS blockers(blocker_id TEXT PRIMARY KEY, run_id TEXT, worker_id TEXT, stage TEXT, severity TEXT, message TEXT, resolved INTEGER, created_at TEXT, resolved_at TEXT);
-CREATE TABLE IF NOT EXISTS file_locks(run_id TEXT, path TEXT, worker_id TEXT, status TEXT, claimed_at TEXT, expires_at TEXT, UNIQUE(run_id,path,status));
+CREATE TABLE IF NOT EXISTS file_locks(run_id TEXT, path TEXT, worker_id TEXT, status TEXT, claimed_at TEXT, expires_at TEXT);
 CREATE TABLE IF NOT EXISTS rate_limits(provider TEXT, model TEXT, reset_at TEXT, reason TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS memory_entries(memory_id TEXT PRIMARY KEY, session_id TEXT, key TEXT, value TEXT, tags_json TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, source TEXT, configured INTEGER, updated_at TEXT);
@@ -30,7 +30,18 @@ CREATE INDEX IF NOT EXISTS idx_worker_tasks_run ON worker_tasks(run_id);
 CREATE INDEX IF NOT EXISTS idx_blockers_run ON blockers(run_id, resolved);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);
 CREATE INDEX IF NOT EXISTS idx_memory_entries_session ON memory_entries(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_locks_claimed ON file_locks(run_id, path) WHERE status='claimed';
 """
+
+def _migrate_file_locks_schema(con):
+    row=con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='file_locks'").fetchone()
+    if not row or "UNIQUE(run_id,path,status)" not in (row[0] or "").replace(" ", ""):
+        return
+    con.execute("ALTER TABLE file_locks RENAME TO file_locks_old")
+    con.execute("CREATE TABLE file_locks(run_id TEXT, path TEXT, worker_id TEXT, status TEXT, claimed_at TEXT, expires_at TEXT)")
+    con.execute("INSERT INTO file_locks SELECT run_id, path, worker_id, status, claimed_at, expires_at FROM file_locks_old")
+    con.execute("DROP TABLE file_locks_old")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_file_locks_claimed ON file_locks(run_id, path) WHERE status='claimed'")
 
 class Database:
     def __init__(self, path: str, busy_timeout_ms=5000, retries=5, retry_base_ms=100):
@@ -41,7 +52,10 @@ class Database:
         con.row_factory=sqlite3.Row; con.execute("PRAGMA journal_mode=WAL"); con.execute(f"PRAGMA busy_timeout={self.busy}"); con.execute("PRAGMA foreign_keys=ON")
         return con
     async def init(self):
-        await self.write(lambda con: con.executescript(SCHEMA))
+        def tx(con):
+            con.executescript(SCHEMA)
+            _migrate_file_locks_schema(con)
+        await self.write(tx)
     async def init_project(self, project_root: str, relative_path: str = ".nexussy/state.db"):
         project_db = Database(str(pathlib.Path(project_root).expanduser() / relative_path), self.busy, self.retries, int(self.retry * 1000))
         await project_db.init()

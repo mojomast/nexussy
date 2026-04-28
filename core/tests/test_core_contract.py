@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from nexussy.api.schemas import ErrorCode, ErrorResponse, PipelineStartRequest, EventEnvelope, RunSummary, RunStatus, SSEEventType, ArtifactRef, StageName, WorkerTaskStatus
+from nexussy.api.schemas import ErrorCode, ErrorResponse, PipelineStartRequest, EventEnvelope, RunSummary, RunStatus, SSEEventType, ArtifactRef, StageName, Worker, WorkerStatus, WorkerTaskStatus
 from nexussy.api import server
 from nexussy.api.server import app
 from nexussy.artifacts.store import safe_write
@@ -16,11 +16,14 @@ from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
+from nexussy.providers import DISCOVERY, delete_secret
 from nexussy.providers import ProviderResult
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
-from nexussy.pipeline.engine import Engine
+from nexussy.pipeline.engine import Engine, complexity
+from nexussy.pipeline.engine import STAGES
+from nexussy.checkpoint import STAGE_ORDER
 
 
 def test_schema_forbids_extra():
@@ -38,6 +41,8 @@ def test_schema_forbids_extra():
 
 def test_security_helpers(tmp_path):
     assert sanitize_relative_path("a/b.txt") == "a/b.txt"
+    with pytest.raises(ValueError):
+        sanitize_relative_path("")
     with pytest.raises(ValueError):
         sanitize_relative_path("../x")
     assert "[REDACTED]" in scrub_log("Authorization: Bearer abc.def.ghi password=secret")
@@ -68,6 +73,23 @@ def test_provider_model_precedence_and_worker_override(monkeypatch):
     cfg = load_config({"providers":{"default_model":"openai/default"}})
     assert select_stage_model(cfg, "design") == "anthropic/claude-test"
     assert select_stage_model(cfg, "design", {"design":"openrouter/request"}) == "openrouter/request"
+
+
+def test_glm_key_is_zai_provider_alias():
+    assert DISCOVERY["GLM_API_KEY"] == "zai"
+    assert DISCOVERY["ZAI_API_KEY"] == "zai"
+
+
+def test_complexity_uses_word_boundary_signals():
+    assert "multiple_languages" in complexity("deploy a go backend").signals
+    assert "deployment" in complexity("deploy a go backend").signals
+    assert "auth" in complexity("add authentication").signals
+    assert "persistence" in complexity("postgres db").signals
+    assert "auth" not in complexity("cargo package manager").signals
+
+
+def test_engine_stages_follow_checkpoint_stage_order():
+    assert [stage.value for stage in STAGES] == STAGE_ORDER
 
 
 def test_safe_write_anchor_validation(tmp_path):
@@ -493,6 +515,18 @@ def test_health_reports_pi_availability(monkeypatch, tmp_path):
         assert c.get("/health").json()["pi_available"] is True
 
 
+def test_cors_uses_runtime_config_not_import_time_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"security":{"cors_origins":["https://runtime.example"]}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        allowed = c.get("/health", headers={"Origin":"https://runtime.example"})
+        denied = c.get("/health", headers={"Origin":"https://import.example"})
+    assert allowed.headers.get("access-control-allow-origin") == "https://runtime.example"
+    assert "access-control-allow-origin" not in denied.headers
+
+
 def test_provider_keys_load_from_env_file(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("OPENAI_API_KEY=sk-file-secret\n")
@@ -527,6 +561,19 @@ def test_secrets_api_uses_keyring_without_echo(monkeypatch, tmp_path):
         assert secret not in json.dumps(listed)
         assert c.delete("/secrets/OPENAI_API_KEY").status_code == 200
         assert c.delete("/secrets/OPENAI_API_KEY").status_code == 404
+
+
+def test_delete_secret_reports_keyring_only_secret_existed(monkeypatch, tmp_path):
+    store = {("nexussy", "OPENAI_API_KEY"): "sk-keyring-only"}
+    fake_keyring = types.SimpleNamespace(
+        get_password=lambda service, name: store.get((service, name)),
+        delete_password=lambda service, name: store.pop((service, name)),
+    )
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env = tmp_path / ".env"; env.write_text("")
+    assert delete_secret("OPENAI_API_KEY", env_path=env, service="nexussy") is True
+    assert store == {}
 
 
 def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path):
@@ -571,6 +618,36 @@ def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
         assert "OPENROUTER_API_KEY=sk-openrouter-secret" in (tmp_path / ".env").read_text()
 
 
+def test_secret_updates_invalidate_provider_env_cache(monkeypatch, tmp_path):
+    class BrokenKeyring:
+        def get_password(self, service, name): raise RuntimeError("no keyring")
+        def set_password(self, service, name, value): raise RuntimeError("no keyring")
+        def delete_password(self, service, name): raise RuntimeError("no keyring")
+    seen=[]
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+        seen.append((_env or {}).get("OPENAI_API_KEY"))
+        if "Generate a JSON array" in prompt:
+            return ProviderResult('[{"id":"q_name","question":"Name?"},{"id":"q_lang","question":"Language?"},{"id":"q_desc","question":"Description?"},{"id":"q_type","question":"Type?"}]', {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
+        return ProviderResult('{"q_name":"Demo","q_lang":"Python","q_desc":"API","q_type":"API"}', {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
+    monkeypatch.setitem(sys.modules, "keyring", BrokenKeyring())
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)
+    server.config = load_config({"providers":{"default_model":"openai/gpt-5.5-fast"}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        assert c.put("/secrets/OPENAI_API_KEY", json={"value":"sk-old"}).status_code == 200
+        first = c.post("/pipeline/start", json={"project_name":"Cache One","description":"small api","auto_approve_interview":True,"stop_after_stage":"interview","metadata":{"mock_provider":True}}).json()
+        _wait_done(c, first["run_id"])
+        assert c.put("/secrets/OPENAI_API_KEY", json={"value":"sk-new"}).status_code == 200
+        second = c.post("/pipeline/start", json={"project_name":"Cache Two","description":"small api","auto_approve_interview":True,"stop_after_stage":"interview","metadata":{"mock_provider":True}}).json()
+        _wait_done(c, second["run_id"])
+    assert "sk-old" in seen
+    assert seen[-1] == "sk-new"
+
+
 @pytest.mark.asyncio
 async def test_fake_provider_production_path(monkeypatch):
     monkeypatch.setenv("NEXUSSY_PROVIDER_MODE", "fake")
@@ -592,6 +669,17 @@ async def test_file_lock_and_role(tmp_path):
     assert await write_requires_lock(db, "run", "src/a.py", "backend-abcdef") == "src/a.py"
     with pytest.raises(PermissionError):
         await write_requires_lock(db, "run", "src/a.py", "frontend-abcdef")
+
+
+@pytest.mark.asyncio
+async def test_file_lock_unique_constraint_only_applies_to_claimed(tmp_path):
+    db = Database(str(tmp_path / "locks.db")); await db.init()
+    now = datetime.now(timezone.utc).isoformat()
+    await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w1", "released", now, now)))
+    await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w2", "released", now, now)))
+    await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w1", "claimed", now, now)))
+    with pytest.raises(sqlite3.IntegrityError):
+        await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w2", "claimed", now, now)))
 
 
 @pytest.mark.asyncio
@@ -819,6 +907,26 @@ async def test_sse_slow_client_receives_terminal_error(tmp_path):
     assert any(e.type == "pipeline_error" and e.payload["error_code"] == "sse_client_slow" for e in persisted)
 
 
+@pytest.mark.asyncio
+async def test_persist_event_embeds_sequence_in_single_write(tmp_path):
+    class CountingDatabase(Database):
+        def __init__(self, path):
+            super().__init__(path)
+            self.write_count = 0
+        async def write(self, fn):
+            self.write_count += 1
+            return await super().write(fn)
+    db = CountingDatabase(str(tmp_path / "events.db")); await db.init()
+    engine = Engine(db, load_config())
+    before = db.write_count
+    env = EventEnvelope(sequence=0,type=SSEEventType.run_started,session_id="sid",run_id="rid",payload={"ok": True})
+    await engine._persist_event(env)
+    assert db.write_count - before == 1
+    rows = await db.read("SELECT sequence,payload_json FROM events WHERE event_id=?", (env.event_id,))
+    assert rows[0]["sequence"] == 1
+    assert json.loads(rows[0]["payload_json"])["sequence"] == 1
+
+
 def test_path_and_secret_security(tmp_path):
     from nexussy.security import sanitize_path
     root = tmp_path / "root"; root.mkdir(); outside = tmp_path / "outside"; outside.mkdir()
@@ -890,6 +998,32 @@ async def test_worker_tool_permission_failure_emits_tool_output(tmp_path):
     assert result["success"] is False
     events = await engine.replay("rid")
     assert any(e.type == "tool_output" and e.payload["success"] is False for e in events)
+
+
+@pytest.mark.asyncio
+async def test_worker_rpc_timeout_uses_pause_state_captured_at_timeout(monkeypatch, tmp_path):
+    class FakeRpc:
+        frames = []
+        async def request(self, title, context): return "req-1"
+        async def wait_response(self, req_id, timeout_s):
+            calls["wait"] += 1
+            if calls["wait"] == 1:
+                raise TimeoutError("paused timeout")
+        async def stop(self, timeout_s):
+            engine.paused.pop("rid", None)
+    async def fake_spawn(*args, **kwargs): return FakeRpc()
+    calls = {"wait": 0}
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    cfg = load_config({"swarm":{"worker_task_timeout_s":1}, "pi":{"shutdown_timeout_s":0}})
+    engine = Engine(db, cfg)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
+    worker = Worker(worker_id="backend-1", run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, task_id="task-1", task_title="Build backend", worktree_path=str(tmp_path), branch_name="worker/backend-1", model="openai/gpt-5.5-fast")
+    engine.paused["rid"] = True
+    monkeypatch.setattr("nexussy.pipeline.engine.spawn_pi_worker", fake_spawn)
+    await engine._run_worker_rpc("rid", "sid", worker, 1, cfg, WorkerRole.backend, tmp_path, tmp_path)
+    rows = await db.read("SELECT status FROM worker_tasks WHERE task_id=?", ("task-1",))
+    assert rows[-1]["status"] == WorkerTaskStatus.running.value
 
 
 @pytest.mark.asyncio
