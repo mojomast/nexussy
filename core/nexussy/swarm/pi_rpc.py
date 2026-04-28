@@ -4,7 +4,7 @@ import asyncio, json, os, pathlib, signal, sys
 from collections import deque
 from dataclasses import dataclass, field
 
-from nexussy.api.schemas import ErrorCode, ErrorResponse, WorkerStreamPayload
+from nexussy.api.schemas import WorkerStreamPayload
 from nexussy.security import scrub_log
 
 MAX_FRAMES = 10_000

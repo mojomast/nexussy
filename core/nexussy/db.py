@@ -11,7 +11,7 @@ applied version to `schema_version`. New installs replay the same migrations as
 upgrades, so each migration must be safe after `CREATE TABLE IF NOT EXISTS`.
 """
 
-import asyncio, json, pathlib, sqlite3, time
+import asyncio, pathlib, sqlite3
 from datetime import datetime, timezone
 
 CURRENT_SCHEMA_VERSION = 2
