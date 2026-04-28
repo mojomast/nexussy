@@ -51,6 +51,14 @@ def cors_origins_for(cfg):
         logging.getLogger(__name__).warning("wildcard CORS origin is enabled in production")
     return origins
 
+class LazyCORSMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        origins = cors_origins_for(config or load_config())
+        middleware = CORSMiddleware(self.app, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+        await middleware(scope, receive, send)
+
 async def _do_startup():
     global config, db, engine
     loaded=load_config()
@@ -436,7 +444,7 @@ async def events(request):
 
 routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/mcp/tools',mcp_tools),Route('/mcp/call',mcp_call,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
 app=Starlette(routes=routes,on_startup=[startup])
-app.add_middleware(CORSMiddleware, allow_origins=cors_origins_for(config or load_config()), allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(LazyCORSMiddleware)
 
 if __name__ == "__main__":
     cfg=load_config()
