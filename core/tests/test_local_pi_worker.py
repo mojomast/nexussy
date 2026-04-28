@@ -4,7 +4,7 @@ import pytest
 
 from nexussy.config import load_config
 from nexussy.swarm import local_pi_worker
-from nexussy.swarm.local_pi_worker import _block_dangerous_bash, run_tool
+from nexussy.swarm.local_pi_worker import run_tool
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 
 
@@ -28,9 +28,31 @@ async def test_local_pi_worker_tools_are_worktree_scoped(tmp_path, monkeypatch):
         await run_tool("read_file", {"path": "../outside.txt"})
 
 
-def test_local_pi_worker_blocks_dangerous_bash():
-    with pytest.raises(ValueError, match="command_rejected"):
-        _block_dangerous_bash("sudo rm -rf /")
+@pytest.mark.asyncio
+async def test_bash_empty_command_raises():
+    with pytest.raises(ValueError, match="command_empty"):
+        await run_tool("bash", {"command": ""})
+
+
+@pytest.mark.asyncio
+async def test_bash_null_byte_raises():
+    with pytest.raises(ValueError):
+        await run_tool("bash", {"command": "echo\x00hello"})
+
+
+@pytest.mark.asyncio
+async def test_bash_too_long_raises():
+    with pytest.raises(ValueError, match="too long"):
+        await run_tool("bash", {"command": "x" * 8_001})
+
+
+@pytest.mark.asyncio
+async def test_bash_valid_echo(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUSSY_WORKTREE", str(tmp_path))
+    result = await run_tool("bash", {"command": "echo hello"})
+    assert result["exit_code"] == 0
+    assert "hello" in result["stdout"]
+    assert result["truncated"] is False
 
 
 @pytest.mark.asyncio

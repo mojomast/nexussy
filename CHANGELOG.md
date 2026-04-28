@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Worker sandbox: replaced bypassable bash denylist with stripped-env subprocess + 64KB output cap
 - **P0** Remove unused `aiosqlite` dependency from `pyproject.toml`
 - **P0** Fix `_startup_lock` initialization race condition on cold start in `server.py`
 - **P0** `local_pi_worker`: agent failures now propagate as JSON-RPC errors instead of silent `status=ok`

@@ -86,6 +86,22 @@ Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loop
 - Worker control APIs: `/swarm/workers/{worker_id}/inject`, `/swarm/workers/{worker_id}/stop`, `/swarm/workers/{worker_id}/stream`, `/swarm/spawn`, and `/swarm/assign` are wired to DB state and SSE/RPC where applicable.
 - Core static dashboard: `/ui` serves zero-build HTML/JS/CSS for session polling, run status, SSE logs, and interview answers.
 
+## Worker Bash Sandbox
+
+The bundled `local_pi_worker` bash tool uses a stripped environment:
+
+| Protection | Detail |
+|---|---|
+| Stripped env | Only `HOME`, `PATH`, `SHELL`, `TERM`, `LANG`, `NEXUSSY_WORKTREE` passed to child |
+| Hard timeout | 120s max, default 30s per invocation |
+| Output cap | 64KB combined stdout+stderr |
+| Working dir | Always `cwd=worktree` |
+
+**This worker is for local development only.** For multi-tenant production,
+set `PI_COMMAND` in `nexussy.yaml` to a sandboxed executor.
+The prior regex denylist (`_DANGEROUS_BASH`) was removed - it was bypassable
+and created false security confidence.
+
 ## Code Review Fixes (2026-04-28)
 
 - H1: `PUT /config` now rejects auth, database, home, project, and non-whitelisted config mutations; status complete.

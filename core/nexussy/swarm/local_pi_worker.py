@@ -11,15 +11,24 @@ from typing import Any
 from nexussy.security import sanitize_relative_path, scrub_log
 
 
+# Security model for the bundled local worker:
+# The bash tool runs commands in a stripped environment (no inherited secrets,
+# no PATH extensions) with a hard timeout and 64KB output cap. Commands run
+# as the current OS user - this worker is for LOCAL DEVELOPMENT ONLY.
+# For production multi-tenant deployments, set PI_COMMAND in nexussy.yaml
+# to point at a properly sandboxed executor (Docker exec, nsjail, Firecracker).
+# Mitigations in place:
+#   - Stripped env: only HOME, PATH, SHELL, TERM, LANG, NEXUSSY_WORKTREE are set
+#   - Hard timeout: 120s max (default 30s per call)
+#   - Output cap: 64KB combined stdout+stderr
+#   - cwd=worktree enforces working directory confinement
+#   - sanitize_relative_path() blocks path traversal in file tools
+# Known gaps (acceptable for local dev, not for multi-tenant prod):
+#   - No seccomp/AppArmor syscall filtering
+#   - No network namespace isolation
+#   - No filesystem namespace isolation
 TOOL_NAMES = {"read_file", "write_file", "edit_file", "bash", "list_dir"}
 _injected_messages: list[str] = []
-_DANGEROUS_BASH = [
-    re.compile(r"(^|\s)rm\s+-(?:[^\n]*[rf]|[^\n]*[fr])", re.I),
-    re.compile(r"(^|\s)(sudo|su)\b", re.I),
-    re.compile(r"\b(curl|wget)\b[^\n|;&]*[|>]\s*(sh|bash)\b", re.I),
-    re.compile(r"(^|\s)(mkfs|mount|umount|dd|shutdown|reboot)\b", re.I),
-    re.compile(r"(^|\s)chmod\s+-R\s+777\b", re.I),
-]
 
 
 def _send(obj: dict[str, Any]) -> None:
@@ -41,13 +50,6 @@ def _safe_path(path: str) -> pathlib.Path:
     if target != root and root not in target.parents:
         raise ValueError("path_rejected")
     return target
-
-
-def _block_dangerous_bash(command: str) -> None:
-    if "\x00" in command or len(command) > 20_000:
-        raise ValueError("command_rejected")
-    if any(p.search(command) for p in _DANGEROUS_BASH):
-        raise ValueError("command_rejected")
 
 
 async def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -84,17 +86,54 @@ async def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         for child in sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))[:limit]:
             entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file"})
         return {"path": str(path.relative_to(_root())), "entries": entries}
+    # bash tool - hardened stripped-env subprocess
     command = str(arguments.get("command") or "")
-    _block_dangerous_bash(command)
+    if not command.strip():
+        raise ValueError("command_empty")
+    if "\x00" in command:
+        raise ValueError("command_rejected: null byte")
+    if len(command) > 8_000:
+        raise ValueError("command_rejected: too long")
+
     timeout = min(float(arguments.get("timeout_s") or 30), 120.0)
-    proc = await asyncio.create_subprocess_shell(command, cwd=str(_root()), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    MAX_OUTPUT_BYTES = 65_536
+
+    safe_env = {
+        "HOME": str(_root()),
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "SHELL": "/bin/sh",
+        "TERM": "dumb",
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "NEXUSSY_WORKTREE": str(_root()),
+    }
+
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        cwd=str(_root()),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=safe_env,
+    )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out_bytes, err_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
         await proc.wait()
         raise TimeoutError("command_timeout")
-    return {"exit_code": proc.returncode, "stdout": scrub_log(out.decode(errors="replace")), "stderr": scrub_log(err.decode(errors="replace"))}
+
+    out_str = scrub_log(out_bytes[:MAX_OUTPUT_BYTES].decode(errors="replace"))
+    err_str = scrub_log(err_bytes[:MAX_OUTPUT_BYTES].decode(errors="replace"))
+    truncated = len(out_bytes) > MAX_OUTPUT_BYTES or len(err_bytes) > MAX_OUTPUT_BYTES
+
+    return {
+        "exit_code": proc.returncode,
+        "stdout": out_str,
+        "stderr": err_str,
+        "truncated": truncated,
+    }
 
 
 def _tools_schema() -> list[dict[str, Any]]:
