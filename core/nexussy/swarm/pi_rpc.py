@@ -60,10 +60,13 @@ class PiRPCProcess:
         except ProcessLookupError:
             pass
         except asyncio.TimeoutError:
-            if sys.platform == "win32":
-                self.process.kill()
-            else:
-                os.killpg(self.process.pid, signal.SIGKILL)
+            try:
+                if sys.platform == "win32":
+                    self.process.kill()
+                else:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             await self.process.wait()
         await asyncio.gather(*self._tasks, return_exceptions=True)
 

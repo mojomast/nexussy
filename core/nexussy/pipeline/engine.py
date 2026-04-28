@@ -45,17 +45,28 @@ def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
 class Engine:
     def __init__(self, db, config):
         self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None
+
+    async def _persist_event(self, env: EventEnvelope):
+        typ = env.type.value if hasattr(env.type, "value") else env.type
+        await self.db.write(lambda con: con.execute(
+            "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
+            "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
+            (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
+        ))
+        rows=await self.db.read("SELECT sequence FROM events WHERE event_id=?",(env.event_id,))
+        if rows:
+            env.sequence=rows[0]["sequence"]
+            await self.db.write(lambda con: con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id)))
+
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
-        rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); seq=rows[0]["n"]
-        env=EventEnvelope(sequence=seq,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
-        await self.db.write(lambda con: con.execute("INSERT INTO events VALUES(?,?,?,?,?,?)",(env.event_id,run_id,seq,typ.value if hasattr(typ,'value') else typ,json.dumps(env.model_dump(mode="json")),env.ts.isoformat())))
+        env=EventEnvelope(sequence=0,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
+        await self._persist_event(env)
         for q in list(self.queues.get(run_id,set())):
             try: q.put_nowait(env)
             except asyncio.QueueFull:
                 self.queues.get(run_id,set()).discard(q)
-                slow_seq_rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); slow_seq=slow_seq_rows[0]["n"]
-                slow=EventEnvelope(sequence=slow_seq,type=SSEEventType.pipeline_error,session_id=session_id,run_id=run_id,payload=ErrorResponse(error_code=ErrorCode.sse_client_slow,message="SSE client queue exceeded",retryable=True).model_dump(mode="json"))
-                await self.db.write(lambda con, slow=slow: con.execute("INSERT INTO events VALUES(?,?,?,?,?,?)",(slow.event_id,run_id,slow.sequence,SSEEventType.pipeline_error.value,json.dumps(slow.model_dump(mode="json")),slow.ts.isoformat())))
+                slow=EventEnvelope(sequence=0,type=SSEEventType.pipeline_error,session_id=session_id,run_id=run_id,payload=ErrorResponse(error_code=ErrorCode.sse_client_slow,message="SSE client queue exceeded",retryable=True).model_dump(mode="json"))
+                await self._persist_event(slow)
                 try: q.get_nowait()
                 except asyncio.QueueEmpty: pass
                 try: q.put_nowait(slow)
