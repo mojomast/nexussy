@@ -51,15 +51,17 @@ class Engine:
 
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
-        await self.db.write(lambda con: con.execute(
-            "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
-            "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
-            (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
-        ))
-        rows=await self.db.read("SELECT sequence FROM events WHERE event_id=?",(env.event_id,))
-        if rows:
-            env.sequence=rows[0]["sequence"]
-            await self.db.write(lambda con: con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id)))
+        def tx(con):
+            con.execute(
+                "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
+                "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
+                (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
+            )
+            row=con.execute("SELECT sequence FROM events WHERE event_id=?",(env.event_id,)).fetchone()
+            if row:
+                env.sequence=row["sequence"]
+                con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id))
+        await self.db.write(tx)
 
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         env=EventEnvelope(sequence=0,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)

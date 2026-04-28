@@ -860,6 +860,26 @@ async def test_sse_slow_client_receives_terminal_error(tmp_path):
     assert any(e.type == "pipeline_error" and e.payload["error_code"] == "sse_client_slow" for e in persisted)
 
 
+@pytest.mark.asyncio
+async def test_persist_event_embeds_sequence_in_single_write(tmp_path):
+    class CountingDatabase(Database):
+        def __init__(self, path):
+            super().__init__(path)
+            self.write_count = 0
+        async def write(self, fn):
+            self.write_count += 1
+            return await super().write(fn)
+    db = CountingDatabase(str(tmp_path / "events.db")); await db.init()
+    engine = Engine(db, load_config())
+    before = db.write_count
+    env = EventEnvelope(sequence=0,type=SSEEventType.run_started,session_id="sid",run_id="rid",payload={"ok": True})
+    await engine._persist_event(env)
+    assert db.write_count - before == 1
+    rows = await db.read("SELECT sequence,payload_json FROM events WHERE event_id=?", (env.event_id,))
+    assert rows[0]["sequence"] == 1
+    assert json.loads(rows[0]["payload_json"])["sequence"] == 1
+
+
 def test_path_and_secret_security(tmp_path):
     from nexussy.security import sanitize_path
     root = tmp_path / "root"; root.mkdir(); outside = tmp_path / "outside"; outside.mkdir()
