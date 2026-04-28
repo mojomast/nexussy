@@ -11,7 +11,7 @@ applied version to `schema_version`. New installs replay the same migrations as
 upgrades, so each migration must be safe after `CREATE TABLE IF NOT EXISTS`.
 """
 
-import asyncio, pathlib, sqlite3
+import asyncio, pathlib, sqlite3, threading
 from datetime import datetime, timezone
 
 CURRENT_SCHEMA_VERSION = 2
@@ -78,9 +78,58 @@ def _apply_schema_migrations(con):
             (version, datetime.now(timezone.utc).isoformat()),
         )
 
+class _ReadPool:
+    """
+    Minimal thread-safe pool of SQLite read connections.
+    Used only for Database.read() - writes use the existing serialized async-lock path.
+    Connections are tagged PRAGMA query_only=ON so they can never accidentally write.
+    """
+
+    def __init__(self, path: pathlib.Path, busy_timeout_ms: int, maxsize: int = 3):
+        self._path = path
+        self._busy = busy_timeout_ms
+        self._maxsize = maxsize
+        self._lock = threading.Lock()
+        self._pool: list = []
+
+    def _new_conn(self):
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(self._path, timeout=self._busy / 1000, check_same_thread=False)
+        con.row_factory = sqlite3.Row
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute(f"PRAGMA busy_timeout={self._busy}")
+        con.execute("PRAGMA query_only=ON")
+        return con
+
+    def acquire(self):
+        with self._lock:
+            if self._pool:
+                return self._pool.pop()
+        return self._new_conn()
+
+    def release(self, con):
+        with self._lock:
+            if len(self._pool) < self._maxsize:
+                self._pool.append(con)
+                return
+        try:
+            con.close()
+        except Exception:
+            pass
+
+    def close_all(self):
+        with self._lock:
+            conns, self._pool = self._pool, []
+        for con in conns:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
 class Database:
     def __init__(self, path: str, busy_timeout_ms=5000, retries=5, retry_base_ms=100):
-        self.path=pathlib.Path(path).expanduser(); self.busy=busy_timeout_ms; self.retries=retries; self.retry=retry_base_ms/1000; self._lock=asyncio.Lock()
+        self.path=pathlib.Path(path).expanduser(); self.busy=busy_timeout_ms; self.retries=retries; self.retry=retry_base_ms/1000; self._lock=asyncio.Lock(); self._read_pool = _ReadPool(self.path, self.busy)
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         con=sqlite3.connect(self.path, timeout=self.busy/1000, check_same_thread=False)
@@ -126,11 +175,16 @@ class Database:
                         if con is not None: con.close()
                     except Exception: pass
             raise last
-    async def read(self, sql, args=()):
-        """Run an unlocked SQLite read and always close the connection."""
-        con=self.connect()
-        try:
-            rows=[dict(r) for r in con.execute(sql,args).fetchall()]
-        finally:
-            con.close()
-        return rows
+    async def read(self, sql: str, args: tuple = ()) -> list[dict]:
+        """Pooled SQLite read. Connections are reused; PRAGMA query_only prevents accidental writes."""
+        def _do():
+            con = self._read_pool.acquire()
+            try:
+                return [dict(r) for r in con.execute(sql, args).fetchall()]
+            finally:
+                self._read_pool.release(con)
+        return await asyncio.get_event_loop().run_in_executor(None, _do)
+
+    def close(self):
+        """Release all pooled read connections. Call on server shutdown."""
+        self._read_pool.close_all()

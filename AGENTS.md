@@ -102,6 +102,18 @@ set `PI_COMMAND` in `nexussy.yaml` to a sandboxed executor.
 The prior regex denylist (`_DANGEROUS_BASH`) was removed - it was bypassable
 and created false security confidence.
 
+## Database
+
+nexussy uses SQLite (WAL mode) for all persistence.
+
+| Path | Detail |
+|---|---|
+| Writes | Single `asyncio.Lock` + `BEGIN IMMEDIATE`, exponential backoff retry |
+| Reads | `_ReadPool` (3 connections, `PRAGMA query_only=ON`), reused via `run_in_executor` |
+| Migrations | Versioned, idempotent, run at startup via `_apply_schema_migrations()` |
+| Project DBs | Each session has `.nexussy/state.db` inside its project root |
+| Shutdown | Pool closed via Starlette `on_shutdown` hook |
+
 ## Code Review Fixes (2026-04-28)
 
 - H1: `PUT /config` now rejects auth, database, home, project, and non-whitelisted config mutations; status complete.
