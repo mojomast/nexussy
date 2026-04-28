@@ -595,6 +595,17 @@ async def test_file_lock_and_role(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_file_lock_unique_constraint_only_applies_to_claimed(tmp_path):
+    db = Database(str(tmp_path / "locks.db")); await db.init()
+    now = datetime.now(timezone.utc).isoformat()
+    await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w1", "released", now, now)))
+    await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w2", "released", now, now)))
+    await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w1", "claimed", now, now)))
+    with pytest.raises(sqlite3.IntegrityError):
+        await db.write(lambda con: con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)", ("run", "src/a.py", "w2", "claimed", now, now)))
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_persistence_and_db_pragmas(tmp_path):
     db = Database(str(tmp_path / "state.db")); await db.init()
     con = sqlite3.connect(tmp_path / "state.db")
