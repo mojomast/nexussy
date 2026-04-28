@@ -1,0 +1,21 @@
+import type { CoreClient } from "./client";
+import type { TuiState } from "./state";
+import { renderPanels } from "./renderer";
+import type { StageName, WorkerRole } from "./types";
+
+export type CommandResult = { local?:true; endpoint?:string; method?:"POST"; message:string; html?:string };
+const stages = new Set(["interview","design","validate","plan","review","develop"]);
+const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
+
+export async function runSlash(input:string, client:CoreClient, state:TuiState): Promise<CommandResult> {
+  const [cmd, ...rest] = input.trim().split(/\s+/);
+  const run_id = state.runId;
+  if (cmd === "/export") return { local:true, message:"exported displayed session data", html:renderPanels(state).html };
+  if (!run_id) throw new Error("run_id is required for remote slash commands");
+  if (cmd === "/pause") { const reason=rest.join(" ")||"user"; await client.pause(run_id, reason); return {endpoint:"/pipeline/pause",method:"POST",message:reason}; }
+  if (cmd === "/resume") { await client.resume(run_id); return {endpoint:"/pipeline/resume",method:"POST",message:"resumed"}; }
+  if (cmd === "/stage") { const stage=rest[0]; if(!stages.has(stage)) throw new Error("invalid stage"); await client.skip(run_id, stage as StageName, "user slash stage skip"); return {endpoint:"/pipeline/skip",method:"POST",message:`stage ${stage}`}; }
+  if (cmd === "/spawn") { const role=rest.shift(); if(!role||!roles.has(role)) throw new Error("invalid role"); const task=rest.join(" "); if(!task) throw new Error("task required"); await client.spawn({run_id, role:role as WorkerRole, task}); return {endpoint:"/swarm/spawn",method:"POST",message:task}; }
+  if (cmd === "/inject") { const maybe=rest[0]; const workerId = maybe && /^[a-z]+-[a-z0-9]{6,12}$/.test(maybe) ? rest.shift() : undefined; const message=rest.join(" "); if(!message) throw new Error("message required"); if(workerId){ await client.injectWorker(workerId,{run_id,worker_id:workerId,message}); return {endpoint:`/swarm/workers/${workerId}/inject`,method:"POST",message}; } await client.inject({run_id,message}); return {endpoint:"/pipeline/inject",method:"POST",message}; }
+  throw new Error(`unknown command ${cmd}`);
+}

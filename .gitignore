@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# JavaScript/Bun
+node_modules/
+bun.lockb
+
+# Runtime and local state
+.env
+*.db
+*.db-shm
+*.db-wal
+*.pid
+*.log
+.nexussy/
+
+# OS/editor
+.DS_Store
+*.swp
+*~

@@ -1,0 +1,20 @@
+{
+  "name": "nexussy-tui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mariozechner/pi-tui": "latest",
+    "@mariozechner/pi-ai": "latest",
+    "@mariozechner/pi-agent-core": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "latest"
+  }
+}

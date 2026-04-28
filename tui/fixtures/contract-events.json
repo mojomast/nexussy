@@ -1,0 +1,21 @@
+[
+  {
+    "event_id": "01HV0000000000000000000000",
+    "sequence": 1,
+    "contract_version": "1.0",
+    "type": "run_started",
+    "session_id": "018f0000-0000-4000-8000-000000000001",
+    "run_id": "018f0000-0000-4000-8000-000000000002",
+    "ts": "2026-04-27T00:00:00Z",
+    "source": "core",
+    "payload": {
+      "run_id": "018f0000-0000-4000-8000-000000000002",
+      "session_id": "018f0000-0000-4000-8000-000000000001",
+      "status": "running",
+      "current_stage": "interview",
+      "started_at": "2026-04-27T00:00:00Z",
+      "finished_at": null,
+      "usage": {"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"total_tokens":0,"cost_usd":0.0,"provider":null,"model":null}
+    }
+  }
+]

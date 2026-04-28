@@ -1,0 +1,13 @@
+[
+  {
+    "event_id": "01HV0000000000000000000000",
+    "sequence": 1,
+    "contract_version": "1.0",
+    "type": "heartbeat",
+    "session_id": "018f0000-0000-4000-8000-000000000001",
+    "run_id": "018f0000-0000-4000-8000-000000000002",
+    "ts": "2026-04-27T00:00:00Z",
+    "source": "core",
+    "payload": {"ts":"2026-04-27T00:00:00Z","server_status":"ok"}
+  }
+]
