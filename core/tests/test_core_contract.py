@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from nexussy.api.schemas import ErrorCode, ErrorResponse, PipelineStartRequest, EventEnvelope, RunSummary, RunStatus, SSEEventType, ArtifactRef, StageName, WorkerTaskStatus
+from nexussy.api.schemas import ErrorCode, ErrorResponse, PipelineStartRequest, EventEnvelope, RunSummary, RunStatus, SSEEventType, ArtifactRef, StageName, Worker, WorkerStatus, WorkerTaskStatus
 from nexussy.api import server
 from nexussy.api.server import app
 from nexussy.artifacts.store import safe_write
@@ -985,6 +985,32 @@ async def test_worker_tool_permission_failure_emits_tool_output(tmp_path):
     assert result["success"] is False
     events = await engine.replay("rid")
     assert any(e.type == "tool_output" and e.payload["success"] is False for e in events)
+
+
+@pytest.mark.asyncio
+async def test_worker_rpc_timeout_uses_pause_state_captured_at_timeout(monkeypatch, tmp_path):
+    class FakeRpc:
+        frames = []
+        async def request(self, title, context): return "req-1"
+        async def wait_response(self, req_id, timeout_s):
+            calls["wait"] += 1
+            if calls["wait"] == 1:
+                raise TimeoutError("paused timeout")
+        async def stop(self, timeout_s):
+            engine.paused.pop("rid", None)
+    async def fake_spawn(*args, **kwargs): return FakeRpc()
+    calls = {"wait": 0}
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    cfg = load_config({"swarm":{"worker_task_timeout_s":1}, "pi":{"shutdown_timeout_s":0}})
+    engine = Engine(db, cfg)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
+    worker = Worker(worker_id="backend-1", run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, task_id="task-1", task_title="Build backend", worktree_path=str(tmp_path), branch_name="worker/backend-1", model="openai/gpt-5.5-fast")
+    engine.paused["rid"] = True
+    monkeypatch.setattr("nexussy.pipeline.engine.spawn_pi_worker", fake_spawn)
+    await engine._run_worker_rpc("rid", "sid", worker, 1, cfg, WorkerRole.backend, tmp_path, tmp_path)
+    rows = await db.read("SELECT status FROM worker_tasks WHERE task_id=?", ("task-1",))
+    assert rows[-1]["status"] == WorkerTaskStatus.running.value
 
 
 @pytest.mark.asyncio

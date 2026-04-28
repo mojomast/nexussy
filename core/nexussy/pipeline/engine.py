@@ -529,18 +529,19 @@ class Engine:
         rpc=await spawn_pi_worker(cfg,rid,worker.worker_id,role.value,str(main),wt)
         self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
         req_id=await rpc.request(worker.task_title, "nexussy develop task")
-        paused_for_resume=False
+        was_paused_on_timeout=False
         try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
         except TimeoutError:
+            # Capture pause state before cleanup can race with an external resume.
+            was_paused_on_timeout=bool(self.paused.get(rid))
             logger.warning("worker %s timed out for run %s", worker.worker_id, rid)
-            if self.paused.get(rid): paused_for_resume=True
-            else: raise
+            if not was_paused_on_timeout: raise
         finally:
             for frame in rpc.frames:
                 await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
             await rpc.stop(self.config.pi.shutdown_timeout_s)
             if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
-        if paused_for_resume or self.paused.get(rid):
+        if was_paused_on_timeout:
             worker.status=WorkerStatus.paused; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
             await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.queued)
             await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.queued))
