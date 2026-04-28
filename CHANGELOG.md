@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased] — 2026-04-28
+
+### Fixed
+
+- **P0** Remove unused `aiosqlite` dependency from `pyproject.toml`
+- **P0** Fix `_startup_lock` initialization race condition on cold start in `server.py`
+- **P0** `local_pi_worker`: agent failures now propagate as JSON-RPC errors instead of silent `status=ok`
+- **P0** Add multi-worker deployment guard warning; enforce `--workers 1` in Dockerfile
+- **P1** `LazyCORSMiddleware` now caches the resolved middleware instance after first request
+- **P1** Log warning when auth is disabled on a non-localhost bind address
+- **P1** Add hourly TTL cleanup for expired `rate_limits` rows in database
+- **P1** Add `conftest.py` with temp-dir isolation to prevent tests from touching `~/.nexussy`
+- **P1** Orphaned `running` runs are automatically marked `failed` on engine startup with recovery instructions
+- **P1** Document restart recovery in `AGENTS.md`
+
+### Added
+
+- `Dockerfile` for containerized deployment (enforces `--workers 1`)
+- `.github/workflows/ci.yml` — automated lint, test, and Docker build on push/PR
+- `Database.cleanup_expired()` method for rate limit housekeeping
+- `Engine.restore_interview_state()` for post-restart run recovery
+
 ## [Unreleased]
 
 ### Fixed
