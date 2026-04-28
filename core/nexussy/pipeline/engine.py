@@ -25,7 +25,7 @@ from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.swarm.roles import enforce_tool
 
 logger = logging.getLogger(__name__)
-STAGES=[StageName.interview,StageName.design,StageName.validate,StageName.plan,StageName.review,StageName.develop]
+STAGES=[StageName(s) for s in STAGE_ORDER]
 
 @dataclass
 class WorkerMergeResult:

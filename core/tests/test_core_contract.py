@@ -22,6 +22,8 @@ from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merg
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.pipeline.engine import Engine, complexity
+from nexussy.pipeline.engine import STAGES
+from nexussy.checkpoint import STAGE_ORDER
 
 
 def test_schema_forbids_extra():
@@ -79,6 +81,10 @@ def test_complexity_uses_word_boundary_signals():
     assert "auth" in complexity("add authentication").signals
     assert "persistence" in complexity("postgres db").signals
     assert "auth" not in complexity("cargo package manager").signals
+
+
+def test_engine_stages_follow_checkpoint_stage_order():
+    assert [stage.value for stage in STAGES] == STAGE_ORDER
 
 
 def test_safe_write_anchor_validation(tmp_path):
