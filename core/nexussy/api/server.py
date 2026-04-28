@@ -32,7 +32,13 @@ from nexussy.providers import active_rate_limit, complete, configured_providers,
 from nexussy.security import sanitize_path, sanitize_relative_path
 from nexussy.session import now_utc
 
-config=None; db=None; engine=None
+config=None; db=None; engine=None; _startup_lock: asyncio.Lock | None = None
+
+def _get_startup_lock() -> asyncio.Lock:
+    global _startup_lock
+    if _startup_lock is None:
+        _startup_lock = asyncio.Lock()
+    return _startup_lock
 
 def cors_origins_for(cfg):
     origins = cfg.security.cors_origins if cfg is not None else ["*"]
@@ -40,7 +46,7 @@ def cors_origins_for(cfg):
         logging.getLogger(__name__).warning("wildcard CORS origin is enabled in production")
     return origins
 
-async def startup():
+async def _do_startup():
     global config, db, engine
     loaded=load_config()
     # Tests may pre-seed module state with an override config that points at the
@@ -50,6 +56,10 @@ async def startup():
     db=Database(config.database.global_path, config.database.busy_timeout_ms, config.database.write_retry_count, config.database.write_retry_base_ms)
     engine=Engine(db,config)
     await db.init()
+
+async def startup():
+    async with _get_startup_lock():
+        await _do_startup()
 
 def dump(model): return json.loads(model.model_dump_json()) if hasattr(model,"model_dump_json") else model
 def err(code:ErrorCode, msg:str, status:int=400, details=None): return JSONResponse(dump(ErrorResponse(error_code=code,message=msg,details=details or {})), status_code=status)
@@ -72,13 +82,14 @@ async def body(request, cls):
     except ValidationError as e: raise ValueError(e.errors())
 
 async def ensure_db():
-    if config is None or db is None or engine is None:
-        await startup()
-    await db.init()
+    async with _get_startup_lock():
+        if config is None or db is None or engine is None:
+            await _do_startup()
+        await db.init()
 async def auth(request):
     if request.url.path == "/health": return None
     if config is None or db is None or engine is None:
-        await startup()
+        await ensure_db()
     if config.auth.enabled and request.headers.get(config.auth.header_name) != os.environ.get(config.auth.api_key_env):
         return err(ErrorCode.unauthorized,"unauthorized",401)
 
