@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 NEXUSSY_HOME=${NEXUSSY_HOME:-"$HOME/.nexussy"}

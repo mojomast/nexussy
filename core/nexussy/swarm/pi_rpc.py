@@ -36,6 +36,9 @@ class PiRPCProcess:
             if request_id in self.responses:
                 return self.responses[request_id]
             if self.process.returncode is not None:
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+                if request_id in self.responses:
+                    return self.responses[request_id]
                 break
             await asyncio.sleep(0.02)
         raise TimeoutError("Pi RPC response timeout")

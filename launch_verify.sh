@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 CORE_HOST=${NEXUSSY_CORE_HOST:-"127.0.0.1"}
@@ -17,8 +17,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 curl_ok() { curl -fsS "$1" >/dev/null 2>&1; }
 
 wait_for_url() {
-  label=$1
-  url=$2
+  label="$1"
+  url="$2"
   info "waiting for $label: $url"
   i=0
   while [ "$i" -lt 30 ]; do

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 NEXUSSY_HOME=${NEXUSSY_HOME:-"$HOME/.nexussy"}
@@ -53,7 +53,7 @@ ensure_runtime_python() {
 }
 
 is_running() {
-  pid_file=$1
+  pid_file="$1"
   [ -f "$pid_file" ] || return 1
   pid=$(cat "$pid_file" 2>/dev/null || true)
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
@@ -61,14 +61,14 @@ is_running() {
 }
 
 cleanup_stale_pid() {
-  pid_file=$1
+  pid_file="$1"
   if [ -f "$pid_file" ] && ! is_running "$pid_file"; then
     rm -f "$pid_file"
   fi
 }
 
 port_open() {
-  host=$1; port=$2
+  host="$1"; port="$2"
   ( : > "/dev/tcp/$host/$port" ) >/dev/null 2>&1
 }
 
@@ -77,7 +77,7 @@ health_url() { printf 'http://%s:%s/%s\n' "$1" "$2" "$3"; }
 curl_ok() { curl -fsS "$1" >/dev/null 2>&1; }
 
 wait_for_url() {
-  url=$1
+  url="$1"
   i=0
   while [ "$i" -lt 30 ]; do
     curl_ok "$url" && return 0
@@ -90,7 +90,7 @@ wait_for_url() {
 ensure_dirs() { mkdir -p "$NEXUSSY_HOME" "$RUN_DIR" "$NEXUSSY_HOME/logs"; }
 
 prepare_log() {
-  log_file=$1
+  log_file="$1"
   log_dir=$(dirname -- "$log_file")
   mkdir -p "$log_dir"
   touch "$log_file" || return 1
@@ -141,7 +141,7 @@ start_tui() {
 }
 
 stop_one() {
-  name=$1; pid_file=$2
+  name="$1"; pid_file="$2"
   if is_running "$pid_file"; then
     pid=$(cat "$pid_file")
     info "stopping $name pid $pid"
