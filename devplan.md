@@ -31,6 +31,7 @@
 - Sequential review-fix subagent pass added DB indexes/finally cleanup, paused-state cleanup, serialized server startup, engine logging/RPC depth guard, async git subprocess calls, provider plaintext warnings/env caching, atomic SSE sequencing, production CORS enforcement, full MCP start schema, shell hardening, and CHANGELOG documentation; each subagent commit passed `python3 -m pytest -x -q` under `core/`.
 - README rewrite pass replaced the operational/reference-heavy README with a clearer product and operator guide covering purpose, pipeline lifecycle, architecture, install/launcher flows, TUI/web/MCP usage, providers, Pi workers, artifacts, security, configuration, and verification status. Checks passed: `python3 -m pytest -q core/tests` and `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`.
 - Sequential repair pass closed 11 core review issues: file-lock claimed uniqueness, provider cache invalidation, atomic event payload sequencing, keyring-only secret deletion reporting, lazy CORS config, regex complexity signals, worker pause timeout capture, explicit worker merge results, empty relative path rejection, shared stage order, and GLM/ZAI alias documentation. Checks passed: `python3 -m pytest tests/ -v` under `core/` (67 passed) and an isolated core server `/pipeline/start` mock-provider smoke; requested `python -m pytest tests/ -v` could not run because `python` is unavailable.
+- Code review fix run closed A1-A11 and D1-D3: keyring fallback warnings, provider 429 persistence, lock exception narrowing, rename diff parsing, event sequence `RETURNING`, unique mock worker IDs, Pi RPC runtime/event handling, numeric config coercion, stage handler refactor, and security regression tests. Checks passed: `python3 -m pytest -q core/tests` (71 passed); requested `python -m pytest -q core/tests` could not run because `python` is unavailable.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -50,6 +51,8 @@
 - [✅] I2: Sequential subagent review-fix commits completed for DB, engine, server, gitops, providers, SSE, CORS/MCP, shell scripts, and docs; core tests passed after every commit.
 - [✅] I3: README rewritten into a clearer current-state product/operator guide; core tests and root shell syntax checks pass.
 - [✅] J1: Sequential core repair issues 1-11 completed as separate commits with targeted tests; full core tests and isolated mock pipeline smoke pass.
+- [✅] J2: Code review fix run A1-A11 and D1-D3 completed with core reliability, provider, async, config, git diff, refactor, and security-test fixes; `python3 -m pytest -q core/tests` passes.
+- [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 
 ## Definitions Of Done

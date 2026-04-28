@@ -376,6 +376,7 @@ Current traceability status is tracked in `SPEC_COVERAGE.md` and `FULL_SPEC_REMA
 - Use `CIRCULAR_DEVELOPMENT.md` when closing coverage gaps sequentially.
 - Do not depend on `ussycode`.
 - Do not log secrets.
+- Recent fixes include keyring fallback warning behavior, automatic 429 rate-limit persistence from provider completions, narrowed file-lock DB exception handling, rename-diff parsing, unique mock develop worker IDs, event-based Pi RPC response waiting, numeric config coercion, and expanded security tests.
 
 ## Update
 

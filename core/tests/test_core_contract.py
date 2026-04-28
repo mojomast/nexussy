@@ -11,14 +11,14 @@ from nexussy.api.server import app
 from nexussy.artifacts.store import safe_write
 from nexussy.config import load_config
 from nexussy.db import Database
-from nexussy.security import sanitize_relative_path, scrub_log
+from nexussy.security import sanitize_path, sanitize_relative_path, scrub_log
 from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
-from nexussy.providers import DISCOVERY, delete_secret
+from nexussy.providers import DISCOVERY, delete_secret, set_secret
 from nexussy.providers import ProviderResult
-from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
+from nexussy.swarm.gitops import _git, init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.pipeline.engine import Engine, complexity
@@ -44,12 +44,22 @@ def test_security_helpers(tmp_path):
     with pytest.raises(ValueError):
         sanitize_relative_path("")
     with pytest.raises(ValueError):
+        sanitize_relative_path("/")
+    with pytest.raises(ValueError):
         sanitize_relative_path("../x")
+    with pytest.raises(ValueError):
+        sanitize_relative_path("\x00foo")
+    assert sanitize_relative_path("foo/bar") == "foo/bar"
     assert "[REDACTED]" in scrub_log("Authorization: Bearer abc.def.ghi password=secret")
+    assert "[REDACTED]" in scrub_log("Bearer provider-token-123")
     assert "[REDACTED]" in scrub_log("token=" + "a" * 40)
     assert "[REDACTED]" in scrub_log("secret=" + "b" * 64)
+    assert "[REDACTED]" in scrub_log("OPENAI_API_KEY=sk-secretsecretsecret")
+    assert "[REDACTED]" in scrub_log("ANTHROPIC_API_KEY=anthropic-secret-value")
     assert "[REDACTED]" in scrub_log("ghp_" + "A" * 36)
     assert "[REDACTED]" in scrub_log("ghs_" + "Z" * 36)
+    private_key = "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"
+    assert "[REDACTED]" in scrub_log(private_key)
     git_sha = "a" * 40
     short_hash = "a" * 39
     sha256 = "c" * 64
@@ -58,6 +68,10 @@ def test_security_helpers(tmp_path):
     assert git_sha in scrub_log("commit " + git_sha)
     assert "[REDACTED]" in scrub_log("hash=" + sha256)
     assert upper_hex in scrub_log("token=" + upper_hex)
+    root = tmp_path / "root"; root.mkdir(); outside = tmp_path / "outside"; outside.mkdir()
+    with pytest.raises(ValueError): sanitize_path(str(outside / "x"), [str(root)])
+    link = root / "link"; link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError): sanitize_path(str(link / "x"), [str(root)])
 
 
 def test_config_precedence(tmp_path, monkeypatch):
@@ -406,7 +420,7 @@ async def test_provider_text_retries_per_stage_config(tmp_path, monkeypatch):
     engine = Engine(db, cfg)
     await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","design",datetime.now(timezone.utc).isoformat(),None,"{}")))
     calls = {"n": 0}
-    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("temporary provider failure")
@@ -576,7 +590,7 @@ def test_delete_secret_reports_keyring_only_secret_existed(monkeypatch, tmp_path
     assert store == {}
 
 
-def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path):
+def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path, caplog):
     class BrokenKeyring:
         def get_password(self, service, name): raise RuntimeError("no keyring")
         def set_password(self, service, name, value): raise RuntimeError("no keyring")
@@ -594,8 +608,21 @@ def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path)
         r = c.put("/secrets/ANTHROPIC_API_KEY", json={"value":"sk-anthropic-secret"})
         assert r.status_code == 200, r.text
         assert r.json()["source"] == "file"
+        assert "keyring unavailable" in caplog.text
         assert "ANTHROPIC_API_KEY=sk-anthropic-secret" in (tmp_path / ".env").read_text()
         assert "anthropic" in server.configured_providers()
+
+
+def test_set_secret_failing_keyring_warns_and_uses_file(monkeypatch, tmp_path, caplog):
+    class BrokenKeyring:
+        def set_password(self, service, name, value): raise RuntimeError("no keyring")
+    monkeypatch.setitem(sys.modules, "keyring", BrokenKeyring())
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    env = tmp_path / ".env"
+    summary = set_secret("GROQ_API_KEY", "sk-groq-secret", env_path=env)
+    assert summary.source == "file"
+    assert "GROQ_API_KEY=sk-groq-secret" in env.read_text()
+    assert "keyring unavailable" in caplog.text
 
 
 def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
@@ -624,7 +651,7 @@ def test_secret_updates_invalidate_provider_env_cache(monkeypatch, tmp_path):
         def set_password(self, service, name, value): raise RuntimeError("no keyring")
         def delete_password(self, service, name): raise RuntimeError("no keyring")
     seen=[]
-    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         seen.append((_env or {}).get("OPENAI_API_KEY"))
         if "Generate a JSON array" in prompt:
             return ProviderResult('[{"id":"q_name","question":"Name?"},{"id":"q_lang","question":"Language?"},{"id":"q_desc","question":"Description?"},{"id":"q_type","question":"Type?"}]', {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
@@ -683,6 +710,15 @@ async def test_file_lock_unique_constraint_only_applies_to_claimed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_claim_file_non_integrity_error_propagates():
+    class BrokenDb:
+        async def write(self, fn):
+            raise sqlite3.OperationalError("disk full")
+    with pytest.raises(sqlite3.OperationalError, match="disk full"):
+        await claim_file(BrokenDb(), "run", "src/a.py", "w1", timeout_s=1, retry_ms=1)
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_persistence_and_db_pragmas(tmp_path):
     db = Database(str(tmp_path / "state.db")); await db.init()
     con = sqlite3.connect(tmp_path / "state.db")
@@ -691,6 +727,21 @@ async def test_rate_limit_persistence_and_db_pragmas(tmp_path):
     assert required <= {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     await persist_rate_limit(db, "openai", "openai/x", datetime.now(timezone.utc)+timedelta(seconds=60), "quota")
     assert (await active_rate_limit(db, "openai", "openai/x"))["reason"] == "quota"
+
+
+@pytest.mark.asyncio
+async def test_complete_persists_litellm_429(monkeypatch, tmp_path):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    class RateLimitError(Exception):
+        status_code = 429
+        headers = {"retry-after": "30"}
+    async def acompletion(*args, **kwargs):
+        raise RateLimitError("rate limit 429")
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(acompletion=acompletion, RateLimitError=RateLimitError))
+    with pytest.raises(RateLimitError):
+        await complete("design", "prompt", "openai/gpt-5.5-fast", _env={"OPENAI_API_KEY":"sk-test"}, db=db)
+    rows = await db.read("SELECT provider, model, reason FROM rate_limits")
+    assert rows == [{"provider":"openai", "model":"openai/gpt-5.5-fast", "reason":"rate limit 429"}]
 
 
 @pytest.mark.asyncio
@@ -703,6 +754,20 @@ async def test_git_worktree_lifecycle(tmp_path):
     manifest = await extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
     assert [f.path for f in manifest.files] == ["a.txt"]
     await prune_worktrees(str(repo))
+
+
+@pytest.mark.asyncio
+async def test_git_changed_files_uses_new_path_for_rename(tmp_path):
+    repo = tmp_path / "repo"; base = await init_repo(str(repo))
+    (repo / "old.txt").write_text("old")
+    await _git(repo, "add", ".")
+    await _git(repo, "commit", "-m", "add old")
+    base = await _git(repo, "rev-parse", "HEAD")
+    (repo / "old.txt").rename(repo / "new.txt")
+    await _git(repo, "add", ".")
+    await _git(repo, "commit", "-m", "rename")
+    manifest = await extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
+    assert [(f.path, f.status) for f in manifest.files] == [("new.txt", "renamed")]
 
 
 @pytest.mark.asyncio
@@ -974,7 +1039,7 @@ async def test_provider_fallback_emits_retryable_pipeline_error(monkeypatch, tmp
     cfg = load_config({"projects_dir": str(tmp_path / "projects"), "providers":{"default_model":"openai/gpt-5.5-fast", "allow_fallback":True}})
     def available(model, allow_mock=False):
         return model == "openai/gpt-5.5-fast"
-    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         return ProviderResult("[]", {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"fake","model":model})
     monkeypatch.setattr("nexussy.pipeline.engine.model_available", available)
     monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)

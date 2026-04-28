@@ -21,8 +21,17 @@ def _merge(a: dict, b: dict) -> dict:
 def _set(d, path, val):
     cur=d
     for p in path[:-1]: cur=cur.setdefault(p,{})
-    if str(val).lower() in ("true","false"): val = str(val).lower()=="true"
-    elif str(val).isdigit(): val = int(val)
+    raw = str(val)
+    if raw.lower() in ("true", "false"):
+        val = raw.lower() == "true"
+    else:
+        try:
+            val = int(raw)
+        except ValueError:
+            try:
+                val = float(raw)
+            except ValueError:
+                pass
     cur[path[-1]]=val
 
 def _env_file(path: pathlib.Path) -> dict[str,str]:

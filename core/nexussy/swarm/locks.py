@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import sqlite3
 from datetime import timedelta
 from nexussy.api.schemas import FileLock, LockStatus, now_utc
 from nexussy.security import sanitize_relative_path
@@ -17,7 +18,9 @@ async def claim_file(db, run_id: str, path: str, worker_id: str, timeout_s=120, 
             lock=FileLock(path=rel,worker_id=worker_id,run_id=run_id,status=LockStatus.claimed,claimed_at=now,expires_at=exp)
             if emit: await emit("file_claimed", lock)
             return lock
-        except Exception:
+        except Exception as e:
+            if not isinstance(e, sqlite3.IntegrityError):
+                raise
             if emit and not waiting_emitted:
                 waiting_emitted=True
                 await emit("file_lock_waiting", FileLock(path=rel,worker_id=worker_id,run_id=run_id,status=LockStatus.waiting,claimed_at=now,expires_at=exp))

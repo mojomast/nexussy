@@ -21,18 +21,21 @@ class PiRPCProcess:
     _tasks: list[asyncio.Task] = field(default_factory=list)
     cancelled: bool = False
     responses: dict[str, dict] = field(default_factory=dict)
+    _response_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def request(self, task: str, context: str = "") -> str:
         rid = os.urandom(4).hex()
         msg = {"jsonrpc":"2.0","id":rid,"method":"agent.run","params":{"task":task,"context":context}}
-        assert self.process.stdin is not None
+        if self.process.stdin is None:
+            raise RuntimeError("PiRPCProcess stdin is not available")
         self.process.stdin.write((json.dumps(msg)+"\n").encode())
         await self.process.stdin.drain()
         return rid
 
     async def wait_response(self, request_id: str, timeout_s: float = 900) -> dict:
         loop = asyncio.get_running_loop(); deadline = loop.time() + timeout_s
-        while loop.time() < deadline:
+        remaining = deadline - loop.time()
+        while remaining > 0:
             if request_id in self.responses:
                 return self.responses[request_id]
             if self.process.returncode is not None:
@@ -40,7 +43,11 @@ class PiRPCProcess:
                 if request_id in self.responses:
                     return self.responses[request_id]
                 break
-            await asyncio.sleep(0.02)
+            try:
+                await asyncio.wait_for(self._response_event.wait(), timeout=min(remaining, 1.0))
+            except asyncio.TimeoutError:
+                pass
+            remaining = deadline - loop.time()
         raise TimeoutError("Pi RPC response timeout")
 
     async def stop(self, timeout_s: float = 10):
@@ -104,6 +111,7 @@ async def _drain(rpc: PiRPCProcess, stream, kind: str, worker_id: str, max_bytes
                 obj = json.loads(text); parsed = True; payload = obj
                 if isinstance(obj, dict) and obj.get("id"):
                     rpc.responses[str(obj["id"])] = obj
+                    rpc._response_event.set(); rpc._response_event.clear()
             except json.JSONDecodeError:
                 pass
         rpc.frames.append(PiFrame(kind, WorkerStreamPayload(worker_id=worker_id, stream_kind="rpc" if parsed else kind, line=json.dumps(payload) if parsed else text, parsed=parsed, truncated=truncated)))

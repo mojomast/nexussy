@@ -37,4 +37,5 @@
 - Sequential review-fix subagent pass added DB indexes and write-finally cleanup, failed-run paused-state cleanup, startup serialization, exception logging/RPC depth guard, async git subprocesses, provider plaintext warnings/env caching, atomic SSE sequencing, production CORS enforcement, full MCP input schema, shell `set -euo pipefail`, and CHANGELOG; core tests passed after each subagent commit.
 - README rewrite pass refreshed the root README into a concise product/operator guide covering the pipeline, architecture, setup, operations, UI surfaces, provider/Pi behavior, artifacts, security, configuration, and verification status; core tests and root shell syntax checks pass.
 - Sequential repair pass closed 11 core review issues with separate commits and regression tests; full core tests passed with `python3` and an isolated mock-provider server smoke passed.
+- Code review fix run closed A1-A11 plus root docs/status updates: provider keyring fallback, 429 persistence, lock/git/Pi/config/event/develop fixes, stage handler refactor, and added security regression coverage; `python3 -m pytest -q core/tests` passes.
 <!-- PHASE_PROGRESS_END -->

@@ -27,6 +27,7 @@ Code review fix pass complete: core reliability/security/async issues were addre
 Sequential review-fix subagent pass complete: DB indexes/write finally cleanup, paused-state cleanup, startup serialization, engine logging/RPC depth guard, async gitops, provider plaintext warnings/env caching, atomic SSE sequencing, production CORS enforcement, full MCP input schema, shell hardening, and CHANGELOG docs landed as separate commits. Core tests passed after each subagent.
 README rewrite complete: `README.md` now explains nexussy as a local software-delivery harness, documents the staged pipeline, core/TUI/web architecture, install/launcher usage, TUI/web/MCP surfaces, provider modes, Pi worker behavior, artifacts, security, configuration, and current verification status. Checks passed: `python3 -m pytest -q core/tests` and `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`.
 Sequential repair pass complete: issues 1-11 landed as separate core commits covering DB file-lock uniqueness, provider cache invalidation, atomic event sequencing, keyring delete reporting, lazy CORS config, complexity regex matching, worker timeout pause capture, explicit merge results, empty path rejection, shared stage order, and GLM/ZAI alias docs. Verification passed with `python3 -m pytest tests/ -v` from `core/` (67 passed) and an isolated server `/pipeline/start` mock-provider smoke; `python -m pytest tests/ -v` failed because `python` is unavailable.
+Code review fix run complete: core A1-A11 fixes landed for keyring fallback warnings, 429 rate-limit persistence, narrowed lock exception handling, rename diff parsing, event sequence `RETURNING`, unique mock orchestrator IDs, Pi RPC runtime/event waiting, numeric config coercion, per-stage artifact handlers, and security tests. Root docs/status artifacts were updated; `python3 -m pytest -q core/tests` passes with 71 tests, while `python` remains unavailable in this environment.
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
@@ -83,5 +84,5 @@ Own `web/` only. Implement Python Starlette dashboard, `/api/*` proxy, SSE proxy
 <!-- SUBAGENT_C_ASSIGNMENT_END -->
 
 <!-- SUBAGENT_D_ASSIGNMENT_START -->
-Own root operational files only. Implement installer, launcher, README, AGENTS.md, config/env templates, and operational smoke checks from `SPEC.md`.
+Own root operational files only. Current code review fix documentation/status pass is complete; await the next root docs or ops assignment.
 <!-- SUBAGENT_D_ASSIGNMENT_END -->

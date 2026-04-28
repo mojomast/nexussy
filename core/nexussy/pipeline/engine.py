@@ -60,12 +60,12 @@ class Engine:
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
         def tx(con):
-            con.execute(
+            row=con.execute(
                 "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
-                "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
+                "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?) "
+                "RETURNING sequence",
                 (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
-            )
-            row=con.execute("SELECT sequence FROM events WHERE event_id=?",(env.event_id,)).fetchone()
+            ).fetchone()
             if row:
                 env.sequence=row["sequence"]
                 con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id))
@@ -226,7 +226,7 @@ class Engine:
             try:
                 if self.provider_env_cache is None:
                     self.provider_env_cache = effective_secret_env()
-                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s, _env=self.provider_env_cache)
+                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s, _env=self.provider_env_cache, db=self.db)
                 break
             except Exception as e:
                 last_error = e
@@ -403,6 +403,21 @@ class Engine:
     async def _artifacts_for_stage(self, st, req, detail, rid, cp, root, selected_models=None, allow_mock=False, review_feedback_for_plan: str=""):
         sid=detail.session.session_id
         if st==StageName.interview:
+            return await self._run_interview_stage(req, detail, rid, cp, root, selected_models or {}, allow_mock)
+        if st==StageName.design:
+            return await self._run_design_stage(req, detail, rid, root, selected_models or {}, allow_mock)
+        if st==StageName.validate:
+            return await self._run_validate_stage(req, detail, rid, root, selected_models or {}, allow_mock)
+        if st==StageName.plan:
+            return await self._run_plan_stage(req, detail, rid, cp, root, selected_models or {}, allow_mock, review_feedback_for_plan)
+        if st==StageName.review:
+            return await self._run_review_stage(req, detail, rid, root, selected_models or {}, allow_mock)
+        if st==StageName.develop:
+            return await self._develop_stage(req, detail, rid, root, selected_models or {}, allow_mock)
+        return []
+
+    async def _run_interview_stage(self, req, detail, rid, cp, root, selected_models, allow_mock):
+            sid=detail.session.session_id; st=StageName.interview
             question_prompt=("Generate a JSON array of 4-8 plain-language interview questions for a non-technical project owner. "
                              "Cover project name, primary languages, short description/requirements, project type, and optional frameworks, database, auth, deployment, and testing preferences. "
                              "Return only JSON objects with id and question fields.\n\n"
@@ -434,11 +449,15 @@ class Engine:
                 self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
             ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=answered,requirements=[qa.answer for qa in answered])
             return [await self._save_art(rid,sid,root,"interview",ia.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"complexity_profile",cp.model_dump_json(indent=2))]
-        if st==StageName.design:
+
+    async def _run_design_stage(self, req, detail, rid, root, selected_models, allow_mock):
+            sid=detail.session.session_id; st=StageName.design
             interview=self._interview_summary(await self._latest_interview_artifact(rid))
             txt=await self._provider_text(st, sid, rid, f"Create design with Goals, Architecture, Dependencies, Risks, Test Strategy for: {req.description}\n\n{interview}", selected_models, allow_mock)
             return [await self._save_art(rid,sid,root,"design_draft",txt if all(h in txt for h in ["Goals","Architecture","Dependencies","Risks","Test Strategy"]) else "# Goals\nDeliver requested project.\n# Architecture\nProvider-guided design.\n# Dependencies\nPython.\n# Risks\nUnknowns.\n# Test Strategy\nAutomated tests.\n")]
-        if st==StageName.validate:
+
+    async def _run_validate_stage(self, req, detail, rid, root, selected_models, allow_mock):
+            sid=detail.session.session_id; st=StageName.validate
             design=await self._latest_artifact_text(rid,"design_draft")
             prompt=("Validate this design draft for completeness, internal consistency, missing dependencies, risks, and testability. "
                     "Return JSON with optional issues[] and optional corrected_design. If clean, return passed true and no issues.\n\n" + design)
@@ -448,7 +467,9 @@ class Engine:
             issue_passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
             report=ValidationReport(passed=self._provider_declared_passed(response, issue_passed) and issue_passed,max_iterations=self.config.stages.validate.max_iterations or 3,issues=issues,corrected=corrected.strip()!=design.strip())
             return [await self._save_art(rid,sid,root,"validated_design",corrected), await self._save_art(rid,sid,root,"validation_report",report.model_dump_json(indent=2))]
-        if st==StageName.plan:
+
+    async def _run_plan_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, review_feedback_for_plan):
+            sid=detail.session.session_id; st=StageName.plan
             interview=self._interview_summary(await self._latest_interview_artifact(rid))
             feedback = f"\n\nReview feedback to address in this plan retry:\n{review_feedback_for_plan}" if review_feedback_for_plan else ""
             plan_text=await self._provider_text(st, sid, rid, f"Create a devplan.md body with PROGRESS_LOG and NEXT_TASK_GROUP anchors from interview requirements.\n\n{interview}\n\nOriginal description: {req.description}{feedback}", selected_models, allow_mock)
@@ -459,7 +480,9 @@ class Engine:
             refs=[await self._save_art(rid,sid,root,"devplan",dev), await self._save_art(rid,sid,root,"handoff",hand)]
             for i in range(1,cp.phase_count+1): refs.append(await self._save_art(rid,sid,root,"phase",f"# Phase {i:03d}\n<!-- PHASE_TASKS_START -->\n- [ ] Task {i}\n<!-- PHASE_TASKS_END -->\n<!-- PHASE_PROGRESS_START -->\n- pending\n<!-- PHASE_PROGRESS_END -->\n",i))
             return refs
-        if st==StageName.review:
+
+    async def _run_review_stage(self, req, detail, rid, root, selected_models, allow_mock):
+            sid=detail.session.session_id; st=StageName.review
             if req.metadata.get("force_review_fail"):
                 return [await self._save_art(rid,sid,root,"review_report",ReviewReport(passed=False,max_iterations=self.config.stages.review.max_iterations or 2,feedback_for_plan_stage="Fix plan issues").model_dump_json(indent=2))]
             devplan=await self._latest_artifact_text(rid,"devplan"); handoff=await self._latest_artifact_text(rid,"handoff")
@@ -471,15 +494,13 @@ class Engine:
             issue_passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
             passed=self._provider_declared_passed(response, issue_passed) and issue_passed
             return [await self._save_art(rid,sid,root,"review_report",ReviewReport(passed=passed,max_iterations=self.config.stages.review.max_iterations or 2,issues=issues,feedback_for_plan_stage=self._review_feedback(response,issues)).model_dump_json(indent=2))]
-        if st==StageName.develop:
-            return await self._develop_stage(req, detail, rid, root, selected_models or {}, allow_mock)
-        return []
 
     async def _develop_stage(self, req, detail, rid, root, selected_models, allow_mock):
         sid=detail.session.session_id; main=pathlib.Path(root); workers_root=main.parent/"workers"; artifacts_dir=main/".nexussy"/"artifacts"
         if allow_mock and not req.metadata.get("fake_pi_command"):
             orch_model=self.config.stages.develop.orchestrator_model or selected_models.get("develop") or self.config.providers.default_model
-            orch=Worker(worker_id="orchestrator-abcdef",run_id=rid,role=WorkerRole.orchestrator,status=WorkerStatus.finished,worktree_path=str(workers_root/"orchestrator-abcdef"),branch_name="worker/orchestrator-abcdef",model=orch_model)
+            orch_id=f"orchestrator-{uuid4().hex[:6]}"
+            orch=Worker(worker_id=orch_id,run_id=rid,role=WorkerRole.orchestrator,status=WorkerStatus.finished,worktree_path=str(workers_root/orch_id),branch_name=f"worker/{orch_id}",model=orch_model)
             await self._persist_worker(orch); await self.emit(SSEEventType.worker_spawned,sid,rid,orch)
             return [await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=True,workers=[orch],tasks_total=1,tasks_passed=1).model_dump_json(indent=2)), await self._save_art(rid,sid,root,"merge_report",MergeReport(run_id=rid,base_commit="mock",merge_commit="mock",merged_workers=[orch.worker_id],passed=True).model_dump_json(indent=2)), await self._save_art(rid,sid,root,"changed_files",ChangedFilesManifest(run_id=rid,base_commit="mock",merge_commit="mock").model_dump_json(indent=2))]
         context=await self._spawn_workers(req, detail, rid, root, selected_models)
