@@ -567,6 +567,7 @@ def test_cors_uses_runtime_config_not_import_time_config(monkeypatch, tmp_path):
     server.config = load_config({"security":{"cors_origins":["https://runtime.example"]}})
     server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
     server.engine = Engine(server.db, server.config)
+    server.app.middleware_stack = None
     with TestClient(app) as c:
         allowed = c.get("/health", headers={"Origin":"https://runtime.example"})
         denied = c.get("/health", headers={"Origin":"https://import.example"})

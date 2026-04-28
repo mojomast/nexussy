@@ -33,6 +33,7 @@ from nexussy.providers import active_rate_limit, complete, configured_providers,
 from nexussy.security import sanitize_path
 from nexussy.session import now_utc
 
+logger = logging.getLogger(__name__)
 config=None; db=None; engine=None
 _startup_lock: asyncio.Lock = asyncio.Lock()
 
@@ -53,10 +54,16 @@ def cors_origins_for(cfg):
 class LazyCORSMiddleware:
     def __init__(self, app):
         self.app = app
-    async def __call__(self, scope, receive, send):
+        self._inner: CORSMiddleware | None = None
+
+    def _build(self) -> CORSMiddleware:
         origins = cors_origins_for(config or load_config())
-        middleware = CORSMiddleware(self.app, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
-        await middleware(scope, receive, send)
+        return CORSMiddleware(self.app, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+
+    async def __call__(self, scope, receive, send):
+        if self._inner is None:
+            self._inner = self._build()
+        await self._inner(scope, receive, send)
 
 async def _do_startup():
     global config, db, engine
@@ -67,8 +74,17 @@ async def _do_startup():
     config=config if config is not None and config.database.global_path == loaded.database.global_path else loaded
     db=Database(config.database.global_path, config.database.busy_timeout_ms, config.database.write_retry_count, config.database.write_retry_base_ms)
     engine=Engine(db,config)
+    if not config.auth.enabled:
+        bind_host = config.core.host
+        if bind_host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                "Auth is DISABLED and server is binding to %s. "
+                "All API endpoints are publicly accessible without authentication. "
+                "Set NEXUSSY_AUTH_ENABLED=true or restrict the bind address.",
+                bind_host,
+            )
     if multiprocessing.current_process().name != "MainProcess":
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "nexussy is running in a child worker process. "
             "The in-memory engine state (queues, tasks, paused runs, interview waiters) "
             "is NOT shared across workers. Run with --workers 1 to avoid data loss."
