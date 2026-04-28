@@ -19,6 +19,7 @@
 - Interview-first TUI pass: requests like `interview me please` enter provider-backed interview mode instead of idle chat or auto-starting the pipeline; follow-up vague app descriptions stay in interview mode until explicit `/new`; TUI tests/typecheck and core tests pass.
 - TUI interaction gate pass: default composer and legacy interactive shell now keep ordinary chat in Ask mode with no provider/pipeline/inject side effects; only slash commands or pending explicit selections/confirmations enter Action mode; TUI tests/typecheck pass.
 - Core interview pass: interview now uses LLM-generated question JSON, auto-synthesizes answers from project descriptions when requested, pauses manual runs for `/pipeline/{session_id}/interview/answer`, persists real multi-question artifacts, and injects interview summaries into design/devplan prompts; core tests pass.
+- TUI handoff/anchor pass: added shared anchor utilities, context-window budget tracking from `cost_update`, handoff prompt generation, anchor-aware devplan/phase/handoff panels, retry-aware stage bar badges, `/handoff`, and regression tests; `bun test && bun run typecheck` passes.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->

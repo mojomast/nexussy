@@ -2,7 +2,7 @@ import type { TuiState } from "../state";
 import type { ArtifactRef, EventEnvelope, StageName, Worker } from "../types";
 
 export type UiMode = "chat" | "dashboard";
-export type OverlayMode = "none" | "help" | "onboarding" | "status" | "stages" | "plan" | "artifacts" | "workers" | "worker" | "doctor" | "secrets";
+export type OverlayMode = "none" | "help" | "onboarding" | "status" | "stages" | "plan" | "artifacts" | "workers" | "worker" | "doctor" | "secrets" | "handoff";
 
 export type TranscriptItem =
   | { kind:"run_started"; id:string; text:string }
@@ -47,4 +47,5 @@ export type ClientLike = {
   status(run_id:string): Promise<unknown>|unknown;
   workers(run_id:string): Promise<unknown>|unknown;
   artifacts(session_id:string, run_id?:string): Promise<unknown>|unknown;
+  compact?(run_id:string): Promise<{compacted_tokens:number}>|{compacted_tokens:number};
 };

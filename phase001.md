@@ -23,4 +23,5 @@
 - Interview-first TUI pass added persistent provider-backed interview mode for discovery requests so vague follow-up app ideas do not auto-start the pipeline before explicit `/new`.
 - TUI interaction gate pass hardened composer routing so ordinary chat stays local Ask mode and cannot start pipelines, inject context, or call providers; slash commands remain the explicit Action-mode trigger.
 - Core interview pass replaced the hardcoded `Use defaults?` artifact with generated questions, auto/user answer capture, manual pause/resume API, and downstream interview context in design/devplan stages.
+- TUI handoff/anchor pass added canonical anchor utilities, context-window tracking, handoff generation/trigger UI state, devplan/phase/handoff panel helpers, stage retry/checkpoint display, and tests; TUI tests/typecheck pass.
 <!-- PHASE_PROGRESS_END -->

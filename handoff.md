@@ -13,6 +13,7 @@ Provider-backed idle chat added: core `POST /assistant/reply` uses the configure
 Interview-first TUI mode added: `interview me please` and similar discovery intents use provider-backed chat to ask clarifying questions and keep follow-ups out of pipeline start until `/new` is explicit.
 TUI interaction gate added: ordinary composer and legacy shell text stays in local Ask mode with no provider/pipeline/inject side effects; Action mode requires slash commands or pending explicit selection/confirmation.
 Core interview stage added: generated question output is parsed into `InterviewArtifact`, auto mode synthesizes answers from descriptions, manual mode pauses until `/pipeline/{session_id}/interview/answer`, and design/devplan prompts include interview context.
+TUI handoff/anchor pass added: shared anchor parsing/writing, context-budget tracking, handoff modal trigger state, handoff document generation/auto-restart request helpers, anchor-aware devplan/phase/handoff panels, retry/checkpoint-aware stage bar, `/handoff`, and regression tests. TUI `bun test && bun run typecheck` passes.
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
@@ -40,6 +41,7 @@ Core interview stage added: generated question output is parsed into `InterviewA
 - Interview-first TUI mode changed `tui/src/ui/Composer.ts`, `tui/src/ui/types.ts`, `tui/src/opentui-app.ts`, and `tui/tests/chat-ux.test.ts` plus status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (39 passed) and `python3 -m pytest -q core/tests` (28 passed).
 - TUI interaction gate changed `tui/src/ui/Composer.ts`, `tui/src/ui/types.ts`, `tui/src/index.ts`, `tui/src/ui/Onboarding.ts`, and TUI tests plus status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (40 passed).
 - Core interview pass changed `core/nexussy/pipeline/engine.py`, `core/nexussy/api/schemas.py`, `core/nexussy/api/server.py`, `core/tests/test_core_contract.py`, and `core/tests/test_interview.py` plus status artifacts. Checks run: `python3 -m pytest -q core/tests` (33 passed).
+- TUI handoff/anchor pass changed only `tui/` implementation/tests plus required status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (58 passed).
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->

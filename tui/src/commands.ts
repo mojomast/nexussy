@@ -12,6 +12,7 @@ export async function runSlash(input:string, client:CoreClient, state:TuiState):
   const [cmd, ...rest] = input.trim().split(/\s+/);
   const run_id = state.runId;
   if (cmd === "/export") return { local:true, message:"exported displayed session data", html:renderPanels(state).html };
+  if (cmd === "/handoff") return { local:true, message:"handoff triggered by user" };
   if (cmd === "/secrets" || cmd === "/keys") { state.secrets = await client.secrets(); return { endpoint:"/secrets", method:"GET", message:"provider key status refreshed" }; }
   if (cmd === "/set-key") {
     const name=rest[0];

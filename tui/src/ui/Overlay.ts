@@ -1,5 +1,6 @@
 import type { ChatUiState } from "./types";
 import { renderOnboarding } from "./Onboarding";
+import { renderHandoffModal } from "../components/HandoffModal";
 
 export function renderOverlay(state: ChatUiState): string[] {
   if (state.overlay === "none") return [];
@@ -12,6 +13,7 @@ export function renderOverlay(state: ChatUiState): string[] {
   if (state.overlay === "plan") return ["Plan", ...(state.app.devplan.length ? state.app.devplan : ["No devplan updates yet."])];
   if (state.overlay === "artifacts") return ["Artifacts", ...(state.app.artifacts.length ? state.app.artifacts.map(a => `${a.kind}: ${a.path}`) : ["No artifacts yet."])];
   if (state.overlay === "secrets") return ["Provider Keys", ...(state.app.secrets.length ? state.app.secrets.map(s => `${s.configured ? "configured" : "missing"} ${s.name}${s.configured ? ` (${s.source})` : ""}`) : ["Run /secrets to refresh provider-key status."])];
+  if (state.overlay === "handoff") return renderHandoffModal(state.app);
   if (state.overlay === "doctor") return ["Doctor", "Core/web diagnostics are not exposed by a core route yet.", "Fallback: use ./nexussy.sh doctor in another terminal.", `provider summaries: ${state.app.secrets.filter(s => s.configured).length} configured`];
   return [];
 }

@@ -1,5 +1,5 @@
 import { projectNameFromDescription } from "../index";
-import { reduceSecrets } from "../state";
+import { reduceSecrets, triggerHandoff } from "../state";
 import type { StageName } from "../types";
 import { closeOverlay } from "./Overlay";
 import type { ChatUiState, ClientLike, CommandOutcome } from "./types";
@@ -69,6 +69,7 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/stages") return [{ ...withHistory, overlay:"stages" }, { message:"stages" }];
   if (cmd === "/plan") return [{ ...withHistory, overlay:"plan" }, { message:"plan" }];
   if (cmd === "/artifacts") return [{ ...withHistory, overlay:"artifacts" }, { message:"artifacts" }];
+  if (cmd === "/handoff") return [{ ...withHistory, overlay:"handoff", app:triggerHandoff(withHistory.app, "user_command") }, { message:"handoff triggered by user" }];
   if (cmd === "/workers") return [{ ...withHistory, overlay:"workers" }, { message:"workers" }];
   if (cmd === "/worker") return [{ ...withHistory, overlay:"worker", selectedWorkerId:rest[0] }, { message:"worker" }];
   if (cmd === "/doctor") return [{ ...withHistory, overlay:"doctor" }, { message:"doctor fallback" }];

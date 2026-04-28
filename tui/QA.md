@@ -59,3 +59,15 @@ Create a tiny CLI with tests
 14. If Pi is absent, trigger a develop-stage run.
 
 15. Confirm missing Pi CLI renders as an actionable error with `/doctor`, `/secrets`, and retry guidance rather than raw dump spam.
+
+16. During or after a run, type:
+
+```text
+/handoff
+```
+
+17. Confirm the Handoff overlay opens with Compact, Handoff, and Auto-restart options, and that the status strip shows token usage as `used/window (%)`.
+
+18. If an SSE retry loop occurs, confirm the stage bar shows `retrying` for validate-to-design or review-to-plan retries rather than a red failed state.
+
+19. When devplan, handoff, or phase artifacts are shown, confirm checklist edits preserve existing anchor comments and only update content inside the relevant anchor block.

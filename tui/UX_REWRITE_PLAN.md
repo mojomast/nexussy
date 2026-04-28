@@ -26,6 +26,9 @@
 - `tui/src/commands.ts`: expand command handling and overlay state behavior.
 - `tui/src/renderer.ts`: keep dashboard rendering as optional secondary/export path.
 - `tui/src/ui/*`: add separated chat UI components and transcript/composer/file-ref helpers.
+- `tui/src/lib/*`: keep anchor parsing, context-budget calculation, and handoff generation as pure testable helpers.
+- `tui/src/panels/*`: keep artifact-specific devplan, handoff, and phase anchor handling out of renderer code.
+- `tui/src/components/*`: keep reusable status/handoff display helpers separate from state reduction.
 - `tui/tests/*`: add transcript, command, overlay, slash, file-ref, and default-shape tests.
 
 ## Tests To Add
@@ -44,6 +47,7 @@
 
 - `/doctor` has no core route. TUI will show a local diagnostic fallback from known health/config/provider state and mark this as a TUI-side fallback, not a fake core success.
 - `/plan` needs the latest artifact content when a session exists; initial implementation shows known devplan/artifact summaries and falls back gracefully if no session/run exists.
+- Run-scoped compact and session artifact patch endpoints are represented in the client for handoff workflows; live behavior depends on matching core route availability.
 
 ## Acceptance Checklist
 
@@ -56,3 +60,7 @@
 - [x] Missing Pi CLI/LiteLLM errors render as actionable blocks.
 - [x] Heartbeats do not spam transcript.
 - [x] TUI uses only `tui/src/client.ts` to communicate with core.
+- [x] `/handoff` opens a local handoff overlay and records the user-command trigger.
+- [x] Context-budget state is recomputed from `cost_update` usage and rendered in the status strip.
+- [x] Devplan, phase, and handoff helpers update documents through shared anchor utilities.
+- [x] Validate-to-design and review-to-plan retries render as retrying rather than failed.

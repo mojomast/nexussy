@@ -43,3 +43,4 @@ export type TypedEventEnvelope<K extends SSEEventType> = { event_id:string; sequ
 export type EventEnvelope = { [K in SSEEventType]: TypedEventEnvelope<K> }[SSEEventType];
 export interface PipelineStatusResponse { ok:true; run:RunSummary; stages:StageStatusSchema[]; workers:Worker[]; paused:boolean; blockers:Blocker[]; }
 export interface RunStartResponse { ok:true; session_id:string; run_id:string; status:RunStatus; stream_url:string; status_url:string; }
+export interface PipelineStartRequest { project_name:string; description:string; metadata?:Record<string,JsonValue>; start_stage?:StageName; auto_approve_interview?:boolean; }
