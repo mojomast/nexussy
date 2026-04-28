@@ -95,6 +95,15 @@ class Database:
         project_db = Database(str(pathlib.Path(project_root).expanduser() / relative_path), self.busy, self.retries, int(self.retry * 1000))
         await project_db.init()
         return project_db.path
+    async def cleanup_expired(self) -> int:
+        """Delete expired rate_limit rows. Returns number of rows deleted."""
+        now = datetime.now(timezone.utc).isoformat()
+        result = {"deleted": 0}
+        def tx(con):
+            cur = con.execute("DELETE FROM rate_limits WHERE reset_at < ?", (now,))
+            result["deleted"] = cur.rowcount
+        await self.write(tx)
+        return result["deleted"]
     async def write(self, fn):
         """Run a serialized SQLite write transaction with bounded retries."""
         async with self._lock:

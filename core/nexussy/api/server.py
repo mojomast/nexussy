@@ -90,6 +90,16 @@ async def _do_startup():
             "is NOT shared across workers. Run with --workers 1 to avoid data loss."
         )
     await db.init()
+    async def _cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                deleted = await db.cleanup_expired()
+                if deleted:
+                    logger.debug("cleaned up %d expired rate_limit rows", deleted)
+            except Exception:
+                pass
+    asyncio.create_task(_cleanup_loop())
 
 async def startup():
     async with _get_startup_lock():
