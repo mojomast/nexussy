@@ -176,33 +176,23 @@ Inside the TUI:
 
 Ordinary chat-like text stays in local Ask mode unless an explicit action command is used.
 
-## Web Dashboard
+## Web UI
 
-The web dashboard is available after `./nexussy.sh start`:
+A built-in pipeline control surface is served at `http://localhost:7771/ui` when the
+core server is running. No build step required - plain HTML/CSS/JS, no npm, no CDN.
 
-```text
-http://127.0.0.1:7772
-```
+**Features:**
+- Session browser with status badges
+- New pipeline wizard (project name, description, optional model override)
+- Live 6-stage pipeline stepper with real-time SSE updates
+- Active workers table
+- Blocker management (view + resolve)
+- Interview question form rendered dynamically from SSE events
+- Pause / Resume / Cancel pipeline controls
+- API key support: run `localStorage.setItem('NEXUSSY_API_KEY', 'your-key')` in the
+  browser console to authenticate requests
 
-Core also serves a zero-build dashboard at:
-
-```text
-http://127.0.0.1:7771/ui
-```
-
-It provides browser-visible panels for:
-
-- Core health
-- Run streams and SSE errors
-- Stage state and transitions
-- Worker state
-- File locks and git events
-- Artifacts and DevPlan anchors
-- Config editing
-- Secret controls
-- Memory and graph routes
-
-The standalone web service proxies `/api/*` to core and does not implement pipeline business logic itself. The core `/ui` route is static HTML/JS/CSS for lightweight local control, including session polling, run status, SSE logs, and interview answer submission.
+**No external dependencies** - works offline, no CDN, no npm.
 
 ## Starting A Pipeline Run
 

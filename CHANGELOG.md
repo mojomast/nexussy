@@ -17,6 +17,7 @@
 
 ### Added
 
+- Web UI: Full pipeline control surface replacing the minimal stub (stage stepper, workers, blockers, interview form, controls)
 - `Dockerfile` for containerized deployment (enforces `--workers 1`)
 - `.github/workflows/ci.yml` — automated lint, test, and Docker build on push/PR
 - `Database.cleanup_expired()` method for rate limit housekeeping
