@@ -73,5 +73,25 @@ async def call_stdio(reader, writer, *, engine=None, db=None):
         close()
 
 
-register("nexussy_start_pipeline", "Start a nexussy pipeline run", {"type": "object"}, _start_pipeline)
+register(
+    "nexussy_start_pipeline",
+    "Start a nexussy pipeline run",
+    {
+        "type": "object",
+        "required": ["project_name", "description"],
+        "properties": {
+            "project_name": {"type": "string", "description": "Name of the project"},
+            "description": {"type": "string", "description": "What to build"},
+            "project_slug": {"type": "string"},
+            "auto_approve_interview": {"type": "boolean"},
+            "existing_repo_path": {"type": "string"},
+            "start_stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]},
+            "stop_after_stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]},
+            "resume_run_id": {"type": "string"},
+            "model_overrides": {"type": "object"},
+            "metadata": {"type": "object"},
+        },
+    },
+    _start_pipeline,
+)
 register("nexussy_get_status", "Get status for a nexussy pipeline run", {"type": "object", "required": ["run_id"]}, _get_status)

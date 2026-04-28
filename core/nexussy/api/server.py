@@ -43,6 +43,11 @@ def _get_startup_lock() -> asyncio.Lock:
 def cors_origins_for(cfg):
     origins = cfg.security.cors_origins if cfg is not None else ["*"]
     if "*" in origins and os.environ.get("NEXUSSY_ENV", os.environ.get("ENV", "")).lower() == "production":
+        if os.environ.get("NEXUSSY_ALLOW_WILDCARD_CORS") != "1":
+            raise RuntimeError(
+                "Wildcard CORS is not allowed in production. "
+                "Set NEXUSSY_CORS_ORIGINS or NEXUSSY_ALLOW_WILDCARD_CORS=1 to override."
+            )
         logging.getLogger(__name__).warning("wildcard CORS origin is enabled in production")
     return origins
 
