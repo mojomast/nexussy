@@ -166,11 +166,13 @@ security:
     - "https://your-dashboard.example"
 ```
 
-The default `cors_origins: ["*"]` preserves local compatibility. Do not use wildcard origins for internet-facing production deployments; core emits a warning when `NEXUSSY_ENV=production` or `ENV=production` is set with wildcard CORS.
+The default `cors_origins: ["*"]` preserves local compatibility. Do not use wildcard origins for internet-facing production deployments; core rejects wildcard CORS when `NEXUSSY_ENV=production` unless `NEXUSSY_ALLOW_WILDCARD_CORS=1` is set. Deployments may set `NEXUSSY_CORS_ORIGINS` in their environment and map it into config management before startup.
 
 `NEXUSSY_MOCK_PROVIDER=1` and request metadata such as `{"metadata":{"mock_provider":true}}` are for local development and smoke tests only. Never set mock provider mode in production because it bypasses real provider execution.
 
-Provider secrets are resolved in this order: OS keyring first, process/environment variables second, then the configured env file (`~/.nexussy/.env` by default). Guided setup stores keys in the OS keyring when available and falls back to the env file after a short keyring timeout; UIs and summaries report only configured/missing status and never render secret values.
+Production mode is enabled with `NEXUSSY_ENV=production`. In production this enables the CORS wildcard guard above.
+
+Provider secrets are resolved in this order: OS keyring first, process/environment variables second, then the configured env file (`~/.nexussy/.env` by default). Guided setup stores keys in the OS keyring when available and falls back to the env file after a short keyring timeout; when plaintext env-file fallback is used, core logs a warning naming the secret and target file path. UIs and summaries report only configured/missing status and never render secret values.
 
 ## Mock mode and production gates
 

@@ -76,6 +76,8 @@ Resolve paths through the path sanitizer, validate anchors before writes, create
 
 Develop-stage workers spawn and run in parallel, then merge serially to keep git conflict handling deterministic. Use `_run_single_worker` for custom worker spawn/RPC behavior and `_merge_single_worker` for custom merge/report behavior.
 
+Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loops. Manual interview waits time out according to `stages.interview.answer_timeout_s`; timeout cleanup clears paused state before the run is marked failed.
+
 # DO NOT
 
 - Do not make cross-boundary edits.

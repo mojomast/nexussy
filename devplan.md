@@ -28,6 +28,7 @@
 - Cycle 5 / Subagent D pass: ops tests now cover systemd-user unit creation/preservation, exact launcher status fields, `start-tui`, `update`, missing-Pi doctor remediation, and missing-provider wording; `bash -n`, dry-run, and ops tests pass. Full noninteractive install twice remains partial due package/service side effects; ShellCheck was closed by the later Cycle 6 external rerun.
 - Cycle 6 / Coordinator pass: after external tools were installed, provider credentials were checked without printing secret values, a harmless real LiteLLM/default-provider call passed, Pi CLI version/help and the core Pi subprocess adapter with installed `pi --rpc` passed under timeouts, ShellCheck 0.11.0 passed on root scripts after lint fixes, and no blocked-external rows remain. Full verification passed across core, TUI, web, shell syntax, installer dry-run, and ops tests.
 - Code review fix pass: DB reads now close connections on exceptions, provider calls avoid global env mutation, CORS is configurable, manual interview waits time out, worker RPC execution runs in parallel before serialized merges, Pi frames are bounded, git SHA scrubbing is narrowed, empty worker commits are safe, schema imports are explicit, MCP calls validate bodies, README/AGENTS document security and worker extension points, and core tests pass after each phase.
+- Sequential review-fix subagent pass added DB indexes/finally cleanup, paused-state cleanup, serialized server startup, engine logging/RPC depth guard, async git subprocess calls, provider plaintext warnings/env caching, atomic SSE sequencing, production CORS enforcement, full MCP start schema, shell hardening, and CHANGELOG documentation; each subagent commit passed `python3 -m pytest -x -q` under `core/`.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -44,6 +45,7 @@
 - [✅] H5: Cycle 5 / Subagent D: R-064/R-089 upgraded to tested; R-010 remains tested with stronger launcher evidence; R-051/R-063/R-069 narrowed to live Pi/full-install residuals before Cycle 6 closed separate live Pi/ShellCheck evidence.
 - [✅] H6: Cycle 6 / Coordinator: live provider/Pi/shellcheck checks passed after external tool installation; R-073/R-074/R-079/R-081 upgraded to tested, with R-080 still partial for a full production provider plus live Pi develop run.
 - [✅] I1: Code review findings fixed across core reliability, security, async compatibility, worker orchestration, API validation, and docs; `python3 -m pytest -q core/tests` passed after each phase.
+- [✅] I2: Sequential subagent review-fix commits completed for DB, engine, server, gitops, providers, SSE, CORS/MCP, shell scripts, and docs; core tests passed after every commit.
 <!-- NEXT_TASK_GROUP_END -->
 
 ## Definitions Of Done
