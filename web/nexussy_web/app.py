@@ -105,6 +105,16 @@ async def dashboard(_: Request) -> HTMLResponse:
     return HTMLResponse(template.read_text(encoding="utf-8"))
 
 
+async def static_asset(request: Request) -> Response:
+    """Serve the zero-build dashboard assets packaged with the web app."""
+    filename = request.path_params["filename"]
+    allowed = {"app.js": "application/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
+    if filename not in allowed:
+        return _json_error(404, "not_found", "Static asset not found")
+    asset = resources.files("nexussy_web").joinpath("static", filename)
+    return Response(asset.read_bytes(), media_type=allowed[filename])
+
+
 async def proxy_api(request: Request) -> Response:
     """Proxy every non-SSE `/api/*` request to core unchanged."""
     path = request.path_params["path"]
@@ -193,6 +203,7 @@ async def proxy_sse(request: Request) -> Response:
 
 routes = [
     Route("/", dashboard, methods=["GET"]),
+    Route("/{filename:str}", static_asset, methods=["GET"]),
     Route("/api/pipeline/runs/{run_id:str}/stream", proxy_sse, methods=["GET"]),
     Route("/api/swarm/workers/{worker_id:str}/stream", proxy_sse, methods=["GET"]),
     Route("/api/{path:path}", proxy_api, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),

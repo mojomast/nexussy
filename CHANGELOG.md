@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Wired pipeline and worker inject/stop controls, worker stream run-id resolution, session status transitions, existing repository import, and per-run token usage aggregation.
+- Added bundled `nexussy-pi` Pi-compatible worker shim, real Pi CLI `--rpc-mode` settings, and local Pi JSON-RPC smoke coverage.
+- Expanded MCP with interview, inject, worker spawn/assign/list, session, artifact, pause, resume, and cancel tools.
+- Added core `/ui` static dashboard route and refreshed the standalone web dashboard with session polling, status, SSE logs, and interview answer submission.
 - Restricted `PUT /config` to safe mutable keys and rejected auth, database, home, project, and non-whitelisted config changes.
 - Normalized orchestrator file paths before role allowlist checks and tightened phase path matching.
 - Stopped keyring-backed secret writes from copying secret values into `os.environ`.

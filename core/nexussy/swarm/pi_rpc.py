@@ -17,6 +17,7 @@ class PiFrame:
 @dataclass
 class PiRPCProcess:
     process: asyncio.subprocess.Process
+    worker_id: str | None = None
     frames: deque[PiFrame] = field(default_factory=lambda: deque(maxlen=MAX_FRAMES))
     _tasks: list[asyncio.Task] = field(default_factory=list)
     cancelled: bool = False
@@ -31,6 +32,13 @@ class PiRPCProcess:
         self.process.stdin.write((json.dumps(msg)+"\n").encode())
         await self.process.stdin.drain()
         return rid
+
+    async def inject(self, message: str) -> None:
+        if self.process.stdin is None:
+            raise RuntimeError("PiRPCProcess stdin is not available")
+        msg = {"jsonrpc":"2.0","method":"agent.inject","params":{"message":message}}
+        self.process.stdin.write((json.dumps(msg)+"\n").encode())
+        await self.process.stdin.drain()
 
     async def wait_response(self, request_id: str, timeout_s: float = 900) -> dict:
         loop = asyncio.get_running_loop(); deadline = loop.time() + timeout_s
@@ -84,18 +92,33 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     env = os.environ.copy() | {"NEXUSSY_RUN_ID":run_id,"NEXUSSY_WORKER_ID":worker_id,"NEXUSSY_WORKER_ROLE":role,"NEXUSSY_PROJECT_ROOT":project_root,"NEXUSSY_WORKTREE":worktree,"NEXUSSY_CORE_BASE_URL":core_base_url}
     command = config.pi.command
     args = list(config.pi.args)
-    if command == "pi" and os.environ.get("NEXUSSY_DISABLE_BUNDLED_PI") != "1":
-        command = sys.executable
-        args = ["-m", "nexussy.swarm.local_pi_worker"]
-        package_root = str(pathlib.Path(__file__).resolve().parents[2])
-        env["PYTHONPATH"] = package_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    default_model = getattr(config.providers, "default_model", None) or getattr(config.stages.develop, "model", "openai/gpt-5.5-fast")
+    env.setdefault("PI_DEFAULT_MODEL", default_model)
+    if command == "pi":
+        _write_pi_settings(pathlib.Path(worktree), default_model)
+        args = ["--rpc-mode"]
+    elif command in {"nexussy-pi", "local-pi-worker"}:
+        env.setdefault("PI_DEFAULT_MODEL", default_model)
     try:
         proc = await asyncio.create_subprocess_exec(command, *args, cwd=worktree, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
     except FileNotFoundError as e:
-        raise RuntimeError(f"missing Pi CLI: {config.pi.command}") from e
-    rpc = PiRPCProcess(proc)
+        if command in {"pi", "nexussy-pi", "local-pi-worker"} and os.environ.get("NEXUSSY_DISABLE_BUNDLED_PI") != "1":
+            command = sys.executable
+            args = ["-m", "nexussy.swarm.local_pi_worker"]
+            package_root = str(pathlib.Path(__file__).resolve().parents[2])
+            env["PYTHONPATH"] = package_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            proc = await asyncio.create_subprocess_exec(command, *args, cwd=worktree, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        else:
+            raise RuntimeError(f"missing Pi CLI: {config.pi.command}") from e
+    rpc = PiRPCProcess(proc, worker_id=worker_id)
     rpc._tasks = [asyncio.create_task(_drain(rpc, proc.stdout, "stdout", worker_id, config.pi.max_stdout_line_bytes)), asyncio.create_task(_drain(rpc, proc.stderr, "stderr", worker_id, config.pi.max_stdout_line_bytes))]
     return rpc
+
+def _write_pi_settings(worktree: pathlib.Path, default_model: str) -> None:
+    settings = worktree / ".pi" / "agent" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    provider, model_id = default_model.split("/", 1) if "/" in default_model else ("openai", default_model)
+    settings.write_text(json.dumps({"defaultProvider": provider, "defaultModel": model_id, "defaultModelFull": default_model}, indent=2) + "\n")
 
 async def _drain(rpc: PiRPCProcess, stream, kind: str, worker_id: str, max_bytes: int):
     if stream is None: return

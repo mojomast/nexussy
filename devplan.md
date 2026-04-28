@@ -35,6 +35,9 @@
 - Medium severity core review fixes complete: keyring writes no longer leak secrets into `os.environ`, SQLite schema version tracking records current migrations, MCP exposes pause/resume/cancel/artifact/session tools with JSON-RPC error codes, and Pi RPC runtime behavior has regression coverage. Checks passed: `python3 -m pytest -q core/tests` (74 passed).
 - Low severity core review fixes complete: checkpoint hashes now reflect provided artifact/question content, config reuses the shared env-file reader, and secret scrubbing preserves non-secret git/hash fields while continuing to redact API keys, `sk-` tokens, and PEM blocks. Checks passed: `python3 -m pytest -q core/tests` (75 passed).
 - Full H/M/L code review mission complete: H1-H3, M1-M4, and L1-L3 are fixed with AGENTS/CHANGELOG/status updates. Final verification passed with `python3 -m pytest tests/ -v` under `core/`; the requested `python -m pytest tests/ -v` command could not run because `python` is unavailable in this environment.
+- Subagent C zero-build dashboard refresh complete: web now serves separate vanilla `index.html`, `app.js`, and `style.css` assets with no CDN/build step; sessions and pipeline status poll through `/api/*`, run SSE connects via `/api/pipeline/runs/{run_id}/stream`, pause interview answers POST to `/api/pipeline/{session_id}/interview/answer`, and web tests pass.
+- Bundled Pi worker/RPC pass complete: core now ships `nexussy-pi`, local JSON-RPC stdio worker tools, real `pi --rpc-mode` settings handoff, and Pi worker regression tests. Checks passed: `python3 -m pytest -q core/tests` (78 passed).
+- Stub wiring integration complete: core worker inject/stop/stream, pipeline inject, existing repo import, session lifecycle transitions, token usage aggregation, MCP expansion, bundled/real Pi worker paths, core `/ui`, and web dashboard assets are wired. Checks passed: `python3 -m pytest tests/ -v --tb=short` from `core/` (78 passed), `python3 -m pytest -q web/tests` (47 passed), `bash ops_tests.sh`, `cd tui && bun test`, and `cd tui && bun run typecheck`; `python` and `ruff` are unavailable in this environment.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -58,6 +61,9 @@
 - [✅] K1: Medium severity core review fixes M1-M4 completed for providers, DB migrations, MCP tools/stdio errors, and Pi RPC regression coverage.
 - [✅] K2: Low severity core review fixes L1-L3 completed for content-aware checkpoints, shared env-file parsing, and narrowed secret scrubbing.
 - [✅] K3: High/medium/low code review mission H1-H3, M1-M4, L1-L3 completed with docs/status updates and final core verification.
+- [✅] A: bundled Pi worker/RPC implementation completed for local JSON-RPC stdio worker, shim entrypoint, Pi command settings, default command, and core tests.
+- [✅] C: zero-build vanilla web dashboard refresh with session polling, pipeline status polling, SSE live log, and paused interview answer form.
+- [✅] L1: Stub/gap wiring pass completed for bundled Pi, MCP tools, worker controls, pipeline inject, existing repo import, session lifecycle, cost tracking, core `/ui`, and docs/coverage.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

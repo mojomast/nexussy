@@ -208,7 +208,7 @@ class DevelopStageConfig(StrictModel): model:str="openai/gpt-5.5-fast"; orchestr
 class StagesConfig(StrictModel):
     interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:StageModelConfig=Field(default_factory=StageModelConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); plan:StageModelConfig=Field(default_factory=StageModelConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
 class SwarmConfig(StrictModel): max_workers:int=8; default_worker_count:int=2; worker_task_timeout_s:int=900; worker_start_timeout_s:int=30; file_lock_timeout_s:int=120; file_lock_retry_ms:int=250; merge_strategy:Literal["no_ff","squash"]="no_ff"
-class PiConfig(StrictModel): command:str="pi"; args:list[str]=Field(default_factory=lambda:["--rpc"]); startup_timeout_s:int=30; shutdown_timeout_s:int=10; max_stdout_line_bytes:int=1048576
+class PiConfig(StrictModel): command:str="nexussy-pi"; args:list[str]=Field(default_factory=list); startup_timeout_s:int=30; shutdown_timeout_s:int=10; max_stdout_line_bytes:int=1048576
 class SSEConfig(StrictModel): heartbeat_interval_s:int=15; client_queue_max_events:int=1000; replay_max_events:int=10000; retry_ms:int=3000
 class SecurityConfig(StrictModel): scrub_logs:bool=True; reject_symlink_escape:bool=True; keyring_service:str="nexussy"; cors_origins:list[str]=Field(default_factory=lambda:["*"])
 class LoggingConfig(StrictModel): level:Literal["DEBUG","INFO","WARNING","ERROR"]="INFO"; core_log_file:str="/tmp/nexussy-core.log"; web_log_file:str="/tmp/nexussy-web.log"; tui_log_file:str="/tmp/nexussy-tui.log"

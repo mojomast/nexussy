@@ -183,11 +183,17 @@ def test_mcp_tools_and_start_pipeline(monkeypatch, tmp_path):
         tools = c.get("/mcp/tools")
         assert tools.status_code == 200, tools.text
         names = {tool["name"] for tool in tools.json()["tools"]}
-        assert {"nexussy_start_pipeline", "nexussy_get_status", "nexussy_pause", "nexussy_resume", "nexussy_cancel", "nexussy_get_artifacts", "nexussy_list_sessions"} <= names
+        assert {"nexussy_start_pipeline", "nexussy_get_status", "nexussy_list_sessions", "nexussy_get_artifacts", "nexussy_interview_answer", "nexussy_pause", "nexussy_resume", "nexussy_cancel", "nexussy_inject", "nexussy_worker_spawn", "nexussy_worker_assign", "nexussy_list_workers"} <= names
         assert all("inputSchema" in tool for tool in tools.json()["tools"])
         started = c.post("/mcp/call", json={"name":"nexussy_start_pipeline","arguments":{"project_name":"MCP Demo","description":"small api","auto_approve_interview":True,"metadata":{"mock_provider":True}}})
         assert started.status_code == 200, started.text
         assert started.json()["run_id"]
+        spawned = c.post("/mcp/call", json={"name":"nexussy_worker_spawn","arguments":{"run_id":started.json()["run_id"],"role":"backend","task":"implement api"}})
+        assert spawned.status_code == 200, spawned.text
+        assert spawned.json()["status"] == "idle"
+        listed = c.post("/mcp/call", json={"name":"nexussy_list_workers","arguments":{"run_id":started.json()["run_id"]}})
+        assert listed.status_code == 200, listed.text
+        assert spawned.json()["worker_id"] in {worker["worker_id"] for worker in listed.json()}
 
 
 def test_route_validation_error_is_normalized(monkeypatch, tmp_path):
@@ -827,9 +833,9 @@ async def test_pi_missing_command_precise_error(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_bundled_pi_fallback_when_external_pi_missing(tmp_path, monkeypatch):
+async def test_bundled_pi_fallback_when_local_worker_command_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("NEXUSSY_DISABLE_BUNDLED_PI", raising=False)
-    cfg = load_config({"pi":{"command":"pi","args":[],"shutdown_timeout_s":0}})
+    cfg = load_config({"pi":{"command":"local-pi-worker","args":[],"shutdown_timeout_s":0}})
     rpc = await spawn_pi_worker(cfg, "run", "backend-abcdef", "backend", str(tmp_path), str(tmp_path))
     req_id = await rpc.request("Build API", "ctx")
     response = await rpc.wait_response(req_id, 5)

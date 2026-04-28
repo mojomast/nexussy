@@ -142,55 +142,65 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     html = response.text
-    for tab in ["chat", "pipeline", "swarm", "sessions", "devplan", "graph", "config", "secrets"]:
+    for section in ["session-list", "stages", "stream-log", "interview-form", "artifact-viewer"]:
+        assert f'id="{section}"' in html
+    for tab in ["artifacts", "swarm", "devplan", "config", "secrets"]:
         assert f'id="{tab}"' in html
         assert f'href="#{tab}"' in html
-    assert "cdn.jsdelivr.net/npm/d3@7" in html
-    assert "Last-Event-ID" in html
+    assert '<link rel="stylesheet" href="/style.css">' in html
+    assert '<script src="/app.js" defer></script>' in html
     assert "/api/config" in html
     assert "/api/secrets" in html
     assert 'id="error-banner"' in html
-    assert "core unavailable" in html
-    assert "auth/malformed SSE" in html
-    chat_start = html.index('id="chat"')
-    pipeline_start = html.index('id="pipeline"')
-    assert 'id="cost"' in html[chat_start:pipeline_start]
+    assert "EventSource /api/pipeline/runs/{run_id}/stream" in html
+    assert 'id="cost"' in html
 
 
 def test_all_required_tabs_include_static_render_targets_and_api_routes(client: TestClient) -> None:
     html = client.get("/").text
     expected = {
-        "chat": ["stream-log", "tool-rows", "cost"],
-        "pipeline": ["stages", "artifact-viewer", "transitions", "review-report"],
-        "swarm": ["worker-grid", "file-lock-feed", "worktree-status"],
-        "sessions": ["session-list", "prev-sessions", "next-sessions"],
-        "devplan": ["devplan-content", "anchor"],
-        "graph": ["load-graph", "/api/graph", "forceSimulation"],
+        "artifacts": ["artifact-viewer", "review-report"],
+        "swarm": ["worker-grid", "file-lock-feed", "worktree-status", "tool-rows"],
+        "devplan": ["devplan-content"],
         "config": ["config-editor", "/api/config"],
         "secrets": ["secret-list", "/api/secrets"],
     }
+    for global_target in ["session-list", "prev-sessions", "next-sessions", "stages", "transitions", "stream-log"]:
+        assert global_target in html
     for tab, needles in expected.items():
         section_start = html.index(f'<section id="{tab}"')
         section_end = html.find('<section id="', section_start + 1)
         section = html[section_start : section_end if section_end != -1 else len(html)]
         for needle in needles:
-            assert needle in html if needle.startswith("/api/") or needle in {"forceSimulation", "anchor"} else needle in section
+            assert needle in html if needle.startswith("/api/") else needle in section
 
 
 def test_fixture_events_have_render_handlers_for_live_dashboard(client: TestClient) -> None:
-    html = client.get("/").text
+    script = client.get("/app.js").text
     fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "contract-events.json"
     event_types = {event["type"] for event in json.loads(fixture_path.read_text())}
     for event_type in event_types:
-        assert event_type in html
+        assert event_type in script
     for rendered_target in ["stage(", "transition(", "worker(", "lock(", "toolRow(", "#cost", "#worktree-status"]:
-        assert rendered_target in html
+        assert rendered_target in script
 
 
 def test_health_proxies_to_core(client: TestClient) -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["contract_version"] == "1.0"
+
+
+def test_zero_build_static_assets_are_served(client: TestClient) -> None:
+    script = client.get("/app.js")
+    style = client.get("/style.css")
+    assert script.status_code == 200
+    assert script.headers["content-type"].startswith("application/javascript")
+    assert "EventSource('/api/pipeline/runs/'" in script.text
+    assert "/pipeline/' + encodeURIComponent(sid) + '/interview/answer" in script.text
+    assert style.status_code == 200
+    assert style.headers["content-type"].startswith("text/css")
+    assert "color-scheme:dark" in style.text
 
 
 def test_api_proxy_preserves_method_body_query_auth_status_and_content_type(client: TestClient) -> None:
@@ -222,6 +232,7 @@ def test_api_proxy_preserves_method_body_query_auth_status_and_content_type(clie
         ("GET", "/api/sessions/018f0000-0000-4000-8000-000000000001", ""),
         ("DELETE", "/api/sessions/018f0000-0000-4000-8000-000000000001?delete_files=true", ""),
         ("POST", "/api/pipeline/start", '{"session_id":"s"}'),
+        ("POST", "/api/pipeline/018f0000-0000-4000-8000-000000000001/interview/answer", '{"answer":"yes"}'),
         ("GET", "/api/pipeline/status?run_id=run-1", ""),
         ("POST", "/api/pipeline/inject", '{"run_id":"run-1","message":"hi"}'),
         ("POST", "/api/pipeline/pause", '{"run_id":"run-1","reason":"user"}'),
@@ -416,12 +427,13 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
         pytest.skip("node is unavailable for DOM execution smoke")
 
     html = client.get("/").text
+    app_js = client.get("/app.js").text
     script = textwrap.dedent(
         r'''
         const fs = require('fs');
         const vm = require('vm');
         const html = fs.readFileSync(process.argv[2], 'utf8');
-        const appScript = html.match(/<script>([\s\S]*)<\/script>/)[1];
+        const appScript = fs.readFileSync(process.argv[3], 'utf8');
         const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
 
         class Element {
@@ -433,13 +445,14 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
             this.value = '';
             this.hash = '';
             this.className = '';
-            this.classList = { toggle: () => {} };
+            this.classList = { toggle: () => {}, add: () => {}, remove: () => {} };
+            this.style = {};
           }
           append(child) { this.children.push(child); }
           prepend(child) { this.children.unshift(child); this.innerHTML = child.innerHTML + this.innerHTML; }
         }
 
-        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','load-graph'];
+        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-question','interview-answer'];
         const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
         elements['artifact-kind'].value = 'devplan';
         const document = {
@@ -467,6 +480,8 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           if (url.startsWith('/api/sessions')) return jsonResponse([]);
           if (url === '/api/secrets') return jsonResponse([{ name: 'OPENAI_API_KEY', configured: false, source: 'env' }]);
           if (url.startsWith('/api/secrets/')) return jsonResponse({ ok: true });
+          if (url.startsWith('/api/pipeline/status')) return jsonResponse({ status: 'running', current_stage: 'interview', run_id: 'run-1', session_id: 'session-1', stages: [{ stage: 'interview', status: 'running' }] });
+          if (url.startsWith('/api/pipeline/session-1/interview/answer')) return jsonResponse({ ok: true });
           if (url === '/api/config' && options.method === 'PUT') return jsonResponse(JSON.parse(options.body));
           if (url === '/api/config') return jsonResponse({ version: '1.0', web: { port: 7772 } });
           if (url.startsWith('/api/pipeline/artifacts/devplan')) return jsonResponse({ content_text: '<!-- PROGRESS_LOG_START -->\nbody\n<!-- PROGRESS_LOG_END -->' });
@@ -479,6 +494,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           emit(type, data, id = 'evt-1') { this.listeners[type]({ type, data: JSON.stringify(data), lastEventId: id }); }
         }
 
+        const event = { preventDefault() {} };
         const context = { document, localStorage, location, addEventListener, setInterval, alert, prompt, fetch, EventSource, d3, console, Number, JSON, encodeURIComponent, String };
         vm.createContext(context);
         vm.runInContext(appScript, context);
@@ -499,6 +515,12 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           EventSource.last.emit('worker_status', { type: 'worker_status', payload: { worker_id: 'worker-1', role: 'developer', status: 'running', task_title: 'Build UI', worktree_path: 'wt' } });
           assert(elements['worker-grid'].children.length === 1, 'worker update did not render');
           assert(elements['worker-grid'].children[0].innerHTML.includes('worker-1'), 'worker id missing');
+
+          EventSource.last.emit('pause_state_changed', { type: 'pause_state_changed', payload: { paused: true, session_id: 'session-1', run_id: 'run-1', question: 'What should we build?' } });
+          assert(elements['interview-question'].textContent.includes('What should we build?'), 'interview question not shown');
+          elements['interview-answer'].value = 'A dashboard';
+          await elements['interview-form'].onsubmit(event);
+          assert(fetchCalls.some(c => c.url === '/api/pipeline/session-1/interview/answer' && c.options.method === 'POST'), 'interview answer POST not called');
 
           await elements['load-devplan'].onclick();
           assert(elements['devplan-content'].innerHTML.includes('class="anchor"'), 'DevPlan anchors not highlighted');
@@ -524,14 +546,16 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
     )
     tmp_html = Path("/tmp/nexussy-dashboard-dom.html")
     tmp_js = Path("/tmp/nexussy-dashboard-dom.js")
+    tmp_app = Path("/tmp/nexussy-dashboard-app.js")
     tmp_html.write_text(html, encoding="utf-8")
+    tmp_app.write_text(app_js, encoding="utf-8")
     tmp_js.write_text(script, encoding="utf-8")
-    result = subprocess.run(["node", str(tmp_js), str(tmp_html)], text=True, capture_output=True, check=False)
+    result = subprocess.run(["node", str(tmp_js), str(tmp_html), str(tmp_app)], text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
 
 
 def test_devplan_anchor_highlighting_script_includes_all_anchor_names(client: TestClient) -> None:
-    html = client.get("/").text
+    html = client.get("/app.js").text
     for anchor in [
         "PROGRESS_LOG_START",
         "PROGRESS_LOG_END",

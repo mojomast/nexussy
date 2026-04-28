@@ -175,6 +175,12 @@ The web dashboard is available after `./nexussy.sh start`:
 http://127.0.0.1:7772
 ```
 
+Core also serves a zero-build dashboard at:
+
+```text
+http://127.0.0.1:7771/ui
+```
+
 It provides browser-visible panels for:
 
 - Core health
@@ -187,7 +193,7 @@ It provides browser-visible panels for:
 - Secret controls
 - Memory and graph routes
 
-The dashboard proxies `/api/*` to core and does not implement pipeline business logic itself.
+The standalone web service proxies `/api/*` to core and does not implement pipeline business logic itself. The core `/ui` route is static HTML/JS/CSS for lightweight local control, including session polling, run status, SSE logs, and interview answer submission.
 
 ## Starting A Pipeline Run
 
@@ -244,7 +250,7 @@ Local development modes:
 
 ## Pi Worker Execution
 
-The develop stage uses the Pi RPC subprocess adapter for live workers. If an external `pi` command is unavailable, deterministic local runs can use nexussy's bundled Pi-compatible fallback.
+The develop stage uses the Pi JSON-RPC subprocess adapter for workers. The default command is `nexussy-pi`, a bundled Pi-compatible worker shim installed with `nexussy-core`; no separate npm install is required for local operation.
 
 Worker behavior:
 
@@ -254,7 +260,15 @@ Worker behavior:
 - Worker output is streamed into SSE events.
 - Changed files are extracted into artifacts after merge.
 
-Live Pi execution requires the `pi` command or `NEXUSSY_PI_COMMAND` to point at a compatible executable.
+Using the real Pi CLI:
+
+| Step | Command |
+|---|---|
+| Install Pi | `npm install -g @mariozechner/pi-coding-agent` |
+| Select Pi CLI | Add `NEXUSSY_PI_COMMAND=pi` to `~/.nexussy/.env` |
+| Runtime mode | Core launches `pi --rpc-mode` and writes `.pi/agent/settings.json` in the worker worktree |
+
+Set provider keys through `/secrets`, the TUI setup flow, or environment variables. Core passes configured provider environment into the worker subprocess without hardcoding keys.
 
 ## Artifacts
 
@@ -283,14 +297,24 @@ Anchored `devplan.md`, `phaseNNN.md`, and `handoff.md` files are designed for sa
 
 ## MCP Tools
 
-Core exposes a small MCP-compatible tool surface:
+Core exposes an MCP-compatible tool surface over HTTP and stdio JSON-RPC:
 
 - `GET /mcp/tools` lists registered tools and their `inputSchema` values.
 - `POST /mcp/call` invokes a tool by name with `arguments`.
 - `nexussy_start_pipeline` starts a pipeline run.
 - `nexussy_get_status` returns pipeline status.
+- `nexussy_list_sessions` lists recent sessions.
+- `nexussy_get_artifacts` returns an artifact manifest for a run.
+- `nexussy_interview_answer` submits interview answers for a session.
+- `nexussy_pause` pauses a run.
+- `nexussy_resume` resumes a run.
+- `nexussy_cancel` cancels a run.
+- `nexussy_inject` injects guidance into a run.
+- `nexussy_worker_spawn` creates a worker record.
+- `nexussy_worker_assign` assigns a task to a worker.
+- `nexussy_list_workers` lists workers for a run.
 
-The stdio JSON-RPC MCP path supports initialization, tool listing, and tool calls.
+The stdio JSON-RPC MCP path supports initialization, `notifications/initialized`, tool listing, tool calls, and JSON-RPC parse/invalid/unknown/internal error codes.
 
 ## Security
 

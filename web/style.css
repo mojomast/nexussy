@@ -1,0 +1,14 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0b1020; color: #e5ecff; }
+body { margin: 0; }
+.shell { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; padding: 18px; }
+.panel { background: linear-gradient(145deg, #111936, #0f172f); border: 1px solid #26355f; border-radius: 18px; padding: 18px; box-shadow: 0 20px 60px #0006; }
+.wide { grid-column: 1 / -1; }
+.muted { color: #9aabd8; }
+button, input, textarea { border: 1px solid #334678; border-radius: 10px; background: #111b38; color: #e5ecff; padding: 10px 12px; }
+button { cursor: pointer; margin: 4px 0; }
+button:hover { background: #182653; }
+label { display: grid; gap: 8px; }
+.list { display: grid; gap: 8px; }
+.list button { display: flex; justify-content: space-between; width: 100%; }
+pre, textarea { width: 100%; box-sizing: border-box; min-height: 180px; overflow: auto; white-space: pre-wrap; }
+.hidden { display: none; }
