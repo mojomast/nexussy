@@ -32,7 +32,9 @@ def slugify(name: str) -> str:
 
 def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
     d=desc.lower(); signals={}; score=0
-    checks=[("multiple_languages",10, any(w in d for w in ["frontend and backend","typescript","python","java","go "])),("persistence",10, any(w in d for w in ["database","sqlite","postgres","persist"])),("auth",15, any(w in d for w in ["auth","security","password"])),("external_api",10,"api" in d),("ui_backend",15, any(w in d for w in ["ui","dashboard","web","tui"])),("deployment",10, any(w in d for w in ["deploy","docker","infra"])),("existing_repo",10, existing),("qa",10, any(w in d for w in ["test","qa"])),("ambiguous",15, len(desc.split())<8)]
+    def has(pattern: str) -> bool:
+        return re.search(pattern, d) is not None
+    checks=[("multiple_languages",10, has(r"\bfrontend\b\s+and\s+\bbackend\b|\btypescript\b|\bpython\b|\bjava\b|\bgo\b|\bgolang\b")),("persistence",10, has(r"\bdatabase\b|\bsqlite\b|\bpostgres\b|\bpersist\b")),("auth",15, has(r"\bauth(entication|orization)?\b|\bsecurity\b|\bpassword\b")),("external_api",10,has(r"\bapi\b")),("ui_backend",15, has(r"\bui\b|\bdashboard\b|\bweb\b|\btui\b")),("deployment",10, has(r"\bdeploy\b|\bdocker\b|\binfra\b")),("existing_repo",10, existing),("qa",10, has(r"\btest\b|\bqa\b")),("ambiguous",15, len(desc.split())<8)]
     if not any(c[2] for c in checks): signals["simple"]=5; score+=5
     for k,pts,on in checks:
         if on: signals[k]=pts; score+=pts

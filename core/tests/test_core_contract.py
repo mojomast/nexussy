@@ -21,7 +21,7 @@ from nexussy.providers import ProviderResult
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
-from nexussy.pipeline.engine import Engine
+from nexussy.pipeline.engine import Engine, complexity
 
 
 def test_schema_forbids_extra():
@@ -69,6 +69,14 @@ def test_provider_model_precedence_and_worker_override(monkeypatch):
     cfg = load_config({"providers":{"default_model":"openai/default"}})
     assert select_stage_model(cfg, "design") == "anthropic/claude-test"
     assert select_stage_model(cfg, "design", {"design":"openrouter/request"}) == "openrouter/request"
+
+
+def test_complexity_uses_word_boundary_signals():
+    assert "multiple_languages" in complexity("deploy a go backend").signals
+    assert "deployment" in complexity("deploy a go backend").signals
+    assert "auth" in complexity("add authentication").signals
+    assert "persistence" in complexity("postgres db").signals
+    assert "auth" not in complexity("cargo package manager").signals
 
 
 def test_safe_write_anchor_validation(tmp_path):
