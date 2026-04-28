@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nexussy.security import sanitize_relative_path
 from nexussy.session import now_utc
 
 
@@ -71,6 +72,10 @@ class TokenUsage(StrictModel):
     def total(self): self.total_tokens=self.input_tokens+self.output_tokens+self.cache_read_tokens+self.cache_write_tokens; return self
 class ArtifactRef(StrictModel):
     kind:ArtifactKind; path:str; sha256:str; bytes:int=0; updated_at:datetime=Field(default_factory=now_utc); phase_number:int|None=None
+    @field_validator("path")
+    @classmethod
+    def artifact_path_valid(cls, v):
+        return sanitize_relative_path(v)
 class ToolDisplay(StrictModel):
     kind:Literal["text","json","diff","table","tree","markdown"]="text"; title:str|None=None; text:str|None=None; language:str|None=None; json:JsonValue|None=None; truncated:bool=False
 
@@ -114,10 +119,15 @@ class PipelineStatusResponse(StrictModel):
     ok:bool=True; run:RunSummary; stages:list[StageStatusSchema]; workers:list['Worker']=Field(default_factory=list); paused:bool=False; blockers:list['Blocker']=Field(default_factory=list)
 class PipelineInjectRequest(StrictModel):
     run_id:str; message:str; worker_id:str|None=None; stage:StageName|None=None
+    @field_validator("run_id", "message", "worker_id")
+    @classmethod
+    def non_empty_public_strings(cls, v):
+        if v is not None and not str(v).strip(): raise ValueError("blank strings are not allowed")
+        return v
 class ControlResponse(StrictModel):
     ok:bool=True; run_id:str; status:RunStatus; message:str
 class StageSkipRequest(StrictModel):
-    run_id:str; stage:StageName; reason:str
+    run_id:str; stage:StageName; reason:str; task_id:str|None=None
 class InterviewAnswerRequest(StrictModel):
     answers:dict[str,str]
     @field_validator("answers")
@@ -168,10 +178,18 @@ class BlockerResolveRequest(StrictModel):
     run_id:str; blocker_id:str; reason:str="resolved"
 class FileLock(StrictModel):
     path:str; worker_id:str; run_id:str; status:LockStatus=LockStatus.claimed; claimed_at:datetime=Field(default_factory=now_utc); expires_at:datetime=Field(default_factory=lambda: now_utc()+timedelta(seconds=120))
+    @field_validator("path")
+    @classmethod
+    def lock_path_valid(cls, v):
+        return sanitize_relative_path(v)
 class Blocker(StrictModel):
     blocker_id:str=Field(default_factory=new_id); run_id:str; worker_id:str|None=None; stage:StageName; severity:Literal["warning","blocker"]="blocker"; message:str; resolved:bool=False; created_at:datetime=Field(default_factory=now_utc); resolved_at:datetime|None=None
 class ChangedFile(StrictModel):
     path:str; status:Literal["added","modified","deleted","renamed"]; sha256:str|None=None; bytes:int|None=None
+    @field_validator("path")
+    @classmethod
+    def changed_path_valid(cls, v):
+        return sanitize_relative_path(v)
 class ChangedFilesManifest(StrictModel):
     run_id:str; base_commit:str; merge_commit:str|None=None; files:list[ChangedFile]=Field(default_factory=list); created_at:datetime=Field(default_factory=now_utc)
 class MergeReport(StrictModel):

@@ -1,5 +1,5 @@
 import type { TuiState } from "../state";
-import type { ArtifactRef, EventEnvelope, StageName, Worker } from "../types";
+import type { ArtifactRef, EventEnvelope, StageName, Worker, WorkerRole } from "../types";
 
 export type UiMode = "chat" | "dashboard";
 export type OverlayMode = "none" | "help" | "onboarding" | "status" | "stages" | "plan" | "artifacts" | "workers" | "worker" | "doctor" | "secrets" | "handoff";
@@ -33,7 +33,7 @@ export interface ChatUiState {
   statusMessage?: string;
 }
 
-export interface CommandOutcome { message:string; stream?:boolean; exit?:boolean; }
+export interface CommandOutcome { message:string; stream?:boolean; exit?:boolean; html?:string; }
 
 export type ClientLike = {
   startPipeline(body:unknown): Promise<{run_id:string; session_id:string}>|{run_id:string; session_id:string};
@@ -43,6 +43,7 @@ export type ClientLike = {
   pause(run_id:string, reason?:string): Promise<unknown>|unknown;
   resume(run_id:string): Promise<unknown>|unknown;
   skip(run_id:string, stage:StageName, reason:string): Promise<unknown>|unknown;
+  spawn(body:{run_id:string; role:WorkerRole; task:string; phase_number?:number|null; model?:string}): Promise<unknown>|unknown;
   secrets(): Promise<unknown>|unknown;
   status(run_id:string): Promise<unknown>|unknown;
   workers(run_id:string): Promise<unknown>|unknown;

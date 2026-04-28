@@ -15,6 +15,15 @@ test("live-core mode preserves auth headers across HTTP routes used by UI", asyn
   expect(seen.every(s => (s.init.headers as Record<string,string>)["X-API-Key"] === "secret")).toBe(true);
 });
 
+test("artifact PATCH sends session artifact content payload", async () => {
+  const seen: Array<{url:string; init:RequestInit}> = [];
+  const client = new CoreClient({ fetchImpl: (async (url, init) => { seen.push({ url:String(url), init:init ?? {} }); return response({ ok:true }); }) as typeof fetch });
+  await client.patchSessionArtifact("sess 1", "handoff", "updated handoff");
+  expect(new URL(seen[0].url).pathname).toBe("/pipeline/sessions/sess%201/artifacts/handoff");
+  expect(seen[0].init.method).toBe("PATCH");
+  expect(JSON.parse(String(seen[0].init.body))).toEqual({ content:"updated handoff" });
+});
+
 test("HTTP auth and connection errors are surfaced with core error body", async () => {
   const client = new CoreClient({ fetchImpl: (async () => response({ok:false,error_code:"unauthorized",message:"bad key",request_id:"req",retryable:false}, 401)) as unknown as typeof fetch });
   await expect(client.status("r")).rejects.toBeInstanceOf(CoreHttpError);

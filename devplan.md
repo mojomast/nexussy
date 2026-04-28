@@ -21,6 +21,12 @@
 - Core interview pass: interview now uses LLM-generated question JSON, auto-synthesizes answers from project descriptions when requested, pauses manual runs for `/pipeline/{session_id}/interview/answer`, persists real multi-question artifacts, and injects interview summaries into design/devplan prompts; core tests pass.
 - TUI handoff/anchor pass: added shared anchor utilities, context-window budget tracking from `cost_update`, handoff prompt generation, anchor-aware devplan/phase/handoff panels, retry-aware stage bar badges, `/handoff`, and regression tests; `bun test && bun run typecheck` passes.
 - Core review-gap pass: provider-backed validate/review/plan stages, checkpoint resume, MCP tools, session deletion cleanup, cancellation cleanup, server startup factory, Pi/security/rate-limit/health hardening, and docs landed; core/TUI/shell checks pass.
+- SPEC coverage audit pass: `SPEC_COVERAGE.md` now distinguishes tested, partial, implemented-untested, and blocked-external rows instead of overclaiming full closure; `FULL_SPEC_REMAINING.md`, README, and status artifacts were updated with reopened gaps.
+- Cycle 1 / Subagent A pass: core runtime semantics now cover explicit provider `passed=false`, stage provider retries, review-feedback re-plan prompts, running-worker pause/resume/requeue, task skip handoff notes, and blocker previous-status restoration; core tests pass.
+- Cycle 3 / Subagent B pass: active composer now covers `/stage`, `/spawn`, and `/export`; context warning/critical prompts, blocking handoff modal copy, compact/patch-pause/auto-restart helpers, DevPlan/Phase/Handoff panel helpers, and artifact PATCH payloads have direct tests; TUI tests/typecheck pass.
+- Cycle 4 / Subagent C pass: web proxy-layer errors now use public `ErrorResponse`, DOM-executed dashboard tests cover errors, DevPlan anchors, worker/config/secrets behavior, and ASGI-level incremental SSE proves first chunk delivery before stream completion; web tests and startup smoke evidence pass.
+- Cycle 5 / Subagent D pass: ops tests now cover systemd-user unit creation/preservation, exact launcher status fields, `start-tui`, `update`, missing-Pi doctor remediation, and missing-provider wording; `bash -n`, dry-run, and ops tests pass. Full noninteractive install twice remains partial due package/service side effects; ShellCheck was closed by the later Cycle 6 external rerun.
+- Cycle 6 / Coordinator pass: after external tools were installed, provider credentials were checked without printing secret values, a harmless real LiteLLM/default-provider call passed, Pi CLI version/help and the core Pi subprocess adapter with installed `pi --rpc` passed under timeouts, ShellCheck 0.11.0 passed on root scripts after lint fixes, and no blocked-external rows remain. Full verification passed across core, TUI, web, shell syntax, installer dry-run, and ops tests.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -30,6 +36,12 @@
 - [✅] D: implement installer, launcher, README, AGENTS.md, config/env generation, shell tests, and root operational smoke evidence.
 - [✅] F: integration evidence added across core fake provider/Pi/git/SSE, TUI client/render fixtures, web proxy/render tests, and installer/launcher smoke tests.
 - [✅] G: guided TUI provider-key setup implemented with backend keyring/env-file persistence, persisted provider model selection, single-terminal core autostart, no secret-value rendering, docs, and regression tests.
+- [✅] H1: Cycle 1 / Subagent A: core runtime semantics rows R-021/R-031/R-036/R-039/R-040/R-041/R-050/R-077 upgraded/narrowed; tests cover provider `passed=false`, review-feedback re-plan, worker pause/resume/requeue, task skip, and blocker status restoration.
+- [✅] H2: Cycle 2 / Subagent A: core contract/provider/MCP rows R-001/R-028/R-037/R-045/R-047/R-049/R-056/R-083 upgraded; R-054/R-057/R-080 narrowed to external/CORS residuals with retry/fallback/tool-lock evidence added.
+- [✅] H3: Cycle 3 / Subagent B: R-059/R-085/R-086 upgraded to tested; R-058/R-067 narrowed to the OpenTUI-default versus Pi-SPEC contract decision; active composer commands, handoff flows, and anchor panel tests pass.
+- [✅] H4: Cycle 4 / Subagent C: R-002/R-035/R-062/R-068/R-072/R-087/R-088 upgraded to tested with public web `ErrorResponse`, DOM dashboard, incremental SSE, and web startup smoke evidence.
+- [✅] H5: Cycle 5 / Subagent D: R-064/R-089 upgraded to tested; R-010 remains tested with stronger launcher evidence; R-051/R-063/R-069 narrowed to live Pi/full-install residuals before Cycle 6 closed separate live Pi/ShellCheck evidence.
+- [✅] H6: Cycle 6 / Coordinator: live provider/Pi/shellcheck checks passed after external tool installation; R-073/R-074/R-079/R-081 upgraded to tested, with R-080 still partial for a full production provider plus live Pi develop run.
 <!-- NEXT_TASK_GROUP_END -->
 
 ## Definitions Of Done

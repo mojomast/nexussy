@@ -1,10 +1,13 @@
 import { projectNameFromDescription } from "../index";
+import { renderPanels } from "../renderer";
 import { reduceSecrets, triggerHandoff } from "../state";
-import type { StageName } from "../types";
+import type { StageName, WorkerRole } from "../types";
 import { closeOverlay } from "./Overlay";
 import type { ChatUiState, ClientLike, CommandOutcome } from "./types";
 
 const greetingPattern = /^(hi|hello|hey|yo|sup|howdy|hiya|what'?s\s+up|whatsg\s+up|what'?s?\s*good)[!.\s]*$/i;
+const stages = new Set(["interview","design","validate","plan","review","develop"]);
+const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
 export type InteractionBucket = "ask" | "command" | "choice-selection" | "confirmation" | "ambiguous";
 
 export function looksLikeProjectRequest(text:string): boolean {
@@ -76,10 +79,13 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/new") return startNewRun(client, withHistory, rest.join(" "));
   if (cmd === "/resume" && rest[0]) return [{ ...withHistory, app:{ ...withHistory.app, runId:rest[0], finalStatus:undefined }, statusMessage:`resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }];
   if (cmd === "/secrets") { const secrets = await client.secrets() as any; return [{ ...withHistory, app:reduceSecrets(withHistory.app, secrets), overlay:"secrets" }, { message:"provider key status refreshed" }]; }
+  if (cmd === "/export") return [withHistory, { message:"exported displayed session data", html:renderPanels(withHistory.app).html }];
   if (!withHistory.app.runId) throw new Error("start a run first with plain text or /new DESCRIPTION");
   if (cmd === "/pause") { await client.pause(withHistory.app.runId, rest.join(" ") || "user"); return [{ ...withHistory, app:{ ...withHistory.app, paused:true }, statusMessage:"paused" }, { message:"paused" }]; }
   if (cmd === "/resume-run" || cmd === "/resume") { await client.resume(withHistory.app.runId); return [{ ...withHistory, app:{ ...withHistory.app, paused:false }, statusMessage:"resumed" }, { message:"resumed" }]; }
+  if (cmd === "/stage") { const stage = rest[0] as StageName; if (!stages.has(stage)) throw new Error("invalid stage"); await client.skip(withHistory.app.runId, stage, "user slash stage skip"); return [{ ...withHistory, statusMessage:`stage ${stage}` }, { message:`stage ${stage}` }]; }
   if (cmd === "/skip") { const stage = rest.shift() as StageName; const reason = rest.join(" "); if (!stage || !reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(withHistory.app.runId, stage, reason); return [{ ...withHistory, statusMessage:`skipped ${stage}` }, { message:`skipped ${stage}` }]; }
+  if (cmd === "/spawn") { const role = rest.shift() as WorkerRole; if (!role || !roles.has(role)) throw new Error("invalid role"); const task = rest.join(" "); if (!task) throw new Error("task required"); await client.spawn({ run_id:withHistory.app.runId, role, task }); return [{ ...withHistory, statusMessage:"spawned" }, { message:"spawned" }]; }
   if (cmd === "/inject") { const maybe = rest[0]; const workerId = maybe && /^[a-z]+-[a-z0-9-]+$/.test(maybe) ? rest.shift() : undefined; const message = rest.join(" "); if (!message) throw new Error("message required"); if (workerId) await client.injectWorker(workerId, { run_id:withHistory.app.runId, worker_id:workerId, message }); else await client.inject({ run_id:withHistory.app.runId, message }); return [{ ...withHistory, statusMessage:"injected" }, { message:"injected" }]; }
   if (cmd === "/escape") return [closeOverlay(withHistory), { message:"overlay closed" }];
   throw new Error(`unknown command ${cmd}`);

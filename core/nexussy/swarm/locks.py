@@ -4,16 +4,23 @@ from datetime import timedelta
 from nexussy.api.schemas import FileLock, LockStatus, now_utc
 from nexussy.security import sanitize_relative_path
 
-async def claim_file(db, run_id: str, path: str, worker_id: str, timeout_s=120, retry_ms=250) -> FileLock:
+async def claim_file(db, run_id: str, path: str, worker_id: str, timeout_s=120, retry_ms=250, emit=None) -> FileLock:
     rel=sanitize_relative_path(path); deadline=asyncio.get_event_loop().time()+timeout_s
+    waiting_emitted=False
     while True:
         now=now_utc(); exp=now+timedelta(seconds=timeout_s)
         try:
             def tx(con):
                 con.execute("UPDATE file_locks SET status='expired' WHERE run_id=? AND path=? AND status='claimed' AND expires_at<?",(run_id,rel,now.isoformat()))
                 con.execute("INSERT INTO file_locks VALUES(?,?,?,?,?,?)",(run_id,rel,worker_id,"claimed",now.isoformat(),exp.isoformat()))
-            await db.write(tx); return FileLock(path=rel,worker_id=worker_id,run_id=run_id,status=LockStatus.claimed,claimed_at=now,expires_at=exp)
+            await db.write(tx)
+            lock=FileLock(path=rel,worker_id=worker_id,run_id=run_id,status=LockStatus.claimed,claimed_at=now,expires_at=exp)
+            if emit: await emit("file_claimed", lock)
+            return lock
         except Exception:
+            if emit and not waiting_emitted:
+                waiting_emitted=True
+                await emit("file_lock_waiting", FileLock(path=rel,worker_id=worker_id,run_id=run_id,status=LockStatus.waiting,claimed_at=now,expires_at=exp))
             if asyncio.get_event_loop().time() >= deadline: raise TimeoutError("file_locked")
             await asyncio.sleep(retry_ms/1000)
 

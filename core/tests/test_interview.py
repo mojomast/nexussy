@@ -151,6 +151,25 @@ async def test_interview_artifact_in_design_prompt(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_interview_provider_retry_and_question_checkpoint(tmp_path, monkeypatch):
+    await reset_core(tmp_path, monkeypatch)
+    attempts={"questions":0}
+    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+        if "Generate a JSON array" in prompt:
+            attempts["questions"] += 1
+            if attempts["questions"] == 1:
+                raise RuntimeError("transient provider failure")
+            return ProviderResult(json.dumps(QUESTIONS), {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
+        return await fake_complete_factory([])(stage, prompt, model, allow_mock=allow_mock, timeout_s=timeout_s)
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", flaky_complete)
+    async with await client() as c:
+        body, events = await start_and_wait(c)
+    assert attempts["questions"] == 2
+    checkpoints=[e for e in events if e["type"] == "checkpoint_saved"]
+    assert any(e["payload"]["path"] == ".nexussy/checkpoints/interview-questions.json" for e in checkpoints)
+
+
+@pytest.mark.asyncio
 async def test_interview_replay(tmp_path, monkeypatch):
     await reset_core(tmp_path, monkeypatch)
     monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete_factory([]))

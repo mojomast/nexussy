@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import httpx
@@ -309,7 +312,12 @@ def test_sse_proxy_reports_malformed_sse_content_type(client: TestClient) -> Non
     response = client.get("/api/pipeline/runs/run-1/stream?malformed=true")
     assert response.status_code == 502
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json()["error"]["code"] == "malformed_sse"
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error_code"] == "internal_error"
+    assert payload["message"] == "Core stream response was not text/event-stream"
+    assert payload["request_id"]
+    assert payload["retryable"] is False
 
 
 def test_core_unavailable_returns_json_error() -> None:
@@ -322,7 +330,204 @@ def test_core_unavailable_returns_json_error() -> None:
     response = client.get("/api/health")
     assert response.status_code == 502
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json()["error"]["code"] == "core_unavailable"
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error_code"] == "provider_unavailable"
+    assert payload["message"] == "Core API unavailable: ConnectError"
+    assert payload["details"] == {"source": "web_proxy"}
+    assert payload["request_id"]
+    assert payload["retryable"] is True
+
+
+def test_sse_proxy_forwards_first_chunk_before_stream_completion() -> None:
+    asyncio.run(_assert_sse_proxy_forwards_first_chunk_before_stream_completion())
+
+
+async def _assert_sse_proxy_forwards_first_chunk_before_stream_completion() -> None:
+    class ControlledStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.first_sent = asyncio.Event()
+            self.release_second = asyncio.Event()
+
+        async def __aiter__(self):
+            yield b"id: first\nevent: heartbeat\n"
+            self.first_sent.set()
+            await self.release_second.wait()
+            yield b"retry: 3000\ndata: {}\n\n"
+
+    upstream_stream = ControlledStream()
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream; charset=utf-8"},
+            stream=upstream_stream,
+        )
+
+    app = create_app(core_base_url="http://core", core_transport=httpx.MockTransport(handler))
+    messages: list[dict[str, object]] = []
+    request_sent = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.sleep(60)
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        messages.append(message)
+
+    task = asyncio.create_task(
+        app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "GET",
+                "path": "/api/pipeline/runs/run-1/stream",
+                "raw_path": b"/api/pipeline/runs/run-1/stream",
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+                "server": ("127.0.0.1", 7772),
+                "scheme": "http",
+            },
+            receive,
+            send,
+        )
+    )
+
+    await asyncio.wait_for(upstream_stream.first_sent.wait(), timeout=1)
+    first_bodies = [m.get("body", b"") for m in messages if m.get("type") == "http.response.body"]
+    assert b"id: first" in b"".join(first_bodies)
+    assert b"retry: 3000" not in b"".join(first_bodies)
+    assert not task.done()
+
+    upstream_stream.release_second.set()
+    await asyncio.wait_for(task, timeout=1)
+    all_bodies = [m.get("body", b"") for m in messages if m.get("type") == "http.response.body"]
+    assert b"retry: 3000" in b"".join(all_bodies)
+
+
+def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) -> None:
+    if shutil.which("node") is None:
+        pytest.skip("node is unavailable for DOM execution smoke")
+
+    html = client.get("/").text
+    script = textwrap.dedent(
+        r'''
+        const fs = require('fs');
+        const vm = require('vm');
+        const html = fs.readFileSync(process.argv[2], 'utf8');
+        const appScript = html.match(/<script>([\s\S]*)<\/script>/)[1];
+        const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
+
+        class Element {
+          constructor(id = '') {
+            this.id = id;
+            this.children = [];
+            this.innerHTML = '';
+            this.textContent = '';
+            this.value = '';
+            this.hash = '';
+            this.className = '';
+            this.classList = { toggle: () => {} };
+          }
+          append(child) { this.children.push(child); }
+          prepend(child) { this.children.unshift(child); this.innerHTML = child.innerHTML + this.innerHTML; }
+        }
+
+        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','load-graph'];
+        const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
+        elements['artifact-kind'].value = 'devplan';
+        const document = {
+          querySelector(selector) { if (!selector.startsWith('#')) return new Element(); const id = selector.slice(1); return elements[id] || (elements[id] = new Element(id)); },
+          getElementById(id) { return elements[id] || null; },
+          createElement() { return new Element(); },
+          querySelectorAll() { return []; }
+        };
+        const localStorage = { data: {}, getItem(k) { return this.data[k] || ''; }, setItem(k, v) { this.data[k] = String(v); } };
+        const location = { hash: '#chat' };
+        const timers = [];
+        const addEventListener = () => {};
+        const setInterval = fn => { timers.push(fn); return timers.length; };
+        const alert = msg => { throw new Error('unexpected alert: ' + msg); };
+        let promptValue = 'session-1';
+        const prompt = () => promptValue;
+        const d3 = { select() { return { node: () => ({ clientWidth: 800 }), selectAll() { return this; }, remove() {}, append() { return this; }, data() { return this; }, join() { return this; }, attr() { return this; }, call() { return this; }, text() { return this; } }; }, forceSimulation() { return { force() { return this; }, on() { return this; } }; }, forceLink() { return { id() { return { distance() {} }; } }; }, forceManyBody() { return { strength() {} }; }, forceCenter() {}, drag() { return { on() { return this; } }; } };
+        const responses = [];
+        const fetchCalls = [];
+        const jsonResponse = (body, ok = true, status = 200, statusText = 'OK') => ({ ok, status, statusText, json: async () => body });
+        async function fetch(url, options = {}) {
+          fetchCalls.push({ url, options });
+          if (responses.length) return responses.shift();
+          if (url === '/api/health') return jsonResponse({ status: 'ok', contract_version: '1.0' });
+          if (url.startsWith('/api/sessions')) return jsonResponse([]);
+          if (url === '/api/secrets') return jsonResponse([{ name: 'OPENAI_API_KEY', configured: false, source: 'env' }]);
+          if (url.startsWith('/api/secrets/')) return jsonResponse({ ok: true });
+          if (url === '/api/config' && options.method === 'PUT') return jsonResponse(JSON.parse(options.body));
+          if (url === '/api/config') return jsonResponse({ version: '1.0', web: { port: 7772 } });
+          if (url.startsWith('/api/pipeline/artifacts/devplan')) return jsonResponse({ content_text: '<!-- PROGRESS_LOG_START -->\nbody\n<!-- PROGRESS_LOG_END -->' });
+          return jsonResponse({});
+        }
+        class EventSource {
+          constructor(url) { this.url = url; this.listeners = {}; EventSource.last = this; }
+          addEventListener(type, fn) { this.listeners[type] = fn; }
+          close() { this.closed = true; }
+          emit(type, data, id = 'evt-1') { this.listeners[type]({ type, data: JSON.stringify(data), lastEventId: id }); }
+        }
+
+        const context = { document, localStorage, location, addEventListener, setInterval, alert, prompt, fetch, EventSource, d3, console, Number, JSON, encodeURIComponent, String };
+        vm.createContext(context);
+        vm.runInContext(appScript, context);
+
+        (async () => {
+          await context.refreshHealth();
+          assert(elements.health.textContent === 'core: ok contract 1.0', 'health display did not render');
+
+          responses.push(jsonResponse({ ok: false, error_code: 'unauthorized', message: 'bad key' }, false, 401, 'Unauthorized'));
+          await context.refreshHealth();
+          assert(elements['error-banner'].textContent.includes('unauthorized: bad key'), 'auth ErrorResponse not displayed');
+
+          elements['run-id'].value = 'run-1';
+          elements['connect-stream'].onclick();
+          EventSource.last.onerror();
+          assert(elements['error-banner'].textContent.includes('stream unavailable/auth/malformed SSE'), 'SSE error display missing');
+
+          EventSource.last.emit('worker_status', { type: 'worker_status', payload: { worker_id: 'worker-1', role: 'developer', status: 'running', task_title: 'Build UI', worktree_path: 'wt' } });
+          assert(elements['worker-grid'].children.length === 1, 'worker update did not render');
+          assert(elements['worker-grid'].children[0].innerHTML.includes('worker-1'), 'worker id missing');
+
+          await elements['load-devplan'].onclick();
+          assert(elements['devplan-content'].innerHTML.includes('class="anchor"'), 'DevPlan anchors not highlighted');
+
+          await elements['load-config'].onclick();
+          assert(elements['config-editor'].value.includes('"version"'), 'config editor did not load');
+          elements['config-editor'].value = '{"version":"1.0","web":{"port":7773}}';
+          await elements['save-config'].onclick();
+          assert(elements['config-editor'].value.includes('7773'), 'config editor did not save via API');
+
+          await elements['load-secrets'].onclick();
+          assert(elements['secret-list'].innerHTML.includes('OPENAI_API_KEY'), 'secret list did not render');
+          elements['secret-name'].value = 'OPENAI_API_KEY';
+          elements['secret-value'].value = 'secret-value';
+          await elements['set-secret'].onclick();
+          await elements['delete-secret'].onclick();
+          const secretCalls = fetchCalls.filter(c => c.url.startsWith('/api/secrets'));
+          assert(secretCalls.some(c => c.options.method === 'PUT'), 'secret PUT not called');
+          assert(secretCalls.some(c => c.options.method === 'DELETE'), 'secret DELETE not called');
+          assert(fetchCalls.every(c => c.url.startsWith('/api/')), 'dashboard called non-proxy route');
+        })().catch(err => { console.error(err.stack || err); process.exit(1); });
+        '''
+    )
+    tmp_html = Path("/tmp/nexussy-dashboard-dom.html")
+    tmp_js = Path("/tmp/nexussy-dashboard-dom.js")
+    tmp_html.write_text(html, encoding="utf-8")
+    tmp_js.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(tmp_js), str(tmp_html)], text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 def test_devplan_anchor_highlighting_script_includes_all_anchor_names(client: TestClient) -> None:

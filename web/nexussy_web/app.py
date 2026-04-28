@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import json
+import uuid
 from importlib import resources
 from typing import AsyncIterator
 
@@ -61,10 +62,19 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
     }
 
 
-def _json_error(status_code: int, code: str, message: str) -> Response:
-    """Return spec-shaped UTF-8 JSON for proxy-layer failures only."""
+def _json_error(status_code: int, code: str, message: str, *, retryable: bool = False) -> Response:
+    """Return public ErrorResponse JSON for proxy-layer failures only."""
     return Response(
-        json.dumps({"error": {"code": code, "message": message}, "contract_version": "1.0"}),
+        json.dumps(
+            {
+                "ok": False,
+                "error_code": code,
+                "message": message,
+                "details": {"source": "web_proxy"},
+                "request_id": str(uuid.uuid4()),
+                "retryable": retryable,
+            }
+        ),
         status_code=status_code,
         media_type="application/json; charset=utf-8",
     )
@@ -108,7 +118,12 @@ async def proxy_api(request: Request) -> Response:
                 headers=_forward_headers(request),
             )
     except httpx.RequestError as exc:
-        return _json_error(502, "core_unavailable", f"Core API unavailable: {exc.__class__.__name__}")
+        return _json_error(
+            502,
+            "provider_unavailable",
+            f"Core API unavailable: {exc.__class__.__name__}",
+            retryable=True,
+        )
     return Response(
         upstream.content,
         status_code=upstream.status_code,
@@ -130,7 +145,12 @@ async def proxy_sse(request: Request) -> Response:
         upstream = await client.send(upstream_request, stream=True)
     except httpx.RequestError as exc:
         await client.aclose()
-        return _json_error(502, "core_unavailable", f"Core SSE unavailable: {exc.__class__.__name__}")
+        return _json_error(
+            502,
+            "provider_unavailable",
+            f"Core SSE unavailable: {exc.__class__.__name__}",
+            retryable=True,
+        )
 
     if upstream.status_code >= 400:
         content = await upstream.aread()
@@ -147,7 +167,7 @@ async def proxy_sse(request: Request) -> Response:
     if not _is_sse(upstream):
         await upstream.aclose()
         await client.aclose()
-        return _json_error(502, "malformed_sse", "Core stream response was not text/event-stream")
+        return _json_error(502, "internal_error", "Core stream response was not text/event-stream")
 
     async def stream() -> AsyncIterator[bytes]:
         async for chunk in upstream.aiter_raw():

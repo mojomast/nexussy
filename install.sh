@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 NEXUSSY_HOME=${NEXUSSY_HOME:-"$HOME/.nexussy"}
 NEXUSSY_CONFIG=${NEXUSSY_CONFIG:-"$NEXUSSY_HOME/nexussy.yaml"}
 NEXUSSY_ENV_FILE=${NEXUSSY_ENV_FILE:-"$NEXUSSY_HOME/.env"}
@@ -339,6 +339,7 @@ main() {
   if [ "$DRY_RUN" -eq 1 ]; then info "Dry run complete; no changes were made."; else info "Install complete. Start nexussy with: ./nexussy.sh start"; fi
 }
 
+# shellcheck disable=SC2317
 if [ "${NEXUSSY_INSTALL_TEST_MODE:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi

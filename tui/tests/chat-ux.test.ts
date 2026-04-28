@@ -18,6 +18,7 @@ class MockClient {
   pause(run_id:string, reason?:string){ this.calls.push(["pause", run_id, reason]); return {}; }
   resume(run_id:string){ this.calls.push(["resume", run_id]); return {}; }
   skip(run_id:string, stage:string, reason:string){ this.calls.push(["skip", run_id, stage, reason]); return {}; }
+  spawn(body:any){ this.calls.push(["spawn", body]); return {}; }
   secrets(){ this.calls.push(["secrets"]); return [{ name:"OPENROUTER_API_KEY", source:"config", configured:true }]; }
   status(run_id:string){ this.calls.push(["status", run_id]); return {}; }
   workers(run_id:string){ this.calls.push(["workers", run_id]); return []; }
@@ -111,8 +112,11 @@ test("slash commands route or open overlays", async () => {
   [state] = await handleComposerSubmit(client, state, "/new build api"); expect(client.calls.at(-1)[0]).toBe("startPipeline");
   [state] = await handleComposerSubmit(client, state, "/pause stop"); expect(client.calls.at(-1)).toEqual(["pause", "run-123456", "stop"]);
   [state] = await handleComposerSubmit(client, state, "/resume-run"); expect(client.calls.at(-1)).toEqual(["resume", "run-123456"]);
+  [state] = await handleComposerSubmit(client, state, "/stage plan"); expect(client.calls.at(-1)).toEqual(["skip", "run-123456", "plan", "user slash stage skip"]);
   [state] = await handleComposerSubmit(client, state, "/skip validate reason here"); expect(client.calls.at(-1)).toEqual(["skip", "run-123456", "validate", "reason here"]);
+  [state] = await handleComposerSubmit(client, state, "/spawn backend build API"); expect(client.calls.at(-1)).toEqual(["spawn", { run_id:"run-123456", role:"backend", task:"build API" }]);
   [state] = await handleComposerSubmit(client, state, "/inject worker-123 hello"); expect(client.calls.at(-1)).toEqual(["injectWorker", "worker-123", { run_id:"run-123456", worker_id:"worker-123", message:"hello" }]);
+  const [, exported] = await handleComposerSubmit(client, state, "/export"); expect(exported.html).toContain("nexussy export");
   [state] = await handleComposerSubmit(client, state, "/workers"); expect(state.overlay).toBe("workers");
   [state] = await handleComposerSubmit(client, state, "/onboarding"); expect(state.overlay).toBe("onboarding");
   [state] = await handleComposerSubmit(client, state, "/plan"); expect(state.overlay).toBe("plan");

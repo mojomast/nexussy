@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 CORE_HOST=${NEXUSSY_CORE_HOST:-"127.0.0.1"}
 CORE_PORT=${NEXUSSY_CORE_PORT:-"7771"}
 WEB_HOST=${NEXUSSY_WEB_HOST:-"127.0.0.1"}
@@ -40,7 +40,7 @@ configured_provider_count() {
   env_file=${NEXUSSY_ENV_FILE:-"$HOME/.nexussy/.env"}
   count=0
   for key in $keys; do
-    eval value=\${$key:-}
+    value=${!key-}
     if [ -z "$value" ] && [ -f "$env_file" ]; then
       while IFS= read -r line; do
         case "$line" in "$key="*) value=${line#*=}; break ;; esac

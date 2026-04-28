@@ -23,7 +23,7 @@ Interactive installs may offer keyring guidance. Noninteractive mode never promp
 ./install.sh --systemd-user
 ```
 
-The installer creates `~/.nexussy/`, `~/.nexussy/run/`, `~/.nexussy/logs/`, `~/.nexussy/nexussy.yaml`, and `~/.nexussy/.env` only when absent, then installs core, TUI, and web packages. Reruns preserve existing config and env files unchanged.
+The installer creates `~/.nexussy/`, `~/.nexussy/run/`, `~/.nexussy/logs/`, `~/.nexussy/nexussy.yaml`, and `~/.nexussy/.env` only when absent, then installs core, TUI, and web packages. Reruns preserve existing config, env, and generated systemd user unit files unchanged.
 
 ## Start and stop
 
@@ -33,6 +33,8 @@ The installer creates `~/.nexussy/`, `~/.nexussy/run/`, `~/.nexussy/logs/`, `~/.
 ./nexussy.sh stop       # stops TUI, web, and core from PID files
 ./nexussy.sh doctor     # checks dependencies, config, ports, Pi, and provider keys
 ```
+
+`doctor` reports provider-key readiness and Pi command readiness. If the external `pi` command is absent, deterministic local runs can still use the bundled Pi-compatible fallback; live Pi execution requires a real Pi CLI.
 
 To start core/web, verify health, and print the TUI launch instructions in one step:
 
@@ -59,9 +61,13 @@ bash -n install.sh nexussy.sh ops_tests.sh
 ./ops_tests.sh
 ```
 
+If `shellcheck` is unavailable, use `bash -n install.sh nexussy.sh ops_tests.sh` as the local shell syntax gate. The SPEC coverage matrix records `shellcheck` as blocked-external when the tool is not installed.
+
 ## Spec coverage
 
-The authoritative contract is `SPEC.md`. Current traceability evidence is tracked in `SPEC_COVERAGE.md`; deterministic implementation paths are tested locally, while only live external checks that require unavailable credentials/tools are marked blocked-external.
+The authoritative contract is `SPEC.md`. Current traceability evidence is tracked in `SPEC_COVERAGE.md`; deterministic implementation paths are tested locally, partial rows identify remaining semantic/test gaps, and blocked-external rows are used only when live credentials/tools are unavailable.
+
+Use `CIRCULAR_DEVELOPMENT.md` to close remaining rows sequentially. It defines the subagent cycle order, row targets, exit checks, and required status updates after each pass.
 
 Required local verification:
 

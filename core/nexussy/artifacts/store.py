@@ -18,12 +18,18 @@ def validate_anchors(rel_path: str, content: str) -> None:
     if missing: raise ValueError("validation_error: missing anchors " + ",".join(missing))
 
 def safe_write(root: str, rel_path: str, content: str) -> dict:
-    rel=sanitize_relative_path(rel_path); validate_anchors(rel, content)
+    rel=sanitize_relative_path(rel_path)
     base=pathlib.Path(root).expanduser().resolve(strict=False); target=(base/rel).resolve(strict=False)
     if not (target == base or base in target.parents): raise ValueError("path_rejected")
     target.parent.mkdir(parents=True, exist_ok=True)
+    tmp=pathlib.Path(str(target)+".tmp")
+    try:
+        validate_anchors(rel, content)
+    except ValueError:
+        tmp.write_text(content, encoding="utf-8")
+        raise
     if target.exists(): shutil.copy2(target, str(target)+".bak")
-    tmp=pathlib.Path(str(target)+".tmp"); tmp.write_text(content, encoding="utf-8")
+    tmp.write_text(content, encoding="utf-8")
     validate_anchors(rel, tmp.read_text(encoding="utf-8"))
     os.replace(tmp, target)
     b=target.read_bytes()

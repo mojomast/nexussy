@@ -164,6 +164,9 @@ async def control_pause(request):
     async def inner(r):
         data=await r.json(); rid=data["run_id"]; reason=data.get("reason","user"); engine.paused[rid]=True
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(rid,));
+        if not rows: raise KeyError("run")
+        for rpc in list(engine.active_worker_rpcs.get(rid,[])):
+            await rpc.stop(config.pi.shutdown_timeout_s)
         if rows: await engine.emit(SSEEventType.pause_state_changed,rows[0]["session_id"],rid,PausePayload(paused=True,reason=reason))
         await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("paused",rid)))
         return JSONResponse(dump(ControlResponse(run_id=rid,status=RunStatus.paused,message="paused")))
@@ -172,6 +175,7 @@ async def control_resume(request):
     async def inner(r):
         data=await r.json(); rid=data["run_id"]; engine.paused.pop(rid,None)
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(rid,));
+        if not rows: raise KeyError("run")
         if rows: await engine.emit(SSEEventType.pause_state_changed,rows[0]["session_id"],rid,PausePayload(paused=False,reason="resume"))
         await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("running",rid)))
         return JSONResponse(dump(ControlResponse(run_id=rid,status=RunStatus.running,message="resumed")))
@@ -193,11 +197,30 @@ async def inject(request):
     return await endpoint(request, inner)
 async def skip(request):
     async def inner(r):
-        req=await body(r,StageSkipRequest); await db.write(lambda con: con.execute("UPDATE stage_runs SET status=? WHERE run_id=? AND stage=?",("skipped",req.run_id,req.stage.value)))
+        req=await body(r,StageSkipRequest)
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(req.run_id,));
-        if rows: await engine.emit(SSEEventType.stage_status,rows[0]["session_id"],req.run_id,StageStatusSchema(stage=req.stage,status=StageRunStatus.skipped,error=ErrorResponse(error_code=ErrorCode.stage_not_ready,message=req.reason)))
+        if not rows: raise KeyError("run")
+        if req.task_id:
+            tasks=await db.read("SELECT * FROM worker_tasks WHERE run_id=? AND task_id=?",(req.run_id,req.task_id))
+            if not tasks: raise KeyError("task")
+            task=tasks[0]
+            await db.write(lambda con: con.execute("UPDATE worker_tasks SET status=?,updated_at=? WHERE run_id=? AND task_id=?",("skipped",now_utc().isoformat(),req.run_id,req.task_id)))
+            await engine.emit(SSEEventType.worker_task,rows[0]["session_id"],req.run_id,WorkerTaskPayload(worker_id=task["worker_id"],task_id=req.task_id,phase_number=task["phase_number"],task_title=task["title"],status=WorkerTaskStatus.skipped))
+        else:
+            await db.write(lambda con: con.execute("UPDATE stage_runs SET status=? WHERE run_id=? AND stage=?",("skipped",req.run_id,req.stage.value)))
+            await engine.emit(SSEEventType.stage_status,rows[0]["session_id"],req.run_id,StageStatusSchema(stage=req.stage,status=StageRunStatus.skipped,error=ErrorResponse(error_code=ErrorCode.stage_not_ready,message=req.reason)))
+        await _append_handoff_skip_note(req.run_id, req.reason, req.stage, req.task_id)
         return JSONResponse(dump(ControlResponse(run_id=req.run_id,status=RunStatus.running,message="skipped")))
     return await endpoint(request, inner)
+
+async def _append_handoff_skip_note(run_id: str, reason: str, stage: StageName, task_id: str|None):
+    rows=await db.read("SELECT path,content_text FROM artifacts WHERE run_id=? AND kind='handoff' ORDER BY updated_at DESC LIMIT 1",(run_id,))
+    if not rows: return
+    marker="<!-- HANDOFF_NOTES_END -->"
+    note=f"- Skipped {'task '+task_id if task_id else 'stage '+stage.value}: {reason}\n"
+    text=rows[0]["content_text"]
+    updated=text.replace(marker, note + marker, 1) if marker in text else text.rstrip()+"\n"+note
+    await db.write(lambda con: con.execute("UPDATE artifacts SET content_text=?,updated_at=? WHERE run_id=? AND kind='handoff' AND path=?",(updated,now_utc().isoformat(),run_id,rows[0]["path"])))
 
 async def assistant_reply(request):
     async def inner(r):
@@ -221,7 +244,12 @@ async def blocker_create(request):
     async def inner(r):
         req=await body(r,BlockerCreateRequest); b=Blocker(run_id=req.run_id,worker_id=req.worker_id,stage=req.stage,severity=req.severity,message=req.message)
         await db.write(lambda con: con.execute("INSERT INTO blockers VALUES(?,?,?,?,?,?,?,?,?)",(b.blocker_id,b.run_id,b.worker_id,b.stage,b.severity,b.message,int(b.resolved),b.created_at.isoformat(),None)))
-        await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("blocked",req.run_id)))
+        run_rows=await db.read("SELECT status FROM runs WHERE run_id=?",(req.run_id,))
+        if not run_rows: raise KeyError("run")
+        if req.severity == "blocker":
+            current=run_rows[0]["status"]
+            if current != "blocked": engine.blocked_previous_status[req.run_id]=current
+            await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("blocked",req.run_id)))
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(req.run_id,));
         if rows: await engine.emit(SSEEventType.blocker_created,rows[0]["session_id"],req.run_id,b)
         return JSONResponse(dump(b))
@@ -234,6 +262,10 @@ async def blocker_resolve(request):
         if not rows: raise KeyError("blocker")
         x=rows[0]; b=Blocker(blocker_id=x["blocker_id"],run_id=x["run_id"],worker_id=x["worker_id"],stage=x["stage"],severity=x["severity"],message=x["message"],resolved=True,created_at=datetime.fromisoformat(x["created_at"]),resolved_at=now)
         await db.write(lambda con: con.execute("UPDATE blockers SET resolved=1,resolved_at=? WHERE blocker_id=?",(now.isoformat(),req.blocker_id)))
+        remaining=await db.read("SELECT blocker_id FROM blockers WHERE run_id=? AND severity='blocker' AND resolved=0",(req.run_id,))
+        if not remaining:
+            restore=engine.blocked_previous_status.pop(req.run_id, "running")
+            await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",(restore,req.run_id)))
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(req.run_id,));
         if rows: await engine.emit(SSEEventType.blocker_resolved,rows[0]["session_id"],req.run_id,b)
         return JSONResponse(dump(b))

@@ -27,6 +27,10 @@ class Database:
         return con
     async def init(self):
         await self.write(lambda con: con.executescript(SCHEMA))
+    async def init_project(self, project_root: str, relative_path: str = ".nexussy/state.db"):
+        project_db = Database(str(pathlib.Path(project_root).expanduser() / relative_path), self.busy, self.retries, int(self.retry * 1000))
+        await project_db.init()
+        return project_db.path
     async def write(self, fn):
         async with self._lock:
             last=None

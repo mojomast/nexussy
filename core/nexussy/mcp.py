@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Awaitable, Callable
 
 from nexussy.api.schemas import PipelineStartRequest, PipelineStatusResponse, RunSummary, StageStatusSchema
@@ -39,8 +40,37 @@ async def _get_status(arguments: dict[str, Any], *, engine, db):
     return PipelineStatusResponse(run=run, stages=stages, paused=bool(engine.paused.get(run_id)))
 
 
-async def call_stdio(*args, **kwargs):
-    return {"ok": True, "degraded": True}
+async def call_stdio(reader, writer, *, engine=None, db=None):
+    """Serve minimal newline-delimited JSON-RPC 2.0 MCP over stdio streams."""
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        request = None
+        try:
+            request = json.loads(line.decode("utf-8") if isinstance(line, bytes) else line)
+            method = request.get("method")
+            params = request.get("params") or {}
+            if method == "tools/list":
+                result = {"tools": list_tools()}
+            elif method == "tools/call":
+                result = await call_tool(params["name"], params.get("arguments") or {}, engine=engine, db=db)
+                if hasattr(result, "model_dump"):
+                    result = result.model_dump(mode="json")
+            elif method == "initialize":
+                result = {"protocolVersion":"2024-11-05","serverInfo":{"name":"nexussy","version":"1.0"},"capabilities":{"tools":{}}}
+            else:
+                raise KeyError(method)
+            response = {"jsonrpc":"2.0","id":request.get("id"),"result":result}
+        except Exception as e:
+            response = {"jsonrpc":"2.0","id":request.get("id") if isinstance(request, dict) else None,"error":{"code":-32603,"message":str(e)}}
+        writer.write((json.dumps(response) + "\n").encode("utf-8"))
+        drain = getattr(writer, "drain", None)
+        if drain:
+            await drain()
+    close = getattr(writer, "close", None)
+    if close:
+        close()
 
 
 register("nexussy_start_pipeline", "Start a nexussy pipeline run", {"type": "object"}, _start_pipeline)

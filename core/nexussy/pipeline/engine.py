@@ -7,7 +7,9 @@ from nexussy.artifacts.store import safe_write, artifact_path, sha256_text
 from nexussy.checkpoint import STAGE_ORDER, latest_checkpoint, resume_from_checkpoint, save_checkpoint
 from nexussy.providers import active_rate_limit, complete, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees, remove_worktree
+from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
+from nexussy.swarm.roles import enforce_tool
 
 STAGES=[StageName.interview,StageName.design,StageName.validate,StageName.plan,StageName.review,StageName.develop]
 
@@ -29,7 +31,7 @@ def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
 
 class Engine:
     def __init__(self, db, config):
-        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}
+        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); seq=rows[0]["n"]
         env=EventEnvelope(sequence=seq,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
@@ -37,11 +39,10 @@ class Engine:
         for q in list(self.queues.get(run_id,set())):
             try: q.put_nowait(env)
             except asyncio.QueueFull:
-                # Slow-consumer gate: give the stream one terminal diagnostic and
-                # drop this queue. The diagnostic is not inserted into the global
-                # event log to avoid recursively overflowing every slow queue.
                 self.queues.get(run_id,set()).discard(q)
-                slow=EventEnvelope(sequence=seq,type=SSEEventType.pipeline_error,session_id=session_id,run_id=run_id,payload=ErrorResponse(error_code=ErrorCode.sse_client_slow,message="SSE client queue exceeded",retryable=True).model_dump(mode="json"))
+                slow_seq_rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); slow_seq=slow_seq_rows[0]["n"]
+                slow=EventEnvelope(sequence=slow_seq,type=SSEEventType.pipeline_error,session_id=session_id,run_id=run_id,payload=ErrorResponse(error_code=ErrorCode.sse_client_slow,message="SSE client queue exceeded",retryable=True).model_dump(mode="json"))
+                await self.db.write(lambda con, slow=slow: con.execute("INSERT INTO events VALUES(?,?,?,?,?,?)",(slow.event_id,run_id,slow.sequence,SSEEventType.pipeline_error.value,json.dumps(slow.model_dump(mode="json")),slow.ts.isoformat())))
                 try: q.get_nowait()
                 except asyncio.QueueEmpty: pass
                 try: q.put_nowait(slow)
@@ -58,6 +59,7 @@ class Engine:
             slug = f"{slug[:56].rstrip('-')}-{hashlib.sha1(str(uuid4()).encode()).hexdigest()[:6]}"
         sid=str(uuid4()); now=now_utc();
         root=pathlib.Path(self.config.projects_dir).expanduser()/slug; main=root/"main"; main.mkdir(parents=True,exist_ok=True)
+        await self.db.init_project(str(root), self.config.database.project_relative_path)
         if req.existing_repo_path and pathlib.Path(req.existing_repo_path).exists():
             pass
         detail=SessionDetail(session=SessionSummary(session_id=sid,project_name=req.project_name,project_slug=slug,created_at=now,updated_at=now),project_root=str(root),main_worktree=str(main),artifacts=[],runs=[])
@@ -66,6 +68,7 @@ class Engine:
     async def start(self, req:PipelineStartRequest):
         allow_mock = mock_requested(req.metadata)
         selected = {st.value: select_stage_model(self.config, st.value, { (k.value if hasattr(k,'value') else k): v for k,v in req.model_overrides.items() }) for st in STAGES}
+        fallbacks=[]
         for st, model in selected.items():
             provider = provider_for_model(model)
             limited = await active_rate_limit(self.db, provider, model)
@@ -73,7 +76,7 @@ class Engine:
                 raise ProviderStartError(ErrorResponse(error_code=ErrorCode.rate_limited, message="provider rate limited", details={"provider":provider,"model":model,"reset_at":limited["reset_at"]}, retryable=True))
             if not model_available(model, allow_mock=allow_mock):
                 if self.config.providers.allow_fallback and model_available(self.config.providers.default_model, allow_mock=allow_mock):
-                    # create run below then emit pipeline_error from _run context
+                    fallbacks.append({"stage":st,"requested_model":model,"fallback_model":self.config.providers.default_model})
                     selected[st] = self.config.providers.default_model
                     continue
                 raise ProviderStartError(provider_error_for_model(model))
@@ -90,6 +93,8 @@ class Engine:
         await self.db.write(lambda con: (con.execute("INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?,?)",(rid,detail.session.session_id,"running",effective_req.start_stage.value,now.isoformat(),None,run.usage.model_dump_json())), con.execute("UPDATE sessions SET status=?, updated_at=?, detail_json=? WHERE session_id=?",("running",now.isoformat(),detail.model_dump_json(),detail.session.session_id))))
         for st in STAGES: await self.db.write(lambda con, st=st: con.execute("INSERT OR REPLACE INTO stage_runs VALUES(?,?,?,?,?,?,?)",(rid,st.value,"pending",0,None,None,None)))
         await self.emit(SSEEventType.run_started, detail.session.session_id, rid, run)
+        for fb in fallbacks:
+            await self.emit(SSEEventType.pipeline_error, detail.session.session_id, rid, ErrorResponse(error_code=ErrorCode.model_unavailable,message="provider/model unavailable; using fallback model",details=fb,retryable=True))
         self.session_runs[detail.session.session_id]=rid
         self.tasks[rid]=asyncio.create_task(self._run(effective_req, detail, run, selected, allow_mock))
         return RunStartResponse(session_id=detail.session.session_id,run_id=rid,stream_url=f"/pipeline/runs/{rid}/stream",status_url=f"/pipeline/status?run_id={rid}")
@@ -101,13 +106,14 @@ class Engine:
             i = start
             review_iterations = 0
             validation_iterations = 0
+            review_feedback_for_plan = ""
             while i <= stop:
                 st = STAGES[i]
                 while self.paused.get(run.run_id): await asyncio.sleep(.05)
                 attempt = (validation_iterations + 1) if st == StageName.validate else ((review_iterations + 1) if st == StageName.review else 1)
                 t0=now_utc(); await self._update_stage_status(run.run_id, st, "running", attempt=attempt, started_at=t0)
                 await self.emit(SSEEventType.stage_transition, detail.session.session_id, run.run_id, StageTransitionPayload(from_stage=prev,to_stage=st,from_status=StageRunStatus.passed if prev else None,to_status=StageRunStatus.running,reason="stage started"))
-                made=await self._artifacts_for_stage(st, req, detail, run.run_id, cp, root, selected_models or {}, allow_mock)
+                made=await self._artifacts_for_stage(st, req, detail, run.run_id, cp, root, selected_models or {}, allow_mock, review_feedback_for_plan)
                 artifacts.extend(made)
                 if st == StageName.validate:
                     validation_iterations += 1
@@ -121,6 +127,7 @@ class Engine:
                         raise RuntimeError("validate max iterations exceeded")
                 if st == StageName.review and (req.metadata.get("force_review_fail") or not await self._latest_report_passed(run.run_id, "review_report", True)):
                     review_iterations += 1
+                    review_feedback_for_plan = await self._latest_review_feedback(run.run_id)
                     await self._update_stage_status(run.run_id, StageName.review, "retrying", attempt=review_iterations, error=ErrorResponse(error_code=ErrorCode.stage_failed,message="review feedback requires plan correction",retryable=True))
                     if review_iterations < int(req.metadata.get("review_fail_iterations", self.config.stages.review.max_iterations or 2)):
                         await self.emit(SSEEventType.stage_transition, detail.session.session_id, run.run_id, StageTransitionPayload(from_stage=StageName.review,to_stage=StageName.plan,from_status=StageRunStatus.failed,to_status=StageRunStatus.retrying,reason="review feedback returned to plan"))
@@ -130,6 +137,8 @@ class Engine:
                 await self.emit(SSEEventType.stage_status, detail.session.session_id, run.run_id, StageStatusSchema(stage=st,status=StageRunStatus.passed,attempt=1,finished_at=fin,output_artifacts=made))
                 ck=await save_checkpoint(self.db, run.run_id, st, f".nexussy/checkpoints/{st.value}.json", sha256_text(st.value))
                 await self.emit(SSEEventType.checkpoint_saved, detail.session.session_id, run.run_id, ck); prev=st; i += 1
+                if st == StageName.plan:
+                    review_feedback_for_plan = ""
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, current_stage=? WHERE run_id=?",("passed",now_utc().isoformat(),prev.value if prev else None,run.run_id)))
             await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.passed,summary="pipeline completed",artifacts=artifacts,usage=TokenUsage()))
         except asyncio.CancelledError:
@@ -146,11 +155,45 @@ class Engine:
             await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.failed,summary="pipeline failed",artifacts=artifacts,usage=TokenUsage(),error=er))
     async def _save_art(self, run_id, session_id, root, kind, text, phase=None):
         rel=artifact_path(kind, phase); meta=safe_write(root, rel, text); ref=ArtifactRef(kind=kind,path=rel,sha256=meta["sha256"],bytes=meta["bytes"],phase_number=phase)
+        await self.emit(SSEEventType.artifact_updated, session_id, run_id, ArtifactUpdatedPayload(artifact=ref,action="created"))
         await self.db.write(lambda con: con.execute("INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?,?,?,?,?)",(run_id,kind,rel,ref.sha256,ref.bytes,ref.updated_at.isoformat(),text,phase)))
-        await self.emit(SSEEventType.artifact_updated, session_id, run_id, ArtifactUpdatedPayload(artifact=ref,action="created")); return ref
+        return ref
+
+    async def execute_worker_tool(self, run_id: str, worker_id: str, tool: ToolName, arguments: dict[str, JsonValue] | None = None):
+        arguments=arguments or {}
+        rows=await self.db.read("SELECT worker_json FROM workers WHERE run_id=? AND worker_id=?",(run_id,worker_id))
+        if not rows: raise KeyError("worker")
+        worker=Worker.model_validate_json(rows[0]["worker_json"])
+        session_rows=await self.db.read("SELECT session_id FROM runs WHERE run_id=?",(run_id,))
+        sid=session_rows[0]["session_id"] if session_rows else "unknown"
+        tool_value=tool.value if hasattr(tool,"value") else tool
+        await self.emit(SSEEventType.tool_call,sid,run_id,{"worker_id":worker_id,"tool":tool_value,"arguments":arguments})
+        try:
+            path=arguments.get("path") if isinstance(arguments, dict) else None
+            enforce_tool(worker.role, tool, path)
+            if tool in {ToolName.write_file, ToolName.edit_file} and path:
+                await write_requires_lock(self.db, run_id, str(path), worker_id)
+            payload={"worker_id":worker_id,"tool":tool_value,"success":True,"result":{}}
+        except PermissionError as e:
+            payload={"worker_id":worker_id,"tool":tool_value,"success":False,"error_code":str(e) or "forbidden"}
+        await self.emit(SSEEventType.tool_output,sid,run_id,payload)
+        return payload
     async def _provider_text(self, st: StageName, sid: str, rid: str, prompt: str, selected_models, allow_mock: bool) -> str:
         model = (selected_models or {}).get(st.value) or self.config.providers.default_model
-        result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s)
+        stage_cfg = getattr(self.config.stages, st.value, None)
+        max_retries = max(1, int(getattr(stage_cfg, "max_retries", self.config.providers.max_retries) or self.config.providers.max_retries or 1))
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s)
+                break
+            except Exception as e:
+                last_error = e
+                if attempt + 1 >= max_retries:
+                    raise
+                await asyncio.sleep((self.config.providers.retry_base_ms / 1000) * (2 ** attempt))
+        else:
+            raise last_error or RuntimeError("provider failed")
         usage = TokenUsage(**result.usage)
         await self.emit(SSEEventType.cost_update, sid, rid, usage)
         return result.text
@@ -173,6 +216,24 @@ class Engine:
             return bool(data.get("passed", default)) if isinstance(data, dict) else default
         except Exception:
             return default
+
+    async def _latest_review_feedback(self, run_id: str) -> str:
+        text=await self._latest_artifact_text(run_id, "review_report")
+        if not text: return ""
+        try:
+            data=json.loads(text)
+            return str(data.get("feedback_for_plan_stage") or "") if isinstance(data, dict) else ""
+        except Exception:
+            return ""
+
+    def _provider_declared_passed(self, text: str, default: bool) -> bool:
+        try:
+            data=json.loads((text or "").strip())
+            if isinstance(data, dict) and isinstance(data.get("passed"), bool):
+                return data["passed"]
+        except Exception:
+            pass
+        return default
 
     def _strip_markdown_fences(self, text: str) -> str:
         stripped=(text or "").strip()
@@ -298,7 +359,7 @@ class Engine:
         current=current or await self._latest_interview_artifact(rid)
         return InterviewArtifact(project_name=current.project_name if current else "pending",project_slug=current.project_slug if current else "pending",description=current.description if current else "pending",questions=answered,requirements=[a.answer for a in answered])
 
-    async def _artifacts_for_stage(self, st, req, detail, rid, cp, root, selected_models=None, allow_mock=False):
+    async def _artifacts_for_stage(self, st, req, detail, rid, cp, root, selected_models=None, allow_mock=False, review_feedback_for_plan: str=""):
         sid=detail.session.session_id
         if st==StageName.interview:
             question_prompt=("Generate a JSON array of 4-8 plain-language interview questions for a non-technical project owner. "
@@ -307,6 +368,8 @@ class Engine:
                              f"Project description: {req.description}")
             questions=self._parse_interview_questions(await self._provider_text(st, sid, rid, question_prompt, selected_models, allow_mock))
             self.interview_questions[sid]=questions
+            ck=await save_checkpoint(self.db, rid, StageName.interview, ".nexussy/checkpoints/interview-questions.json", sha256_text(json.dumps([q.model_dump(mode="json") for q in questions], sort_keys=True)))
+            await self.emit(SSEEventType.checkpoint_saved,sid,rid,ck)
             if req.auto_approve_interview:
                 answer_prompt=("Answer these interview questions as JSON using only the project description. "
                                "Return a JSON object mapping each question id to a concise answer.\n\n"
@@ -334,11 +397,13 @@ class Engine:
             response=await self._provider_text(st, sid, rid, prompt, selected_models, allow_mock)
             issues=self._issues_from_provider_text(response)
             corrected=self._corrected_design_from_validation(response, design)
-            report=ValidationReport(passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues),max_iterations=self.config.stages.validate.max_iterations or 3,issues=issues,corrected=corrected.strip()!=design.strip())
+            issue_passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
+            report=ValidationReport(passed=self._provider_declared_passed(response, issue_passed) and issue_passed,max_iterations=self.config.stages.validate.max_iterations or 3,issues=issues,corrected=corrected.strip()!=design.strip())
             return [await self._save_art(rid,sid,root,"validated_design",corrected), await self._save_art(rid,sid,root,"validation_report",report.model_dump_json(indent=2))]
         if st==StageName.plan:
             interview=self._interview_summary(await self._latest_interview_artifact(rid))
-            plan_text=await self._provider_text(st, sid, rid, f"Create a devplan.md body with PROGRESS_LOG and NEXT_TASK_GROUP anchors from interview requirements.\n\n{interview}\n\nOriginal description: {req.description}", selected_models, allow_mock)
+            feedback = f"\n\nReview feedback to address in this plan retry:\n{review_feedback_for_plan}" if review_feedback_for_plan else ""
+            plan_text=await self._provider_text(st, sid, rid, f"Create a devplan.md body with PROGRESS_LOG and NEXT_TASK_GROUP anchors from interview requirements.\n\n{interview}\n\nOriginal description: {req.description}{feedback}", selected_models, allow_mock)
             dev, warned=self._devplan_with_required_anchors(plan_text)
             if warned:
                 await self.emit(SSEEventType.pipeline_error,sid,rid,ErrorResponse(error_code=ErrorCode.validation_error,message="plan output required anchor repair",details={"stage":"plan"},retryable=True))
@@ -355,7 +420,8 @@ class Engine:
                     f"DEVPLAN:\n{devplan}\n\nHANDOFF:\n{handoff}")
             response=await self._provider_text(st, sid, rid, prompt, selected_models, allow_mock)
             issues=self._issues_from_provider_text(response)
-            passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
+            issue_passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
+            passed=self._provider_declared_passed(response, issue_passed) and issue_passed
             return [await self._save_art(rid,sid,root,"review_report",ReviewReport(passed=passed,max_iterations=self.config.stages.review.max_iterations or 2,issues=issues,feedback_for_plan_stage=self._review_feedback(response,issues)).model_dump_json(indent=2))]
         if st==StageName.develop:
             return await self._develop_stage(req, detail, rid, root, selected_models or {}, allow_mock)
@@ -397,12 +463,37 @@ class Engine:
             await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
             await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
             rpc=await spawn_pi_worker(cfg,rid,wid,role.value,str(main),wt)
+            self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
             req_id=await rpc.request(worker.task_title, "nexussy develop task")
+            paused_for_resume=False
             try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
+            except TimeoutError:
+                if self.paused.get(rid): paused_for_resume=True
+                else: raise
             finally:
                 for frame in rpc.frames:
                     await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
                 await rpc.stop(self.config.pi.shutdown_timeout_s)
+                if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
+            if paused_for_resume or self.paused.get(rid):
+                worker.status=WorkerStatus.paused; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
+                await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.queued)
+                await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.queued))
+                ck=await save_checkpoint(self.db, rid, StageName.develop, f".nexussy/checkpoints/develop-{worker.task_id}.json", sha256_text(worker.task_id or wid))
+                await self.emit(SSEEventType.checkpoint_saved,sid,rid,ck)
+                while self.paused.get(rid): await asyncio.sleep(.05)
+                worker.status=WorkerStatus.running; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
+                await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
+                await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
+                rpc=await spawn_pi_worker(cfg,rid,wid,role.value,str(main),wt)
+                self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
+                req_id=await rpc.request(worker.task_title, "nexussy develop task")
+                try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
+                finally:
+                    for frame in rpc.frames:
+                        await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
+                    await rpc.stop(self.config.pi.shutdown_timeout_s)
+                    if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
             if not list(pathlib.Path(wt).glob("**/*")):
                 pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
             commit=commit_worker(wt, f"nexussy: {wid} {worker.task_id}")

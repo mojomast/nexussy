@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 NEXUSSY_HOME=${NEXUSSY_HOME:-"$HOME/.nexussy"}
 NEXUSSY_CONFIG=${NEXUSSY_CONFIG:-"$NEXUSSY_HOME/nexussy.yaml"}
 NEXUSSY_ENV_FILE=${NEXUSSY_ENV_FILE:-"$NEXUSSY_HOME/.env"}
@@ -218,7 +218,7 @@ PY
   keys="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY FIREWORKS_API_KEY XAI_API_KEY GLM_API_KEY ZAI_API_KEY REQUESTY_API_KEY AETHER_API_KEY OLLAMA_BASE_URL"
   configured=0
   for k in $keys; do
-    eval v=\${$k:-}
+    v=${!k-}
     if [ -z "$v" ] && [ -f "$NEXUSSY_ENV_FILE" ]; then
       while IFS= read -r line; do
         case "$line" in "$k="*) v=${line#*=}; break ;; esac
@@ -236,6 +236,7 @@ Usage: ./nexussy.sh start|start-tui|stop|status|logs [--no-follow] core|web|tui|
 USAGE
 }
 
+# shellcheck disable=SC2317
 if [ "${NEXUSSY_SH_TEST_MODE:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi

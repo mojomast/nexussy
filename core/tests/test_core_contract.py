@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from nexussy.api.schemas import ErrorCode, ErrorResponse, PipelineStartRequest, EventEnvelope, RunSummary, RunStatus, SSEEventType, ArtifactRef, StageName
+from nexussy.api.schemas import ErrorCode, ErrorResponse, PipelineStartRequest, EventEnvelope, RunSummary, RunStatus, SSEEventType, ArtifactRef, StageName, WorkerTaskStatus
 from nexussy.api import server
 from nexussy.api.server import app
 from nexussy.artifacts.store import safe_write
@@ -16,6 +16,7 @@ from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
+from nexussy.providers import ProviderResult
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
@@ -238,7 +239,7 @@ def test_validate_and_review_max_iteration_failures(monkeypatch, tmp_path):
 
 
 def _wait_done(client, run_id):
-    for _ in range(100):
+    for _ in range(300):
         ev = client.get("/events", params={"run_id": run_id}).json()
         if ev and ev[-1]["type"] == "done":
             return ev
@@ -315,6 +316,81 @@ def test_validate_provider_issues_retry_to_design(monkeypatch, tmp_path):
         assert ev[-1]["payload"]["final_status"] == "passed"
         assert calls["validate"] == 2
         assert any(e["type"] == "stage_transition" and e["payload"].get("to_stage") == "design" for e in ev)
+
+
+def test_provider_passed_false_empty_issues_retry_validate_and_review(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    calls = {"validate": 0, "review": 0}
+    async def fake_provider(self, st, sid, rid, prompt, selected_models, allow_mock):
+        if st == StageName.design:
+            return "# Goals\nBuild it.\n# Architecture\nSimple.\n# Dependencies\nPython.\n# Risks\nLow.\n# Test Strategy\nPytest.\n"
+        if st == StageName.validate:
+            calls["validate"] += 1
+            return '{"passed": false, "issues": []}' if calls["validate"] == 1 else '{"passed": true, "issues": []}'
+        if st == StageName.plan:
+            return "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- ready\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: build.\n<!-- NEXT_TASK_GROUP_END -->\n"
+        if st == StageName.review:
+            calls["review"] += 1
+            return '{"passed": false, "issues": [], "feedback_for_plan_stage": "Add acceptance criteria"}' if calls["review"] == 1 else '{"passed": true, "issues": []}'
+        return "[]"
+    monkeypatch.setattr(Engine, "_provider_text", fake_provider)
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Explicit False","description":"small api","auto_approve_interview":True,"stop_after_stage":"review","metadata":{"mock_provider":True}}).json()
+        ev = _wait_done(c, r["run_id"])
+        assert ev[-1]["payload"]["final_status"] == "passed"
+        assert calls == {"validate": 2, "review": 2}
+        assert any(e["type"] == "stage_transition" and e["payload"].get("to_stage") == "design" for e in ev)
+        assert any(e["type"] == "stage_transition" and e["payload"].get("to_stage") == "plan" for e in ev)
+
+
+def test_review_feedback_is_injected_into_replan_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    prompts = []
+    calls = {"review": 0}
+    async def fake_provider(self, st, sid, rid, prompt, selected_models, allow_mock):
+        if st == StageName.plan:
+            prompts.append(prompt)
+            return "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- ready\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: build.\n<!-- NEXT_TASK_GROUP_END -->\n"
+        if st == StageName.review:
+            calls["review"] += 1
+            return '{"passed": false, "issues": [], "feedback_for_plan_stage": "Add owner, acceptance, and tests"}' if calls["review"] == 1 else '{"passed": true, "issues": []}'
+        if st == StageName.design:
+            return "# Goals\nBuild it.\n# Architecture\nSimple.\n# Dependencies\nPython.\n# Risks\nLow.\n# Test Strategy\nPytest.\n"
+        if st == StageName.validate:
+            return '{"passed": true, "issues": []}'
+        return "[]"
+    monkeypatch.setattr(Engine, "_provider_text", fake_provider)
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Feedback","description":"small api","auto_approve_interview":True,"stop_after_stage":"review","metadata":{"mock_provider":True}}).json()
+        ev = _wait_done(c, r["run_id"])
+        assert ev[-1]["payload"]["final_status"] == "passed"
+    assert len(prompts) == 2
+    assert "Add owner, acceptance, and tests" in prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_provider_text_retries_per_stage_config(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    cfg = load_config({"stages":{"design":{"max_retries":2}}, "providers":{"retry_base_ms":1}})
+    engine = Engine(db, cfg)
+    await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","design",datetime.now(timezone.utc).isoformat(),None,"{}")))
+    calls = {"n": 0}
+    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("temporary provider failure")
+        return ProviderResult("ok", {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", flaky_complete)
+    assert await engine._provider_text(StageName.design, "sid", "rid", "prompt", {}, True) == "ok"
+    assert calls["n"] == 2
 
 
 def test_plan_devplan_content_matches_mock_provider_output(monkeypatch, tmp_path):
@@ -613,6 +689,88 @@ def test_pipeline_develop_uses_fake_pi_and_worktrees(monkeypatch, tmp_path):
         assert any(w["role"] == "orchestrator" for w in workers)
 
 
+def test_develop_pause_resume_requeues_running_worker(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("NEXUSSY_PROVIDER_MODE", "fake")
+    child = tmp_path / "fake_pi_pause.py"
+    child.write_text(
+        "import json, os, pathlib, sys, time\n"
+        "line=sys.stdin.readline()\n"
+        "msg=json.loads(line)\n"
+        "role=os.environ['NEXUSSY_WORKER_ROLE']\n"
+        "wt=pathlib.Path(os.environ['NEXUSSY_WORKTREE'])\n"
+        "marker=wt / '.resumed'\n"
+        "if not marker.exists():\n"
+        "    marker.write_text('first')\n"
+        "    time.sleep(10)\n"
+        "else:\n"
+        "    (wt / (role + '.txt')).write_text(role + ' resumed\\n')\n"
+        "    print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{'status':'ok'}}), flush=True)\n"
+    )
+    server.config = load_config({"swarm":{"default_worker_count":1}, "pi":{"shutdown_timeout_s":0}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Pause Resume","description":"backend","auto_approve_interview":True,"metadata":{"mock_provider":False,"fake_pi_command":sys.executable,"fake_pi_args":[str(child)],"worker_roles":["backend"]}}).json()
+        for _ in range(100):
+            ev = c.get("/events", params={"run_id": r["run_id"]}).json()
+            if any(e["type"] == "worker_task" and e["payload"].get("status") == "running" for e in ev): break
+            import time; time.sleep(.05)
+        import time; time.sleep(.2)
+        assert c.post("/pipeline/pause", json={"run_id":r["run_id"],"reason":"test pause"}).json()["status"] == "paused"
+        for _ in range(100):
+            ev = c.get("/events", params={"run_id": r["run_id"]}).json()
+            if any(e["type"] == "worker_task" and e["payload"].get("status") == "queued" for e in ev): break
+            import time; time.sleep(.05)
+        assert any(e["type"] == "worker_task" and e["payload"].get("status") == "queued" for e in ev)
+        assert c.post("/pipeline/resume", json={"run_id":r["run_id"]}).json()["status"] == "running"
+        ev = _wait_done(c, r["run_id"])
+        assert ev[-1]["payload"]["final_status"] == "passed"
+        statuses = [e["payload"].get("status") for e in ev if e["type"] == "worker_task"]
+        assert "queued" in statuses and statuses.count("running") >= 2 and "passed" in statuses
+
+
+def test_task_skip_emits_worker_task_and_updates_handoff(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Skip Task","description":"small api","auto_approve_interview":True,"stop_after_stage":"plan","metadata":{"mock_provider":True}}).json()
+        ev = _wait_done(c, r["run_id"])
+        assert ev[-1]["payload"]["final_status"] == "passed"
+        asyncio.run(server.engine._persist_worker_task(r["run_id"], "backend-123", "task-123", 1, "Build backend", WorkerTaskStatus.running))
+        skipped = c.post("/pipeline/skip", json={"run_id":r["run_id"],"stage":"develop","task_id":"task-123","reason":"user chose alternate path"})
+        assert skipped.status_code == 200, skipped.text
+        ev = c.get("/events", params={"run_id": r["run_id"]}).json()
+        assert any(e["type"] == "worker_task" and e["payload"].get("task_id") == "task-123" and e["payload"].get("status") == "skipped" for e in ev)
+        handoff = c.get("/pipeline/artifacts/handoff", params={"session_id":r["session_id"]}).json()["content_text"]
+        assert "Skipped task task-123: user chose alternate path" in handoff
+
+
+def test_blocker_resolution_restores_previous_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Blocker Restore","description":"small api","auto_approve_interview":True,"stop_after_stage":"plan","metadata":{"mock_provider":True}}).json()
+        _wait_done(c, r["run_id"])
+        before = c.get("/pipeline/status", params={"run_id":r["run_id"]}).json()["run"]["status"]
+        assert before == "passed"
+        warning = c.post("/pipeline/blockers", json={"run_id":r["run_id"],"stage":"develop","severity":"warning","message":"heads up"}).json()
+        assert c.get("/pipeline/status", params={"run_id":r["run_id"]}).json()["run"]["status"] == "passed"
+        blocker = c.post("/pipeline/blockers", json={"run_id":r["run_id"],"stage":"develop","severity":"blocker","message":"blocked"}).json()
+        assert c.get("/pipeline/status", params={"run_id":r["run_id"]}).json()["run"]["status"] == "blocked"
+        assert c.post("/pipeline/blockers/resolve", json={"run_id":r["run_id"],"blocker_id":warning["blocker_id"]}).status_code == 200
+        assert c.get("/pipeline/status", params={"run_id":r["run_id"]}).json()["run"]["status"] == "blocked"
+        assert c.post("/pipeline/blockers/resolve", json={"run_id":r["run_id"],"blocker_id":blocker["blocker_id"]}).status_code == 200
+        assert c.get("/pipeline/status", params={"run_id":r["run_id"]}).json()["run"]["status"] == "passed"
+
+
 def test_develop_merge_conflict_lifecycle(monkeypatch, tmp_path):
     monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
     monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
@@ -655,6 +813,8 @@ async def test_sse_slow_client_receives_terminal_error(tmp_path):
     assert terminal.type == "pipeline_error"
     assert terminal.payload["error_code"] == "sse_client_slow"
     assert q not in engine.queues.get("rid", set())
+    persisted = await engine.replay("rid")
+    assert any(e.type == "pipeline_error" and e.payload["error_code"] == "sse_client_slow" for e in persisted)
 
 
 def test_path_and_secret_security(tmp_path):
@@ -664,3 +824,97 @@ def test_path_and_secret_security(tmp_path):
     link = root / "link"; link.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError): sanitize_path(str(link / "x"), [str(root)])
     assert "[REDACTED]" in scrub_log("OPENAI_API_KEY=sk-secretsecretsecret ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAfoo")
+
+
+def test_public_path_schemas_reject_escape_paths():
+    with pytest.raises(Exception):
+        ArtifactRef(kind="devplan", path="../devplan.md", sha256="a")
+    from nexussy.api.schemas import FileLock, ChangedFile
+    with pytest.raises(Exception):
+        FileLock(path="/tmp/x", worker_id="w", run_id="r")
+    with pytest.raises(Exception):
+        ChangedFile(path="a/../../x", status="modified")
+
+
+def test_safe_write_keeps_tmp_on_validation_failure(tmp_path):
+    (tmp_path / "handoff.md").write_text("original")
+    with pytest.raises(ValueError):
+        safe_write(str(tmp_path), "handoff.md", "missing anchors")
+    assert (tmp_path / "handoff.md").read_text() == "original"
+    assert (tmp_path / "handoff.md.tmp").read_text() == "missing anchors"
+
+
+@pytest.mark.asyncio
+async def test_project_db_initialized_for_session(tmp_path):
+    db = Database(str(tmp_path / "global.db")); await db.init()
+    cfg = load_config({"projects_dir": str(tmp_path / "projects")})
+    detail = await Engine(db, cfg).create_session(PipelineStartRequest(project_name="DB Demo", description="x"))
+    project_db = Path(detail.project_root) / ".nexussy" / "state.db"
+    assert project_db.exists()
+    con = sqlite3.connect(project_db)
+    try:
+        assert con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").fetchone()
+    finally:
+        con.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_emits_retryable_pipeline_error(monkeypatch, tmp_path):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    cfg = load_config({"projects_dir": str(tmp_path / "projects"), "providers":{"default_model":"openai/gpt-5.5-fast", "allow_fallback":True}})
+    def available(model, allow_mock=False):
+        return model == "openai/gpt-5.5-fast"
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+        return ProviderResult("[]", {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"fake","model":model})
+    monkeypatch.setattr("nexussy.pipeline.engine.model_available", available)
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)
+    engine = Engine(db, cfg)
+    res = await engine.start(PipelineStartRequest(project_name="Fallback", description="small api", stop_after_stage="interview", auto_approve_interview=True, model_overrides={StageName.interview:"missing/model"}))
+    events = await engine.replay(res.run_id)
+    assert any(e.type == "pipeline_error" and e.payload["retryable"] is True and e.payload["details"]["fallback_model"] == "openai/gpt-5.5-fast" for e in events)
+    engine.tasks[res.run_id].cancel()
+
+
+@pytest.mark.asyncio
+async def test_worker_tool_permission_failure_emits_tool_output(tmp_path):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    cfg = load_config({"projects_dir": str(tmp_path / "projects")})
+    engine = Engine(db, cfg)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
+    worker = server.Worker(worker_id="analyst-1", run_id="rid", role=WorkerRole.analyst, status=server.WorkerStatus.running, worktree_path=str(tmp_path), branch_name="worker/analyst-1", model="openai/gpt-5.5-fast")
+    await db.write(lambda con: con.execute("INSERT INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(worker.worker_id,worker.run_id,worker.role,worker.status,worker.task_id,worker.worktree_path,worker.branch_name,worker.pid,worker.usage.model_dump_json(),None,worker.model_dump_json())))
+    result = await engine.execute_worker_tool("rid", "analyst-1", ToolName.write_file, {"path":"src/app.py"})
+    assert result["success"] is False
+    events = await engine.replay("rid")
+    assert any(e.type == "tool_output" and e.payload["success"] is False for e in events)
+
+
+@pytest.mark.asyncio
+async def test_file_lock_claim_emits_claimed_and_waiting(tmp_path):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    seen=[]
+    async def emit(kind, lock):
+        seen.append((kind, lock.status))
+    await claim_file(db, "rid", "src/app.py", "w1", emit=emit)
+    with pytest.raises(TimeoutError):
+        await claim_file(db, "rid", "src/app.py", "w2", timeout_s=0, retry_ms=1, emit=emit)
+    assert ("file_claimed", "claimed") in seen
+    assert ("file_lock_waiting", "waiting") in seen
+
+
+@pytest.mark.asyncio
+async def test_mcp_stdio_lists_tools():
+    from nexussy.mcp import call_stdio
+    class Reader:
+        def __init__(self): self.lines=[b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n', b'']
+        async def readline(self): return self.lines.pop(0)
+    class Writer:
+        def __init__(self): self.data=b""
+        def write(self, b): self.data += b
+        async def drain(self): pass
+        def close(self): pass
+    writer=Writer()
+    await call_stdio(Reader(), writer)
+    response=json.loads(writer.data.decode().splitlines()[0])
+    assert response["result"]["tools"]
