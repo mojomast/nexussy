@@ -57,6 +57,33 @@ class Engine:
     def invalidate_provider_cache(self):
         self.provider_env_cache=None
 
+    async def restore_interview_state(self) -> None:
+        """
+        On startup, detect any sessions that were mid-interview (have an
+        interview checkpoint but no active task) and mark them as failed so they
+        can be resubmitted rather than hanging forever.
+        """
+        rows = await self.db.read("SELECT run_id, session_id FROM runs WHERE status = 'running'", ())
+        for row in rows:
+            rid = row["run_id"]
+            sid = row["session_id"]
+            cps = await self.db.read(
+                "SELECT path FROM checkpoints WHERE run_id = ? AND stage = 'interview'",
+                (rid,),
+            )
+            if cps and rid not in self.tasks:
+                logger.warning(
+                    "Run %s found in 'running' state on startup with no active task - "
+                    "marking as failed. Resubmit via POST /pipeline/start with resume_run_id=%s",
+                    rid,
+                    rid,
+                )
+                await self.db.write(lambda con, r=rid: con.execute(
+                    "UPDATE runs SET status='failed', finished_at=? WHERE run_id=?",
+                    (now_utc().isoformat(), r),
+                ))
+                await transition_session_status(self.db, sid, SessionStatus.failed)
+
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
         def tx(con):

@@ -106,3 +106,9 @@ Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loop
 - Do not read full artifacts unless needed to debug corruption.
 - Do not discover contracts by reading another module's source code.
 - Do not depend on the `ussycode` repository.
+
+## Restart Recovery
+
+- On restart, runs left in `running` state with interview checkpoints and no active task are automatically marked `failed`.
+- Users should resubmit with `resume_run_id` pointing to the original run ID.
+- Interview answers already saved as checkpoints will be replayed automatically.

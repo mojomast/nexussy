@@ -90,6 +90,7 @@ async def _do_startup():
             "is NOT shared across workers. Run with --workers 1 to avoid data loss."
         )
     await db.init()
+    await engine.restore_interview_state()
     async def _cleanup_loop():
         while True:
             await asyncio.sleep(3600)
