@@ -33,12 +33,10 @@ from nexussy.providers import active_rate_limit, complete, configured_providers,
 from nexussy.security import sanitize_path
 from nexussy.session import now_utc
 
-config=None; db=None; engine=None; _startup_lock: asyncio.Lock | None = None
+config=None; db=None; engine=None
+_startup_lock: asyncio.Lock = asyncio.Lock()
 
 def _get_startup_lock() -> asyncio.Lock:
-    global _startup_lock
-    if _startup_lock is None:
-        _startup_lock = asyncio.Lock()
     return _startup_lock
 
 def cors_origins_for(cfg):
