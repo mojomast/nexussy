@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, re, pathlib
+import re, pathlib
 
 SECRET_PATTERNS = [
     re.compile(r"(sk-[A-Za-z0-9_-]{12,})"), re.compile(r"(Bearer\s+)[A-Za-z0-9._~-]+", re.I),

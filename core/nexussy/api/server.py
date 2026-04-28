@@ -29,7 +29,7 @@ from nexussy.mcp import call_tool, list_tools
 from nexussy.pipeline.engine import Engine
 from nexussy.pipeline.engine import ProviderStartError
 from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, provider_error_for_model, provider_for_model, secret_names, secret_summary, set_secret
-from nexussy.security import sanitize_path, sanitize_relative_path
+from nexussy.security import sanitize_path
 from nexussy.session import now_utc
 
 config=None; db=None; engine=None; _startup_lock: asyncio.Lock | None = None

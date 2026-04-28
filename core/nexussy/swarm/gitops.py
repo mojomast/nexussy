@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, hashlib, json, shutil, subprocess
+import asyncio, hashlib, shutil, subprocess
 from pathlib import Path
 
 from nexussy.api.schemas import ChangedFile, ChangedFilesManifest, MergeReport

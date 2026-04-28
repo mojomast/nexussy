@@ -1,5 +1,9 @@
 # nexussy
 
+[![CI](https://github.com/mojomast/nexussy/actions/workflows/ci.yml/badge.svg)](https://github.com/mojomast/nexussy/actions/workflows/ci.yml)
+[![Release](https://github.com/mojomast/nexussy/actions/workflows/release.yml/badge.svg)](https://github.com/mojomast/nexussy/actions/workflows/release.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+
 nexussy is a local software-delivery harness for running a complete AI-assisted development pipeline from one project request. It turns a project description into interview answers, design artifacts, a dev plan, review feedback, worker execution, merge reports, changed-file manifests, and handoff documents that another agent or human can continue from without needing the original chat history.
 
 It is the fifth-generation Ussyverse coding harness lineage:

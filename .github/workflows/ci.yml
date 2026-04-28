@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "fix/**", "feat/**", "chore/**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  python:
+    name: Python Tests (core)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check nexussy/
+
+      - name: Run core tests
+        run: python3 -m pytest tests/ -v --tb=short --cov=nexussy --cov-report=term-missing
+
+  web-tests:
+    name: Web Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install core
+        run: pip install -e "core/[dev]"
+
+      - name: Run web tests
+        run: python3 -m pytest -q web/tests/
+
+  tui:
+    name: TUI Tests (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Type check
+        run: bun run typecheck
+
+      - name: Run TUI tests
+        run: bun test
+
+  smoke:
+    name: Ops Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install core
+        run: pip install -e "core/[dev]"
+
+      - name: Run ops smoke tests
+        run: bash ops_tests.sh
+
+  pi-smoke:
+    name: Bundled Pi JSON-RPC Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install core
+        run: pip install -e "core/[dev]"
+
+      - name: Pi JSON-RPC smoke test
+        run: |
+          echo '{"jsonrpc":"2.0","id":"test1","method":"agent.run","params":{"task":"list files","context":""}}' | \
+          timeout 15 python3 -m nexussy.swarm.local_pi_worker | \
+          python3 -c "
+          import sys, json
+          lines = sys.stdin.read().strip().splitlines()
+          found_result = any(
+              json.loads(l).get('result') or json.loads(l).get('error')
+              for l in lines if l.strip()
+          )
+          assert found_result, f'No result/error in output: {lines}'
+          print('Pi JSON-RPC smoke: PASS')
+          "

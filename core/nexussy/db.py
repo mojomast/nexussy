@@ -6,7 +6,7 @@ writer conflicts. Reads intentionally do not take that lock; callers that need
 strict read-after-write visibility must await the preceding write first.
 """
 
-import asyncio, json, pathlib, sqlite3, time
+import asyncio, pathlib, sqlite3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, project_slug TEXT UNIQUE, project_name TEXT, status TEXT, created_at TEXT, updated_at TEXT, detail_json TEXT);

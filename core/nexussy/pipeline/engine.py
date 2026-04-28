@@ -1,7 +1,7 @@
 from __future__ import annotations
-import asyncio, json, logging, os, re, pathlib, shutil, hashlib
+import asyncio, json, logging, os, re, pathlib, hashlib
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from uuid import uuid4
 from nexussy.api.schemas import (
     ArtifactRef, ArtifactUpdatedPayload, ChangedFilesManifest, ComplexityLevel,
@@ -476,7 +476,7 @@ class Engine:
         return []
 
     async def _develop_stage(self, req, detail, rid, root, selected_models, allow_mock):
-        sid=detail.session.session_id; main=pathlib.Path(root); workers_root=main.parent/"workers"; artifacts_dir=main/".nexussy"/"artifacts"
+        sid=detail.session.session_id; main=pathlib.Path(root); workers_root=main.parent/"workers"
         if allow_mock and not req.metadata.get("fake_pi_command"):
             orch_model=self.config.stages.develop.orchestrator_model or selected_models.get("develop") or self.config.providers.default_model
             orch=Worker(worker_id="orchestrator-abcdef",run_id=rid,role=WorkerRole.orchestrator,status=WorkerStatus.finished,worktree_path=str(workers_root/"orchestrator-abcdef"),branch_name="worker/orchestrator-abcdef",model=orch_model)
