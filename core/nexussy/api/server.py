@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, pathlib, yaml
+import asyncio, json, os, pathlib, shutil, yaml
 from datetime import datetime, timezone
 from uuid import uuid4
 from starlette.applications import Starlette
@@ -13,23 +13,53 @@ from nexussy import __version__
 from nexussy.api.schemas import *
 from nexussy.config import load_config
 from nexussy.db import Database
+from nexussy.mcp import call_tool, list_tools
 from nexussy.pipeline.engine import Engine
 from nexussy.pipeline.engine import ProviderStartError
 from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, provider_error_for_model, provider_for_model, secret_names, secret_summary, set_secret
-from nexussy.security import sanitize_relative_path
+from nexussy.security import sanitize_path, sanitize_relative_path
 
-config=load_config(); db=Database(config.database.global_path, config.database.busy_timeout_ms, config.database.write_retry_count, config.database.write_retry_base_ms); engine=Engine(db,config)
+config=None; db=None; engine=None
+
+async def startup():
+    global config, db, engine
+    loaded=load_config()
+    # Tests may pre-seed module state with an override config that points at the
+    # same isolated database. Keep that explicit state; otherwise each lifespan
+    # startup reloads from the current environment/config file.
+    config=config if config is not None and config.database.global_path == loaded.database.global_path else loaded
+    db=Database(config.database.global_path, config.database.busy_timeout_ms, config.database.write_retry_count, config.database.write_retry_base_ms)
+    engine=Engine(db,config)
+    await db.init()
 
 def dump(model): return json.loads(model.model_dump_json()) if hasattr(model,"model_dump_json") else model
 def err(code:ErrorCode, msg:str, status:int=400, details=None): return JSONResponse(dump(ErrorResponse(error_code=code,message=msg,details=details or {})), status_code=status)
+def retry_after_header(error: ErrorResponse) -> dict[str, str]:
+    if error.error_code != ErrorCode.rate_limited:
+        return {}
+    reset_at = error.details.get("reset_at") if isinstance(error.details, dict) else None
+    if not reset_at:
+        return {}
+    try:
+        dt = reset_at if isinstance(reset_at, datetime) else datetime.fromisoformat(str(reset_at).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return {"Retry-After": str(int(dt.timestamp()))}
+    except (TypeError, ValueError, OverflowError):
+        return {}
 async def body(request, cls):
     try: return cls.model_validate(await request.json())
     except json.JSONDecodeError as e: raise ValueError([{"loc":["body"],"msg":"invalid JSON","type":"json_invalid","ctx":{"error":str(e)}}])
     except ValidationError as e: raise ValueError(e.errors())
 
-async def ensure_db(): await db.init()
+async def ensure_db():
+    if config is None or db is None or engine is None:
+        await startup()
+    await db.init()
 async def auth(request):
     if request.url.path == "/health": return None
+    if config is None or db is None or engine is None:
+        await startup()
     if config.auth.enabled and request.headers.get(config.auth.header_name) != os.environ.get(config.auth.api_key_env):
         return err(ErrorCode.unauthorized,"unauthorized",401)
 
@@ -40,7 +70,7 @@ async def endpoint(request, func):
     except ValueError as e: return err(ErrorCode.validation_error,"validation error",400,{"errors":e.args[0] if e.args else str(e)})
     except ProviderStartError as e:
         code = e.error.error_code.value if hasattr(e.error.error_code, "value") else e.error.error_code
-        return JSONResponse(dump(e.error), status_code=503 if code in ("provider_unavailable", "model_unavailable") else 429)
+        return JSONResponse(dump(e.error), status_code=503 if code in ("provider_unavailable", "model_unavailable") else 429, headers=retry_after_header(e.error))
     except KeyError as e: return err(ErrorCode.not_found,"not found",404,{"key":str(e)})
     except Exception as e: return err(ErrorCode.internal_error,"internal error",500,{"error":str(e)})
 
@@ -49,7 +79,8 @@ async def health(request):
         ok=True
         try: await ensure_db()
         except Exception: ok=False
-        return JSONResponse(dump(HealthResponse(version=__version__,db_ok=ok,providers_configured=configured_providers(service=config.security.keyring_service),pi_available=False)))
+        pi_available = config.pi.command == "pi" or shutil.which(config.pi.command) is not None
+        return JSONResponse(dump(HealthResponse(version=__version__,db_ok=ok,providers_configured=configured_providers(service=config.security.keyring_service),pi_available=pi_available)))
     return await endpoint(request, inner)
 
 async def sessions_create(request):
@@ -70,13 +101,27 @@ async def sessions_delete(request):
     async def inner(r):
         sid=r.path_params["session_id"]; rows=await db.read("SELECT detail_json FROM sessions WHERE session_id=?",(sid,));
         if not rows: raise KeyError("session")
+        detail=SessionDetail.model_validate_json(rows[0]["detail_json"])
         await db.write(lambda con: con.execute("DELETE FROM sessions WHERE session_id=?",(sid,)))
-        if r.query_params.get("delete_files") == "true": pass
+        if r.query_params.get("delete_files") == "true":
+            project_root=sanitize_path(detail.project_root, [config.projects_dir])
+            if project_root.exists():
+                shutil.rmtree(project_root)
         return JSONResponse(dump(ControlResponse(run_id=sid,status=RunStatus.cancelled,message="session deleted")))
     return await endpoint(request, inner)
 
 async def pipeline_start(request):
     async def inner(r): return JSONResponse(dump(await engine.start(await body(r,PipelineStartRequest))))
+    return await endpoint(request, inner)
+
+async def mcp_tools(request):
+    async def inner(r): return JSONResponse({"tools": list_tools()})
+    return await endpoint(request, inner)
+
+async def mcp_call(request):
+    async def inner(r):
+        data=await r.json(); result=await call_tool(data["name"], data.get("arguments") or {}, engine=engine, db=db)
+        return JSONResponse(dump(result))
     return await endpoint(request, inner)
 async def interview_answer(request):
     async def inner(r):
@@ -133,10 +178,12 @@ async def control_resume(request):
     return await endpoint(request, inner)
 async def control_cancel(request):
     async def inner(r):
-        data=await r.json(); rid=data["run_id"]; t=engine.tasks.get(rid); 
-        if t: t.cancel()
+        data=await r.json(); rid=data["run_id"];
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(rid,));
-        if rows: await engine.emit(SSEEventType.pause_state_changed,rows[0]["session_id"],rid,PausePayload(paused=False,reason=data.get("reason","cancelled")))
+        if not rows: raise KeyError("run")
+        t=engine.tasks.get(rid)
+        if t: t.cancel()
+        await engine.emit(SSEEventType.pause_state_changed,rows[0]["session_id"],rid,PausePayload(paused=False,reason=data.get("reason","cancelled")))
         await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("cancelled",rid)))
         return JSONResponse(dump(ControlResponse(run_id=rid,status=RunStatus.cancelled,message=data.get("reason","cancelled"))))
     return await endpoint(request, inner)
@@ -311,8 +358,10 @@ async def events(request):
     async def inner(r): return JSONResponse([dump(e) for e in await engine.replay(r.query_params["run_id"], None, int(r.query_params.get("after_sequence",0)), int(r.query_params.get("limit",500)))])
     return await endpoint(request, inner)
 
-routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
-app=Starlette(routes=routes,on_startup=[ensure_db])
-app.add_middleware(CORSMiddleware, allow_origins=config.core.cors_allow_origins, allow_methods=["*"], allow_headers=["*"])
+routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/mcp/tools',mcp_tools),Route('/mcp/call',mcp_call,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
+app=Starlette(routes=routes,on_startup=[startup])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-if __name__ == "__main__": uvicorn.run(app, host=config.core.host, port=config.core.port)
+if __name__ == "__main__":
+    cfg=load_config()
+    uvicorn.run(app, host=cfg.core.host, port=cfg.core.port)

@@ -235,7 +235,13 @@ write_systemd_user() {
   unit_dir="$HOME/.config/systemd/user"
   python_path=$(command -v "$PYTHON")
   mkdir -p "$unit_dir"
-  cat > "$unit_dir/nexussy-core.service" <<EOF
+  # Idempotency contract: generated user units are created only when absent so
+  # rerunning install does not overwrite local systemd customizations.
+  if [ -e "$unit_dir/nexussy-core.service" ]; then
+    info "Keeping existing systemd user unit: $unit_dir/nexussy-core.service"
+  else
+    tmp="$unit_dir/nexussy-core.service.tmp.$$"
+    cat > "$tmp" <<EOF
 [Unit]
 Description=nexussy core
 
@@ -249,7 +255,14 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 EOF
-  cat > "$unit_dir/nexussy-web.service" <<EOF
+    mv "$tmp" "$unit_dir/nexussy-core.service"
+    info "Created systemd user unit: $unit_dir/nexussy-core.service"
+  fi
+  if [ -e "$unit_dir/nexussy-web.service" ]; then
+    info "Keeping existing systemd user unit: $unit_dir/nexussy-web.service"
+  else
+    tmp="$unit_dir/nexussy-web.service.tmp.$$"
+    cat > "$tmp" <<EOF
 [Unit]
 Description=nexussy web
 After=nexussy-core.service
@@ -264,7 +277,9 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 EOF
-  info "Created systemd user units in $unit_dir"
+    mv "$tmp" "$unit_dir/nexussy-web.service"
+    info "Created systemd user unit: $unit_dir/nexussy-web.service"
+  fi
   info "Enable with: systemctl --user daemon-reload && systemctl --user enable --now nexussy-core.service nexussy-web.service"
 }
 

@@ -5,6 +5,9 @@ SECRET_PATTERNS = [
     re.compile(r"(sk-[A-Za-z0-9_-]{12,})"), re.compile(r"(Bearer\s+)[A-Za-z0-9._~-]+", re.I),
     re.compile(r"(api[_-]?key\s*[=:]\s*)\S+", re.I), re.compile(r"(password\s*[=:]\s*)\S+", re.I),
     re.compile(r"((?:OPENAI|ANTHROPIC|OPENROUTER|GROQ|GEMINI|MISTRAL|TOGETHER|FIREWORKS|XAI|GLM|ZAI|REQUESTY|AETHER)_API_KEY\s*[=:]\s*)\S+", re.I),
+    re.compile(r"(gh[ps]_[A-Za-z0-9_]{36,})"),
+    re.compile(r"\b[a-f0-9]{40,63}\b"),
+    re.compile(r"((?i:(?:token|secret|access_token)\s*[=:]\s*))[a-f0-9]{40,64}\b"),
     re.compile(r"(ssh-rsa\s+|ssh-ed25519\s+)[A-Za-z0-9+/=]+(?:\s+\S+)?", re.I),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
 ]

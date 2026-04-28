@@ -49,12 +49,18 @@ class PiRPCProcess:
             if self.process.returncode is not None:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
                 return
-            os.killpg(self.process.pid, signal.SIGTERM)
+            if sys.platform == "win32":
+                self.process.terminate()
+            else:
+                os.killpg(self.process.pid, signal.SIGTERM)
             await asyncio.wait_for(self.process.wait(), timeout_s)
         except ProcessLookupError:
             pass
         except asyncio.TimeoutError:
-            os.killpg(self.process.pid, signal.SIGKILL)
+            if sys.platform == "win32":
+                self.process.kill()
+            else:
+                os.killpg(self.process.pid, signal.SIGKILL)
             await self.process.wait()
         await asyncio.gather(*self._tasks, return_exceptions=True)
 

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+from nexussy.session import now_utc
 
 
 def new_id() -> str:

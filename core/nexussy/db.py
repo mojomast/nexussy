@@ -43,5 +43,8 @@ class Database:
                     except Exception: pass
                     await asyncio.sleep(self.retry*(2**i))
             raise last
+    # Reads intentionally do not acquire the process write lock. SQLite WAL
+    # allows concurrent readers, but callers needing strict read-after-write
+    # visibility should await the preceding write before issuing the read.
     async def read(self, sql, args=()):
         con=self.connect(); rows=[dict(r) for r in con.execute(sql,args).fetchall()]; con.close(); return rows

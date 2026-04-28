@@ -1,4 +1,4 @@
-import asyncio, json
+import asyncio, contextlib, json
 
 import httpx
 import pytest
@@ -111,6 +111,29 @@ async def test_interview_blocks_pipeline_when_manual(tmp_path, monkeypatch):
             if any(e["type"] == "stage_transition" and e["payload"].get("to_stage") == "design" for e in events): break
             await asyncio.sleep(.02)
         assert any(e["type"] == "stage_transition" and e["payload"].get("to_stage") == "design" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_cancel_waiting_interview_cleans_waiter_state(tmp_path, monkeypatch):
+    await reset_core(tmp_path, monkeypatch)
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete_factory([]))
+    async with await client() as c:
+        r=await c.post("/pipeline/start", json={"project_name":"CancelManual","description":"Build a TypeScript web app","auto_approve_interview":False,"metadata":{"mock_provider":True}})
+        assert r.status_code == 200, r.text
+        body=r.json()
+        for _ in range(100):
+            status=(await c.get("/pipeline/status", params={"run_id":body["run_id"]})).json()
+            if status["run"]["status"] == "paused": break
+            await asyncio.sleep(.02)
+        assert body["session_id"] in server.engine.interview_waiters
+        assert body["session_id"] in server.engine.interview_questions
+        cancelled=await c.post("/pipeline/cancel", json={"run_id":body["run_id"],"reason":"test cancel"})
+        assert cancelled.status_code == 200, cancelled.text
+        task=server.engine.tasks[body["run_id"]]
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        assert body["session_id"] not in server.engine.interview_waiters
+        assert body["session_id"] not in server.engine.interview_questions
 
 
 @pytest.mark.asyncio

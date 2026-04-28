@@ -134,9 +134,25 @@ curl -s http://127.0.0.1:7771/pipeline/<session_id>/interview/answer \
 
 After every question has a non-empty answer, the pipeline resumes into design with the interview summary injected into downstream prompts.
 
+## Validation, review, and resume
+
+The validate and review stages use the configured provider instead of fixed stubs. Validate checks the design draft for completeness, consistency, dependencies, risks, and test strategy, then writes `validated_design` and `validation_report`. Review checks `devplan` and `handoff` for gaps, ambiguous assignments, and development risks, then writes `review_report`. Failed validate/review reports retry through the existing design/plan correction loops until the configured iteration limit is reached.
+
+The plan stage writes the provider-generated `devplan` body when it includes the required anchors. If the provider omits `NEXT_TASK_GROUP` anchors, core repairs the first checklist it can find or falls back to a safe anchored template and emits a warning event.
+
+Core persists stage checkpoints and supports resume requests with `resume_run_id`. When a later checkpoint exists, the resumed run starts after the latest checkpointed stage instead of replaying completed stages.
+
+## MCP tools
+
+Core exposes a minimal MCP tool surface for external agents:
+
+- `GET /mcp/tools` lists registered tools and their `inputSchema` values.
+- `POST /mcp/call` invokes a tool by name with `arguments`.
+- Built-in tools include `nexussy_start_pipeline` and `nexussy_get_status`.
+
 ## Mock mode and production gates
 
-nexussy can be exercised in explicit mock mode with request metadata such as `{"metadata":{"mock_provider":true}}`; this is suitable for local UI and pipeline smoke checks without provider secrets. Deterministic production-path provider testing can use `NEXUSSY_PROVIDER_MODE=fake`. Production provider execution uses LiteLLM and requires at least one configured provider key in `~/.nexussy/.env` or the OS keyring. Production swarm development uses the Pi RPC subprocess adapter and requires the `pi` command (or `NEXUSSY_PI_COMMAND`) to be installed for live Pi workers. `./nexussy.sh doctor` reports provider-key and Pi readiness without crashing.
+nexussy can be exercised in explicit mock mode with request metadata such as `{"metadata":{"mock_provider":true}}`; this is suitable for local UI and pipeline smoke checks without provider secrets. Deterministic production-path provider testing can use `NEXUSSY_PROVIDER_MODE=fake`. Production provider execution uses LiteLLM and requires at least one configured provider key in `~/.nexussy/.env` or the OS keyring. Rate-limited provider starts return `429` with `Retry-After` when a reset time is known. Production swarm development uses the Pi RPC subprocess adapter and requires the `pi` command (or `NEXUSSY_PI_COMMAND`) to be installed for live Pi workers. `./nexussy.sh doctor` reports provider-key and Pi readiness without crashing.
 
 Missing provider credentials must fail explicitly with the spec-defined provider/model error and must not silently run mock mode.
 
