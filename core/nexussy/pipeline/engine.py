@@ -43,7 +43,7 @@ def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
 
 class Engine:
     def __init__(self, db, config):
-        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}
+        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock()
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); seq=rows[0]["n"]
         env=EventEnvelope(sequence=seq,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
@@ -162,6 +162,7 @@ class Engine:
             raise
         except Exception as e:
             er=ErrorResponse(error_code=ErrorCode.stage_failed,message=str(e),retryable=False)
+            self.paused.pop(run.run_id, None)
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=? WHERE run_id=?",("failed",now_utc().isoformat(),run.run_id)))
             await self.emit(SSEEventType.pipeline_error, detail.session.session_id, run.run_id, er)
             await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.failed,summary="pipeline failed",artifacts=artifacts,usage=TokenUsage(),error=er))
@@ -400,6 +401,7 @@ class Engine:
                     answered=await asyncio.wait_for(fut, timeout=timeout_s)
                 except asyncio.TimeoutError:
                     self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
+                    self.paused.pop(rid,None)
                     raise RuntimeError("interview answer timeout - user did not respond in time")
                 self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
             ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=answered,requirements=[qa.answer for qa in answered])
@@ -485,7 +487,10 @@ class Engine:
 
     async def _run_single_worker(self, req, detail, rid, root, role, idx, context):
         sid=context["sid"]; main=context["main"]; workers_root=context["workers_root"]; base=context["base"]; cfg=context["cfg"]; selected_models=context["selected_models"]
-        wid=f"{role.value}-{uuid4().hex[:6]}"; wt, branch=create_worktree(str(main), str(workers_root), wid, base); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_created,worker_id=wid,branch_name=branch,message="worktree created"))
+        wid=f"{role.value}-{uuid4().hex[:6]}"
+        async with self.git_lock:
+            wt, branch=create_worktree(str(main), str(workers_root), wid, base)
+        await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_created,worker_id=wid,branch_name=branch,message="worktree created"))
         worker=Worker(worker_id=wid,run_id=rid,role=role,status=WorkerStatus.running,task_id=f"task-{uuid4().hex[:6]}",task_title=f"Develop task {idx}",worktree_path=wt,branch_name=branch,model=selected_models.get("develop") or self.config.stages.develop.model)
         await self._persist_worker(worker); await self.emit(SSEEventType.worker_spawned,sid,rid,worker)
         await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
