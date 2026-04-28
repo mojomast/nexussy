@@ -8,7 +8,7 @@ from nexussy.api.schemas import ErrorCode, ErrorResponse, SecretSummary
 
 logger = logging.getLogger(__name__)
 
-DISCOVERY = {"OPENAI_API_KEY":"openai", "ANTHROPIC_API_KEY":"anthropic", "OPENROUTER_API_KEY":"openrouter", "GROQ_API_KEY":"groq", "GEMINI_API_KEY":"google", "MISTRAL_API_KEY":"mistral", "TOGETHER_API_KEY":"together", "FIREWORKS_API_KEY":"fireworks", "XAI_API_KEY":"xai", "GLM_API_KEY":"zai", "ZAI_API_KEY":"zai", "REQUESTY_API_KEY":"requesty", "AETHER_API_KEY":"aether", "OLLAMA_BASE_URL":"ollama"}
+DISCOVERY = {"OPENAI_API_KEY":"openai", "ANTHROPIC_API_KEY":"anthropic", "OPENROUTER_API_KEY":"openrouter", "GROQ_API_KEY":"groq", "GEMINI_API_KEY":"google", "MISTRAL_API_KEY":"mistral", "TOGETHER_API_KEY":"together", "FIREWORKS_API_KEY":"fireworks", "XAI_API_KEY":"xai", "GLM_API_KEY":"zai", "ZAI_API_KEY":"zai", "REQUESTY_API_KEY":"requesty", "AETHER_API_KEY":"aether", "OLLAMA_BASE_URL":"ollama"}  # GLM is an alias for ZAI provider.
 
 def secret_names() -> list[str]:
     return sorted(DISCOVERY)

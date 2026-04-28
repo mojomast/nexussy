@@ -16,7 +16,7 @@ from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
-from nexussy.providers import delete_secret
+from nexussy.providers import DISCOVERY, delete_secret
 from nexussy.providers import ProviderResult
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
@@ -73,6 +73,11 @@ def test_provider_model_precedence_and_worker_override(monkeypatch):
     cfg = load_config({"providers":{"default_model":"openai/default"}})
     assert select_stage_model(cfg, "design") == "anthropic/claude-test"
     assert select_stage_model(cfg, "design", {"design":"openrouter/request"}) == "openrouter/request"
+
+
+def test_glm_key_is_zai_provider_alias():
+    assert DISCOVERY["GLM_API_KEY"] == "zai"
+    assert DISCOVERY["ZAI_API_KEY"] == "zai"
 
 
 def test_complexity_uses_word_boundary_signals():
