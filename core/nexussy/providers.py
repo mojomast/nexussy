@@ -1,10 +1,12 @@
 from __future__ import annotations
-import asyncio, os, queue, threading
+import asyncio, logging, os, queue, threading
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from nexussy.api.schemas import ErrorCode, ErrorResponse, SecretSummary
+
+logger = logging.getLogger(__name__)
 
 DISCOVERY = {"OPENAI_API_KEY":"openai", "ANTHROPIC_API_KEY":"anthropic", "OPENROUTER_API_KEY":"openrouter", "GROQ_API_KEY":"groq", "GEMINI_API_KEY":"google", "MISTRAL_API_KEY":"mistral", "TOGETHER_API_KEY":"together", "FIREWORKS_API_KEY":"fireworks", "XAI_API_KEY":"xai", "GLM_API_KEY":"zai", "ZAI_API_KEY":"zai", "REQUESTY_API_KEY":"requesty", "AETHER_API_KEY":"aether", "OLLAMA_BASE_URL":"ollama"}
 
@@ -95,7 +97,7 @@ def secret_summary(name: str, *, env: dict | None = None, env_path: Path | None 
     if env.get(name):
         return SecretSummary(name=name, source="env", configured=True)
     if read_env_file(env_path).get(name):
-        return SecretSummary(name=name, source="config", configured=True)
+        return SecretSummary(name=name, source="file", configured=True)
     return SecretSummary(name=name, source="env", configured=False)
 
 def set_secret(name: str, value: str, *, env_path: Path | None = None, service: str = "nexussy") -> SecretSummary:
@@ -109,9 +111,11 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None, service: 
         if stored is not sentinel:
             os.environ[name] = value
             return SecretSummary(name=name, source="keyring", configured=True, updated_at=datetime.now(timezone.utc))
-    _write_env_file_value(env_path or env_file_path(), name, value)
+    target_path = env_path or env_file_path()
+    logger.warning("keyring unavailable; secret %s will be stored as plaintext in %s", name, target_path)
+    _write_env_file_value(target_path, name, value)
     os.environ[name] = value
-    return SecretSummary(name=name, source="config", configured=True, updated_at=datetime.now(timezone.utc))
+    return SecretSummary(name=name, source="file", configured=True, updated_at=datetime.now(timezone.utc))
 
 def delete_secret(name: str, *, env_path: Path | None = None, service: str = "nexussy") -> bool:
     validate_secret_name(name)
@@ -187,7 +191,7 @@ class ProviderResult:
     text: str
     usage: dict
 
-async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = False, timeout_s: int = 120) -> ProviderResult:
+async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = False, timeout_s: int = 120, _env: dict | None = None) -> ProviderResult:
     if allow_mock:
         return ProviderResult(text=f"mock {stage} output for {prompt[:40]}", usage={"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
     if os.environ.get("NEXUSSY_PROVIDER_MODE") == "fake":
@@ -196,7 +200,7 @@ async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = Fa
         import litellm
     except Exception as e:
         raise RuntimeError("LiteLLM is not installed") from e
-    call_env = {k:v for k,v in effective_secret_env().items() if k in DISCOVERY and v}
+    call_env = {k:v for k,v in (_env or effective_secret_env()).items() if k in DISCOVERY and v}
     provider = provider_for_model(model)
     call_kwargs = {}
     for key, name in DISCOVERY.items():

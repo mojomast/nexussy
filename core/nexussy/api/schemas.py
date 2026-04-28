@@ -217,7 +217,7 @@ class NexussyConfig(StrictModel):
 
 class HealthResponse(StrictModel):
     ok:bool=True; status:str="ok"; version:str; contract_version:str="1.0"; db_ok:bool; providers_configured:list[str]=Field(default_factory=list); pi_available:bool=False
-class SecretSummary(StrictModel): name:str; source:Literal["keyring","env","config"]; configured:bool; updated_at:datetime|None=None
+class SecretSummary(StrictModel): name:str; source:Literal["keyring","env","file"]; configured:bool; updated_at:datetime|None=None
 class MemoryEntryCreateRequest(StrictModel): session_id:str|None=None; key:str; value:str; tags:list[str]=Field(default_factory=list)
 class MemoryEntry(StrictModel): memory_id:str=Field(default_factory=new_id); session_id:str|None=None; key:str; value:str; tags:list[str]=Field(default_factory=list); created_at:datetime=Field(default_factory=now_utc); updated_at:datetime=Field(default_factory=now_utc)
 class GraphNode(StrictModel): id:str; label:str; kind:Literal["session","run","stage","worker","artifact","file","task"]; status:str|None=None; metadata:dict[str,JsonValue]=Field(default_factory=dict)

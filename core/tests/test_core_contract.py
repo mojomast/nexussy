@@ -384,7 +384,7 @@ async def test_provider_text_retries_per_stage_config(tmp_path, monkeypatch):
     engine = Engine(db, cfg)
     await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","design",datetime.now(timezone.utc).isoformat(),None,"{}")))
     calls = {"n": 0}
-    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("temporary provider failure")
@@ -546,7 +546,7 @@ def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path)
         assert c.put("/secrets/ANTHROPIC_API_KEY", json={"value":123}).status_code == 400
         r = c.put("/secrets/ANTHROPIC_API_KEY", json={"value":"sk-anthropic-secret"})
         assert r.status_code == 200, r.text
-        assert r.json()["source"] == "config"
+        assert r.json()["source"] == "file"
         assert "ANTHROPIC_API_KEY=sk-anthropic-secret" in (tmp_path / ".env").read_text()
         assert "anthropic" in server.configured_providers()
 
@@ -567,7 +567,7 @@ def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
     with TestClient(app) as c:
         r = c.put("/secrets/OPENROUTER_API_KEY", json={"value":"sk-openrouter-secret"})
         assert r.status_code == 200, r.text
-        assert r.json()["source"] == "config"
+        assert r.json()["source"] == "file"
         assert "OPENROUTER_API_KEY=sk-openrouter-secret" in (tmp_path / ".env").read_text()
 
 
@@ -866,7 +866,7 @@ async def test_provider_fallback_emits_retryable_pipeline_error(monkeypatch, tmp
     cfg = load_config({"projects_dir": str(tmp_path / "projects"), "providers":{"default_model":"openai/gpt-5.5-fast", "allow_fallback":True}})
     def available(model, allow_mock=False):
         return model == "openai/gpt-5.5-fast"
-    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
         return ProviderResult("[]", {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"fake","model":model})
     monkeypatch.setattr("nexussy.pipeline.engine.model_available", available)
     monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)

@@ -16,7 +16,7 @@ from nexussy.api.schemas import (
 )
 from nexussy.artifacts.store import safe_write, artifact_path, sha256_text
 from nexussy.checkpoint import STAGE_ORDER, latest_checkpoint, resume_from_checkpoint, save_checkpoint
-from nexussy.providers import active_rate_limit, complete, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
+from nexussy.providers import active_rate_limit, complete, effective_secret_env, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
 from nexussy.session import now_utc
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees, remove_worktree
 from nexussy.swarm.locks import write_requires_lock
@@ -44,7 +44,7 @@ def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
 
 class Engine:
     def __init__(self, db, config):
-        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock()
+        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); seq=rows[0]["n"]
         env=EventEnvelope(sequence=seq,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
@@ -200,7 +200,9 @@ class Engine:
         last_error = None
         for attempt in range(max_retries):
             try:
-                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s)
+                if self.provider_env_cache is None:
+                    self.provider_env_cache = effective_secret_env()
+                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s, _env=self.provider_env_cache)
                 break
             except Exception as e:
                 last_error = e

@@ -29,7 +29,7 @@ async def reset_core(tmp_path, monkeypatch):
 
 
 def fake_complete_factory(prompts):
-    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
         prompts.append((stage, prompt))
         usage={"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model}
         if "Generate a JSON array" in prompt:
@@ -154,7 +154,7 @@ async def test_interview_artifact_in_design_prompt(tmp_path, monkeypatch):
 async def test_interview_provider_retry_and_question_checkpoint(tmp_path, monkeypatch):
     await reset_core(tmp_path, monkeypatch)
     attempts={"questions":0}
-    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120):
+    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
         if "Generate a JSON array" in prompt:
             attempts["questions"] += 1
             if attempts["questions"] == 1:
