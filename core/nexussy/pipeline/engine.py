@@ -461,7 +461,7 @@ class Engine:
 
     async def _spawn_workers(self, req, detail, rid, root, selected_models):
         sid=detail.session.session_id; main=pathlib.Path(root); workers_root=main.parent/"workers"
-        base=init_repo(str(main)); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.repo_initialized,commit_sha=base,message="repo initialized"))
+        base=await init_repo(str(main)); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.repo_initialized,commit_sha=base,message="repo initialized"))
         pi_cmd=req.metadata.get("fake_pi_command") or os.environ.get("NEXUSSY_PI_COMMAND") or self.config.pi.command
         cfg=self.config.model_copy(deep=True); cfg.pi.command=pi_cmd; cfg.pi.args=req.metadata.get("fake_pi_args") or cfg.pi.args
         requested_roles=req.metadata.get("worker_roles") or ["backend","frontend"]
@@ -482,7 +482,7 @@ class Engine:
         for result in worker_results:
             if isinstance(result, Exception): raise result
             await self._merge_single_worker(result, req, detail, rid, root, context)
-        prune_worktrees(str(main)); manifest=extract_changed_files(str(main),base,str(artifacts_dir/"changed-files"),rid)
+        await prune_worktrees(str(main)); manifest=await extract_changed_files(str(main),base,str(artifacts_dir/"changed-files"),rid)
         orch.status=WorkerStatus.finished; await self._persist_worker(orch); await self.emit(SSEEventType.worker_status,sid,rid,orch)
         merge_report=MergeReport(run_id=rid,base_commit=base,merge_commit=manifest.merge_commit,merged_workers=merged,passed=True)
         return [await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=True,workers=workers,tasks_total=len(workers),tasks_passed=len(workers)).model_dump_json(indent=2)), await self._save_art(rid,sid,root,"merge_report",merge_report.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"changed_files",manifest.model_dump_json(indent=2))]
@@ -491,7 +491,7 @@ class Engine:
         sid=context["sid"]; main=context["main"]; workers_root=context["workers_root"]; base=context["base"]; cfg=context["cfg"]; selected_models=context["selected_models"]
         wid=f"{role.value}-{uuid4().hex[:6]}"
         async with self.git_lock:
-            wt, branch=create_worktree(str(main), str(workers_root), wid, base)
+            wt, branch=await create_worktree(str(main), str(workers_root), wid, base)
         await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_created,worker_id=wid,branch_name=branch,message="worktree created"))
         worker=Worker(worker_id=wid,run_id=rid,role=role,status=WorkerStatus.running,task_id=f"task-{uuid4().hex[:6]}",task_title=f"Develop task {idx}",worktree_path=wt,branch_name=branch,model=selected_models.get("develop") or self.config.stages.develop.model)
         await self._persist_worker(worker); await self.emit(SSEEventType.worker_spawned,sid,rid,worker)
@@ -500,7 +500,7 @@ class Engine:
         await self._run_worker_rpc(rid, sid, worker, idx, cfg, role, main, wt)
         if not [p for p in pathlib.Path(wt).glob("**/*") if ".git" not in p.parts]:
             pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
-        commit=commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
+        commit=await commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
         return {"worker":worker,"idx":idx,"wid":wid,"wt":wt,"branch":branch,"commit":commit}
 
     async def _run_worker_rpc(self, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0):
@@ -536,13 +536,13 @@ class Engine:
         sid=context["sid"]; main=context["main"]; base=context["base"]; roles=context["roles"]; workers=context["workers"]; merged=context["merged"]
         worker=result["worker"]; idx=result["idx"]; wid=result["wid"]; wt=result["wt"]; branch=result["branch"]; commit=result["commit"]
         await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_started,worker_id=wid,branch_name=branch,commit_sha=commit,message="merge started"))
-        mr=merge_no_ff(str(main), branch)
+        mr=await merge_no_ff(str(main), branch)
         if not mr.passed:
             await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_conflict,worker_id=wid,branch_name=branch,paths=mr.conflicts,message="merge conflict"))
             await self._save_art(rid,sid,root,"merge_report",MergeReport(run_id=rid,base_commit=base,merged_workers=merged,conflicts=mr.conflicts,passed=False).model_dump_json(indent=2))
             await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=False,workers=workers+[worker],tasks_total=len(roles),tasks_passed=len(merged),tasks_failed=1).model_dump_json(indent=2))
             raise RuntimeError("merge conflict")
-        merged.append(wid); remove_worktree(str(main), wt, branch); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_removed,worker_id=wid,branch_name=branch,message="worktree removed"))
+        merged.append(wid); await remove_worktree(str(main), wt, branch); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_removed,worker_id=wid,branch_name=branch,message="worktree removed"))
         worker.status=WorkerStatus.finished; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker); workers.append(worker)
         await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.passed)
         await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.passed))

@@ -605,15 +605,16 @@ async def test_rate_limit_persistence_and_db_pragmas(tmp_path):
     assert (await active_rate_limit(db, "openai", "openai/x"))["reason"] == "quota"
 
 
-def test_git_worktree_lifecycle(tmp_path):
-    repo = tmp_path / "repo"; base = init_repo(str(repo))
-    wt1, br1 = create_worktree(str(repo), str(tmp_path / "workers"), "w1")
+@pytest.mark.asyncio
+async def test_git_worktree_lifecycle(tmp_path):
+    repo = tmp_path / "repo"; base = await init_repo(str(repo))
+    wt1, br1 = await create_worktree(str(repo), str(tmp_path / "workers"), "w1")
     Path(wt1, "a.txt").write_text("a")
-    commit_worker(wt1, "w1")
-    assert merge_no_ff(str(repo), br1).passed
-    manifest = extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
+    await commit_worker(wt1, "w1")
+    assert (await merge_no_ff(str(repo), br1)).passed
+    manifest = await extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
     assert [f.path for f in manifest.files] == ["a.txt"]
-    prune_worktrees(str(repo))
+    await prune_worktrees(str(repo))
 
 
 @pytest.mark.asyncio
