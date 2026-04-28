@@ -29,6 +29,7 @@
 - Cycle 6 / Coordinator pass: after external tools were installed, provider credentials were checked without printing secret values, a harmless real LiteLLM/default-provider call passed, Pi CLI version/help and the core Pi subprocess adapter with installed `pi --rpc` passed under timeouts, ShellCheck 0.11.0 passed on root scripts after lint fixes, and no blocked-external rows remain. Full verification passed across core, TUI, web, shell syntax, installer dry-run, and ops tests.
 - Code review fix pass: DB reads now close connections on exceptions, provider calls avoid global env mutation, CORS is configurable, manual interview waits time out, worker RPC execution runs in parallel before serialized merges, Pi frames are bounded, git SHA scrubbing is narrowed, empty worker commits are safe, schema imports are explicit, MCP calls validate bodies, README/AGENTS document security and worker extension points, and core tests pass after each phase.
 - Sequential review-fix subagent pass added DB indexes/finally cleanup, paused-state cleanup, serialized server startup, engine logging/RPC depth guard, async git subprocess calls, provider plaintext warnings/env caching, atomic SSE sequencing, production CORS enforcement, full MCP start schema, shell hardening, and CHANGELOG documentation; each subagent commit passed `python3 -m pytest -x -q` under `core/`.
+- README rewrite pass replaced the operational/reference-heavy README with a clearer product and operator guide covering purpose, pipeline lifecycle, architecture, install/launcher flows, TUI/web/MCP usage, providers, Pi workers, artifacts, security, configuration, and verification status. Checks passed: `python3 -m pytest -q core/tests` and `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -46,6 +47,7 @@
 - [✅] H6: Cycle 6 / Coordinator: live provider/Pi/shellcheck checks passed after external tool installation; R-073/R-074/R-079/R-081 upgraded to tested, with R-080 still partial for a full production provider plus live Pi develop run.
 - [✅] I1: Code review findings fixed across core reliability, security, async compatibility, worker orchestration, API validation, and docs; `python3 -m pytest -q core/tests` passed after each phase.
 - [✅] I2: Sequential subagent review-fix commits completed for DB, engine, server, gitops, providers, SSE, CORS/MCP, shell scripts, and docs; core tests passed after every commit.
+- [✅] I3: README rewritten into a clearer current-state product/operator guide; core tests and root shell syntax checks pass.
 <!-- NEXT_TASK_GROUP_END -->
 
 ## Definitions Of Done
