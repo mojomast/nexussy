@@ -1,4 +1,4 @@
-import asyncio, json, os, sqlite3, sys
+import asyncio, json, os, sqlite3, sys, threading, types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -94,6 +94,22 @@ def test_route_validation_error_is_normalized(monkeypatch, tmp_path):
         assert body["details"]["errors"]
 
 
+def test_config_put_persists_yaml(monkeypatch, tmp_path):
+    cfg_path = tmp_path / "nexussy.yaml"
+    monkeypatch.setenv("NEXUSSY_CONFIG", str(cfg_path))
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        cfg = c.get("/config").json()
+        cfg["providers"]["default_model"] = "openrouter/openai/gpt-4o-mini"
+        r = c.put("/config", json=cfg)
+        assert r.status_code == 200, r.text
+        assert "openrouter/openai/gpt-4o-mini" in cfg_path.read_text()
+        assert load_config().providers.default_model == "openrouter/openai/gpt-4o-mini"
+
+
 def test_validate_review_correction_loops_and_controls(monkeypatch, tmp_path):
     monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
     monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
@@ -102,7 +118,7 @@ def test_validate_review_correction_loops_and_controls(monkeypatch, tmp_path):
     server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
     server.engine = Engine(server.db, server.config)
     with TestClient(app) as c:
-        r = c.post("/pipeline/start", json={"project_name":"Loops","description":"small api","stop_after_stage":"review","metadata":{"validate_fail_iterations":1}})
+        r = c.post("/pipeline/start", json={"project_name":"Loops","description":"small api","auto_approve_interview":True,"stop_after_stage":"review","metadata":{"validate_fail_iterations":1}})
         assert r.status_code == 200, r.text
         body = r.json()
         for _ in range(100):
@@ -127,14 +143,14 @@ def test_validate_and_review_max_iteration_failures(monkeypatch, tmp_path):
     server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
     server.engine = Engine(server.db, server.config)
     with TestClient(app) as c:
-        r = c.post("/pipeline/start", json={"project_name":"ValidateFail","description":"small api","stop_after_stage":"validate","metadata":{"force_validate_fail":True}}).json()
+        r = c.post("/pipeline/start", json={"project_name":"ValidateFail","description":"small api","auto_approve_interview":True,"stop_after_stage":"validate","metadata":{"force_validate_fail":True}}).json()
         for _ in range(100):
             ev = c.get("/events", params={"run_id": r["run_id"]}).json()
             if ev and ev[-1]["type"] == "done": break
             import time; time.sleep(.05)
         assert ev[-1]["payload"]["final_status"] == "failed"
         assert any("validate max iterations" in json.dumps(e) for e in ev)
-        r2 = c.post("/pipeline/start", json={"project_name":"ReviewFail","description":"small api with tests","stop_after_stage":"review","metadata":{"force_review_fail":True}}).json()
+        r2 = c.post("/pipeline/start", json={"project_name":"ReviewFail","description":"small api with tests","auto_approve_interview":True,"stop_after_stage":"review","metadata":{"force_review_fail":True}}).json()
         for _ in range(100):
             ev2 = c.get("/events", params={"run_id": r2["run_id"]}).json()
             if ev2 and ev2[-1]["type"] == "done": break
@@ -145,12 +161,122 @@ def test_validate_and_review_max_iteration_failures(monkeypatch, tmp_path):
 
 def test_provider_mock_is_explicit(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False); monkeypatch.delenv("NEXUSSY_MOCK_PROVIDER", raising=False)
+    empty_env = tmp_path / ".env"; empty_env.write_text("")
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(empty_env))
     with TestClient(app) as c:
         r = c.post("/pipeline/start", json={"project_name":"No Provider","description":"x"})
         assert r.status_code == 503
         assert r.json()["error_code"] in ("model_unavailable", "provider_unavailable")
         ok = c.post("/pipeline/start", json={"project_name":"Mock Provider","description":"x","metadata":{"mock_provider":True}})
         assert ok.status_code == 200
+
+
+def test_assistant_reply_uses_configured_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROVIDER_MODE", "fake")
+    server.config = load_config({"providers":{"default_model":"openrouter/openai/gpt-4o-mini"}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/assistant/reply", json={"message":"hi"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["model"] == "openrouter/openai/gpt-4o-mini"
+        assert "fake provider chat output" in body["message"]
+
+
+def test_assistant_reply_requires_real_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("NEXUSSY_PROVIDER_MODE", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    empty_env = tmp_path / ".env"; empty_env.write_text("")
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(empty_env))
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"providers":{"default_model":"openrouter/openai/gpt-4o-mini"}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/assistant/reply", json={"message":"hi"})
+        assert r.status_code == 503
+        assert r.json()["error_code"] == "model_unavailable"
+
+
+def test_provider_keys_load_from_env_file(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-file-secret\n")
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(env))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert "openai" in server.configured_providers()
+
+
+def test_secrets_api_uses_keyring_without_echo(monkeypatch, tmp_path):
+    store = {}
+    fake_keyring = types.SimpleNamespace(
+        get_password=lambda service, name: store.get((service, name)),
+        set_password=lambda service, name, value: store.__setitem__((service, name), value),
+        delete_password=lambda service, name: store.pop((service, name)),
+    )
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        secret = "sk-test-secret-value"
+        r = c.put("/secrets/OPENAI_API_KEY", json={"value": secret})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["name"] == "OPENAI_API_KEY" and body["source"] == "keyring" and body["configured"] is True
+        assert secret not in r.text
+        listed = c.get("/secrets").json()
+        assert any(x["name"] == "OPENAI_API_KEY" and x["source"] == "keyring" and x["configured"] for x in listed)
+        assert secret not in json.dumps(listed)
+        assert c.delete("/secrets/OPENAI_API_KEY").status_code == 200
+        assert c.delete("/secrets/OPENAI_API_KEY").status_code == 404
+
+
+def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path):
+    class BrokenKeyring:
+        def get_password(self, service, name): raise RuntimeError("no keyring")
+        def set_password(self, service, name, value): raise RuntimeError("no keyring")
+        def delete_password(self, service, name): raise RuntimeError("no keyring")
+    monkeypatch.setitem(sys.modules, "keyring", BrokenKeyring())
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        assert c.put("/secrets/BAD_KEY", json={"value":"x"}).status_code == 404
+        assert c.put("/secrets/ANTHROPIC_API_KEY", json={"value":123}).status_code == 400
+        r = c.put("/secrets/ANTHROPIC_API_KEY", json={"value":"sk-anthropic-secret"})
+        assert r.status_code == 200, r.text
+        assert r.json()["source"] == "config"
+        assert "ANTHROPIC_API_KEY=sk-anthropic-secret" in (tmp_path / ".env").read_text()
+        assert "anthropic" in server.configured_providers()
+
+
+def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
+    class HangingKeyring:
+        def get_password(self, service, name): return None
+        def set_password(self, service, name, value): threading.Event().wait(1)
+        def delete_password(self, service, name): return None
+    monkeypatch.setitem(sys.modules, "keyring", HangingKeyring())
+    monkeypatch.setenv("NEXUSSY_KEYRING_TIMEOUT_S", "0.01")
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.put("/secrets/OPENROUTER_API_KEY", json={"value":"sk-openrouter-secret"})
+        assert r.status_code == 200, r.text
+        assert r.json()["source"] == "config"
+        assert "OPENROUTER_API_KEY=sk-openrouter-secret" in (tmp_path / ".env").read_text()
 
 
 @pytest.mark.asyncio
@@ -218,6 +344,18 @@ async def test_pi_missing_command_precise_error(tmp_path):
         await spawn_pi_worker(cfg, "run", "backend-abcdef", "backend", str(tmp_path), str(tmp_path))
 
 
+@pytest.mark.asyncio
+async def test_bundled_pi_fallback_when_external_pi_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUSSY_DISABLE_BUNDLED_PI", raising=False)
+    cfg = load_config({"pi":{"command":"pi","args":[],"shutdown_timeout_s":0}})
+    rpc = await spawn_pi_worker(cfg, "run", "backend-abcdef", "backend", str(tmp_path), str(tmp_path))
+    req_id = await rpc.request("Build API", "ctx")
+    response = await rpc.wait_response(req_id, 5)
+    await rpc.stop(timeout_s=.1)
+    assert response["result"]["status"] == "ok"
+    assert (tmp_path / "backend.txt").exists()
+
+
 def test_pipeline_develop_uses_fake_pi_and_worktrees(monkeypatch, tmp_path):
     monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
     monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
@@ -239,6 +377,7 @@ def test_pipeline_develop_uses_fake_pi_and_worktrees(monkeypatch, tmp_path):
         r = c.post("/pipeline/start", json={
             "project_name":"Develop Fake Pi",
             "description":"Build backend and frontend with tests",
+            "auto_approve_interview":True,
             "metadata":{"mock_provider":False,"fake_pi_command":sys.executable,"fake_pi_args":[str(child)]},
         })
         assert r.status_code == 200, r.text
@@ -276,7 +415,7 @@ def test_develop_merge_conflict_lifecycle(monkeypatch, tmp_path):
     server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
     server.engine = Engine(server.db, server.config)
     with TestClient(app) as c:
-        r = c.post("/pipeline/start", json={"project_name":"Conflict","description":"backend frontend","metadata":{"mock_provider":False,"fake_pi_command":sys.executable,"fake_pi_args":[str(child)]}}).json()
+        r = c.post("/pipeline/start", json={"project_name":"Conflict","description":"backend frontend","auto_approve_interview":True,"metadata":{"mock_provider":False,"fake_pi_command":sys.executable,"fake_pi_args":[str(child)]}}).json()
         for _ in range(100):
             ev = c.get("/events", params={"run_id": r["run_id"]}).json()
             if ev and ev[-1]["type"] == "done": break

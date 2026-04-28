@@ -8,6 +8,17 @@
 - Master pass: added `SPEC_COVERAGE.md`; wired core provider path to explicit mock/fake/LiteLLM modes; added fake-Pi develop worktree integration through `/pipeline/start`; hardened TUI SSE reconnect streaming and web chat cost badge; core/TUI/web/shell smoke commands pass, but SPEC remains partial.
 - Subagent D: added root-only operational smoke tests/evidence for dry-run no writes, idempotent config/env, duplicate start, stale PID cleanup, logs, and doctor diagnostics.
 - Completion pass: closed `SPEC_COVERAGE.md` to 78 tested rows and 4 blocked-external live checks only; final Subagent E audit found no rejected rows.
+- Guided API-key setup pass: core secrets now persist keyring-first with bounded-timeout env-file fallback, config updates persist to YAML, and provider discovery loads persisted keys; TUI adds safe provider-key status/setup/delete commands, hidden-input `--set-key`, and single-terminal provider/key/model setup with core autostart; core and TUI tests pass.
+- OpenTUI pass: TUI now defaults to an `@opentui/core` chat renderer while retaining the prior Pi TUI behind `NEXUSSY_TUI_RENDERER=pi-tui`; `bun test && bun run typecheck` passes.
+- OpenTUI input fix: renderer now binds explicit stdin/stdout, focuses the OpenTUI `InputRenderable` through its supported API, sizes the composer to terminal width, and repaints on input events; TUI tests and typecheck pass.
+- OpenTUI layout fix: live OpenTUI input is no longer duplicated by the string-rendered composer, transcript overflow is hidden, and transcript auto-scrolls to the latest run events; TUI tests and typecheck pass.
+- OpenTUI harness pass: researched OpenTUI renderer/layout/keyboard/ScrollBox/lifecycle docs and refactored the default TUI into flex regions: header, sticky-scroll transcript, wide-screen pipeline/options side rail, status strip, and focused composer; TUI tests/typecheck and OpenTUI renderer smoke pass.
+- OpenTUI transcript fix: main chat now filters out artifact/checkpoint/git/worktree/worker-RPC noise, shows user prompts plus high-signal run/stage/done/error events, and keeps detailed pipeline state in the side rail; TUI tests/typecheck and renderer smoke pass.
+- OpenTUI polish fix: transcript pane now flex-shrinks beside the fixed side rail to prevent text bleeding under it, and typo casual greeting `whatsg up` is handled as small talk; TUI tests/typecheck pass.
+- Provider-backed idle chat pass: added core `POST /assistant/reply` using configured provider/default model without starting a pipeline, wired TUI non-project idle messages through `CoreClient.chat`, kept secrets in core, and added core/TUI regression tests; core tests and TUI tests/typecheck pass.
+- Interview-first TUI pass: requests like `interview me please` enter provider-backed interview mode instead of idle chat or auto-starting the pipeline; follow-up vague app descriptions stay in interview mode until explicit `/new`; TUI tests/typecheck and core tests pass.
+- TUI interaction gate pass: default composer and legacy interactive shell now keep ordinary chat in Ask mode with no provider/pipeline/inject side effects; only slash commands or pending explicit selections/confirmations enter Action mode; TUI tests/typecheck pass.
+- Core interview pass: interview now uses LLM-generated question JSON, auto-synthesizes answers from project descriptions when requested, pauses manual runs for `/pipeline/{session_id}/interview/answer`, persists real multi-question artifacts, and injects interview summaries into design/devplan prompts; core tests pass.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -16,6 +27,7 @@
 - [✅] C: implement Starlette web dashboard, proxy routes, SSE proxy, single HTML, fixtures, and tests.
 - [✅] D: implement installer, launcher, README, AGENTS.md, config/env generation, shell tests, and root operational smoke evidence.
 - [✅] F: integration evidence added across core fake provider/Pi/git/SSE, TUI client/render fixtures, web proxy/render tests, and installer/launcher smoke tests.
+- [✅] G: guided TUI provider-key setup implemented with backend keyring/env-file persistence, persisted provider model selection, single-terminal core autostart, no secret-value rendering, docs, and regression tests.
 <!-- NEXT_TASK_GROUP_END -->
 
 ## Definitions Of Done

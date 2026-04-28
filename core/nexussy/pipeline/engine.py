@@ -28,7 +28,7 @@ def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
 
 class Engine:
     def __init__(self, db, config):
-        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}
+        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         rows=await self.db.read("SELECT COALESCE(MAX(sequence),0)+1 n FROM events WHERE run_id=?",(run_id,)); seq=rows[0]["n"]
         env=EventEnvelope(sequence=seq,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
@@ -81,6 +81,7 @@ class Engine:
         await self.db.write(lambda con: (con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",(rid,detail.session.session_id,"running",req.start_stage.value,now.isoformat(),None,run.usage.model_dump_json())), con.execute("UPDATE sessions SET status=?, updated_at=?, detail_json=? WHERE session_id=?",("running",now.isoformat(),detail.model_dump_json(),detail.session.session_id))))
         for st in STAGES: await self.db.write(lambda con, st=st: con.execute("INSERT OR REPLACE INTO stage_runs VALUES(?,?,?,?,?,?,?)",(rid,st.value,"pending",0,None,None,None)))
         await self.emit(SSEEventType.run_started, detail.session.session_id, rid, run)
+        self.session_runs[detail.session.session_id]=rid
         self.tasks[rid]=asyncio.create_task(self._run(req, detail, run, selected, allow_mock))
         return RunStartResponse(session_id=detail.session.session_id,run_id=rid,stream_url=f"/pipeline/runs/{rid}/stream",status_url=f"/pipeline/status?run_id={rid}")
     async def _run(self, req, detail, run, selected_models=None, allow_mock=False):
@@ -141,19 +142,101 @@ class Engine:
         await self.emit(SSEEventType.cost_update, sid, rid, usage)
         return result.text
 
+    def _parse_interview_questions(self, text: str) -> list[InterviewQuestionAnswer]:
+        try: raw=json.loads(text)
+        except Exception: raw=[]
+        if not isinstance(raw, list): raw=[]
+        questions=[]; seen=set()
+        for idx, item in enumerate(raw[:8], start=1):
+            if not isinstance(item, dict): continue
+            qid=str(item.get("id") or item.get("question_id") or f"q{idx}").strip() or f"q{idx}"
+            question=str(item.get("question") or "").strip()
+            if not question or qid in seen: continue
+            seen.add(qid); questions.append(InterviewQuestionAnswer(question_id=qid,question=question,answer="pending",source="user"))
+        if len(questions) < 4:
+            questions=[InterviewQuestionAnswer(question_id="q_name",question="What is the name of your project?",answer="pending",source="user"),InterviewQuestionAnswer(question_id="q_lang",question="What programming language(s) will you use?",answer="pending",source="user"),InterviewQuestionAnswer(question_id="q_desc",question="Describe what your project does in 1-2 sentences.",answer="pending",source="user"),InterviewQuestionAnswer(question_id="q_type",question="What type of project is this? (API, Web App, CLI, Game, etc.)",answer="pending",source="user")]
+        return questions[:8]
+
+    def _parse_auto_answers(self, text: str, questions: list[InterviewQuestionAnswer], req: PipelineStartRequest) -> dict[str,str]:
+        try: raw=json.loads(text)
+        except Exception: raw={}
+        answers = raw.get("answers", raw) if isinstance(raw, dict) else {}
+        out={}
+        for q in questions:
+            answer = answers.get(q.question_id) if isinstance(answers, dict) else None
+            if not isinstance(answer, str) or not answer.strip():
+                lower=q.question.lower()
+                if "name" in lower: answer=req.project_name
+                else: answer=req.description
+            out[q.question_id]=answer.strip()
+        return out
+
+    def _interview_summary(self, artifact: InterviewArtifact|None) -> str:
+        if not artifact: return ""
+        lines=["Project Requirements (from Interview)"]
+        for qa in artifact.questions:
+            lines.append(f"{qa.question.replace('?', '').strip()}: {qa.answer}")
+        if artifact.requirements: lines.append("Requirements: " + "; ".join(artifact.requirements))
+        return "\n".join(lines)
+
+    async def _latest_interview_artifact(self, run_id: str) -> InterviewArtifact|None:
+        rows=await self.db.read("SELECT content_text FROM artifacts WHERE run_id=? AND kind='interview' ORDER BY updated_at DESC LIMIT 1",(run_id,))
+        return InterviewArtifact.model_validate_json(rows[0]["content_text"]) if rows else None
+
+    async def submit_interview_answers(self, session_id: str, answers: dict[str,str]) -> InterviewArtifact:
+        rid=self.session_runs.get(session_id)
+        if not rid:
+            rows=await self.db.read("SELECT run_id FROM runs WHERE session_id=? ORDER BY started_at DESC LIMIT 1",(session_id,)); rid=rows[0]["run_id"] if rows else None
+        if not rid: raise KeyError("run")
+        current=None; questions=self.interview_questions.get(session_id)
+        if not questions:
+            current=await self._latest_interview_artifact(rid); questions=current.questions if current else []
+        missing=[q.question_id for q in questions if not answers.get(q.question_id, "").strip()]
+        if missing: raise ValueError([{"loc":["body","answers"],"msg":"missing interview answers","type":"value_error","ctx":{"missing":missing}}])
+        answered=[InterviewQuestionAnswer(question_id=q.question_id,question=q.question,answer=answers[q.question_id].strip(),source="user") for q in questions]
+        fut=self.interview_waiters.get(session_id)
+        if fut and not fut.done(): fut.set_result(answered)
+        self.paused.pop(rid,None)
+        await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("running",rid)))
+        await self.emit(SSEEventType.pause_state_changed,session_id,rid,PausePayload(paused=False,reason="interview answered"))
+        current=current or await self._latest_interview_artifact(rid)
+        return InterviewArtifact(project_name=current.project_name if current else "pending",project_slug=current.project_slug if current else "pending",description=current.description if current else "pending",questions=answered,requirements=[a.answer for a in answered])
+
     async def _artifacts_for_stage(self, st, req, detail, rid, cp, root, selected_models=None, allow_mock=False):
         sid=detail.session.session_id
         if st==StageName.interview:
-            await self._provider_text(st, sid, rid, f"Interview requirements for: {req.description}", selected_models, allow_mock)
-            ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=[InterviewQuestionAnswer(question_id="q1",question="Use defaults?",answer=str(req.auto_approve_interview),source="auto")],requirements=[req.description])
+            question_prompt=("Generate a JSON array of 4-8 plain-language interview questions for a non-technical project owner. "
+                             "Cover project name, primary languages, short description/requirements, project type, and optional frameworks, database, auth, deployment, and testing preferences. "
+                             "Return only JSON objects with id and question fields.\n\n"
+                             f"Project description: {req.description}")
+            questions=self._parse_interview_questions(await self._provider_text(st, sid, rid, question_prompt, selected_models, allow_mock))
+            self.interview_questions[sid]=questions
+            if req.auto_approve_interview:
+                answer_prompt=("Answer these interview questions as JSON using only the project description. "
+                               "Return a JSON object mapping each question id to a concise answer.\n\n"
+                               f"Project name: {req.project_name}\nProject description: {req.description}\nQuestions: {json.dumps([{'id': q.question_id, 'question': q.question} for q in questions])}")
+                answers=self._parse_auto_answers(await self._provider_text(st, sid, rid, answer_prompt, selected_models, allow_mock), questions, req)
+                answered=[InterviewQuestionAnswer(question_id=q.question_id,question=q.question,answer=answers[q.question_id],source="auto") for q in questions]
+            else:
+                pending=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=questions,requirements=[req.description])
+                await self._save_art(rid,sid,root,"interview",pending.model_dump_json(indent=2))
+                fut=asyncio.get_running_loop().create_future(); self.interview_waiters[sid]=fut; self.paused[rid]=True
+                await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("paused",rid)))
+                await self.emit(SSEEventType.pause_state_changed,sid,rid,PausePayload(paused=True,reason="waiting for interview answers"))
+                answered=await fut
+                self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
+            ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=answered,requirements=[qa.answer for qa in answered])
             return [await self._save_art(rid,sid,root,"interview",ia.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"complexity_profile",cp.model_dump_json(indent=2))]
         if st==StageName.design:
-            txt=await self._provider_text(st, sid, rid, f"Create design with Goals, Architecture, Dependencies, Risks, Test Strategy for: {req.description}", selected_models, allow_mock)
+            interview=self._interview_summary(await self._latest_interview_artifact(rid))
+            txt=await self._provider_text(st, sid, rid, f"Create design with Goals, Architecture, Dependencies, Risks, Test Strategy for: {req.description}\n\n{interview}", selected_models, allow_mock)
             return [await self._save_art(rid,sid,root,"design_draft",txt if all(h in txt for h in ["Goals","Architecture","Dependencies","Risks","Test Strategy"]) else "# Goals\nDeliver requested project.\n# Architecture\nProvider-guided design.\n# Dependencies\nPython.\n# Risks\nUnknowns.\n# Test Strategy\nAutomated tests.\n")]
         if st==StageName.validate:
             return [await self._save_art(rid,sid,root,"validated_design","# Goals\nDeliver requested project.\n# Architecture\nValidated.\n# Dependencies\nPython.\n# Risks\nManaged.\n# Test Strategy\nAutomated tests.\n"), await self._save_art(rid,sid,root,"validation_report",ValidationReport(passed=True,max_iterations=self.config.stages.validate.max_iterations or 3).model_dump_json(indent=2))]
         if st==StageName.plan:
-            dev="""# DevPlan\n<!-- PROGRESS_LOG_START -->\n- Created by nexussy.\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: implement requested work. Acceptance: tests pass.\n<!-- NEXT_TASK_GROUP_END -->\n"""
+            interview=self._interview_summary(await self._latest_interview_artifact(rid))
+            await self._provider_text(st, sid, rid, f"Create devplan from interview requirements.\n\n{interview}\n\nOriginal description: {req.description}", selected_models, allow_mock)
+            dev=f"""# DevPlan\n<!-- PROGRESS_LOG_START -->\n- Created by nexussy.\n- Interview context: {interview.replace(chr(10), '; ') if interview else req.description}\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: implement requested work. Acceptance: tests pass.\n<!-- NEXT_TASK_GROUP_END -->\n"""
             hand="""# Handoff\n<!-- QUICK_STATUS_START -->\nPipeline plan generated.\n<!-- QUICK_STATUS_END -->\n<!-- HANDOFF_NOTES_START -->\nContinue from devplan.\n<!-- HANDOFF_NOTES_END -->\n<!-- SUBAGENT_A_ASSIGNMENT_START -->\nOwn core.\n<!-- SUBAGENT_A_ASSIGNMENT_END -->\n<!-- SUBAGENT_B_ASSIGNMENT_START -->\nOwn tui.\n<!-- SUBAGENT_B_ASSIGNMENT_END -->\n<!-- SUBAGENT_C_ASSIGNMENT_START -->\nOwn web.\n<!-- SUBAGENT_C_ASSIGNMENT_END -->\n<!-- SUBAGENT_D_ASSIGNMENT_START -->\nOwn ops.\n<!-- SUBAGENT_D_ASSIGNMENT_END -->\n"""
             refs=[await self._save_art(rid,sid,root,"devplan",dev), await self._save_art(rid,sid,root,"handoff",hand)]
             for i in range(1,cp.phase_count+1): refs.append(await self._save_art(rid,sid,root,"phase",f"# Phase {i:03d}\n<!-- PHASE_TASKS_START -->\n- [ ] Task {i}\n<!-- PHASE_TASKS_END -->\n<!-- PHASE_PROGRESS_START -->\n- pending\n<!-- PHASE_PROGRESS_END -->\n",i))

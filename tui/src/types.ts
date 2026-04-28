@@ -34,6 +34,8 @@ export interface WorkerStreamPayload { worker_id:string; stream_kind:"rpc"|"stdo
 export interface GitEventPayload { action:GitEventAction; worker_id?:string|null; branch_name?:string|null; commit_sha?:string|null; paths?:string[]; message:string; }
 export interface PausePayload { paused:boolean; reason:string; requested_by?:string; }
 export interface DonePayload { final_status:RunStatus; summary:string; artifacts?:ArtifactRef[]; usage:TokenUsage; error?:ErrorResponse|null; }
+export type SecretSource = "keyring"|"env"|"config";
+export interface SecretSummary { name:string; source:SecretSource; configured:boolean; updated_at?:string|null; }
 export type EventPayloadMap = {
   heartbeat: HeartbeatPayload; run_started: RunSummary; content_delta: ContentDeltaPayload; tool_call: ToolCallPayload; tool_output: ToolOutputPayload; tool_progress: ToolProgressPayload; stage_transition: StageTransitionPayload; stage_status: StageStatusSchema; checkpoint_saved: CheckpointPayload; artifact_updated: ArtifactUpdatedPayload; worker_spawned: Worker; worker_status: Worker; worker_task: WorkerTaskPayload; worker_stream: WorkerStreamPayload; file_claimed: FileLock; file_released: FileLock; file_lock_waiting: FileLock; git_event: GitEventPayload; blocker_created: Blocker; blocker_resolved: Blocker; cost_update: TokenUsage; pause_state_changed: PausePayload; pipeline_error: ErrorResponse; done: DonePayload;
 };

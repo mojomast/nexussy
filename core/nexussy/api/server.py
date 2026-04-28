@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, pathlib
+import asyncio, json, os, pathlib, yaml
 from datetime import datetime, timezone
 from uuid import uuid4
 from starlette.applications import Starlette
@@ -15,7 +15,7 @@ from nexussy.config import load_config
 from nexussy.db import Database
 from nexussy.pipeline.engine import Engine
 from nexussy.pipeline.engine import ProviderStartError
-from nexussy.providers import configured_providers
+from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, provider_error_for_model, provider_for_model, secret_names, secret_summary, set_secret
 from nexussy.security import sanitize_relative_path
 
 config=load_config(); db=Database(config.database.global_path, config.database.busy_timeout_ms, config.database.write_retry_count, config.database.write_retry_base_ms); engine=Engine(db,config)
@@ -49,7 +49,7 @@ async def health(request):
         ok=True
         try: await ensure_db()
         except Exception: ok=False
-        return JSONResponse(dump(HealthResponse(version=__version__,db_ok=ok,providers_configured=configured_providers(),pi_available=False)))
+        return JSONResponse(dump(HealthResponse(version=__version__,db_ok=ok,providers_configured=configured_providers(service=config.security.keyring_service),pi_available=False)))
     return await endpoint(request, inner)
 
 async def sessions_create(request):
@@ -77,6 +77,11 @@ async def sessions_delete(request):
 
 async def pipeline_start(request):
     async def inner(r): return JSONResponse(dump(await engine.start(await body(r,PipelineStartRequest))))
+    return await endpoint(request, inner)
+async def interview_answer(request):
+    async def inner(r):
+        req=await body(r,InterviewAnswerRequest)
+        return JSONResponse(dump(await engine.submit_interview_answers(r.path_params["session_id"], req.answers)))
     return await endpoint(request, inner)
 async def status(request):
     async def inner(r):
@@ -145,6 +150,24 @@ async def skip(request):
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(req.run_id,));
         if rows: await engine.emit(SSEEventType.stage_status,rows[0]["session_id"],req.run_id,StageStatusSchema(stage=req.stage,status=StageRunStatus.skipped,error=ErrorResponse(error_code=ErrorCode.stage_not_ready,message=req.reason)))
         return JSONResponse(dump(ControlResponse(run_id=req.run_id,status=RunStatus.running,message="skipped")))
+    return await endpoint(request, inner)
+
+async def assistant_reply(request):
+    async def inner(r):
+        req=await body(r,AssistantReplyRequest)
+        model=req.model or config.providers.default_model
+        provider=provider_for_model(model)
+        limited=await active_rate_limit(db, provider, model)
+        if limited:
+            raise ProviderStartError(ErrorResponse(error_code=ErrorCode.rate_limited,message="provider rate limited",details={"provider":provider,"model":model,"reset_at":limited["reset_at"]},retryable=True))
+        if not model_available(model, allow_mock=False):
+            raise ProviderStartError(provider_error_for_model(model))
+        prompt=("You are nexussy, a concise coding-agent control surface. "
+                "Reply naturally and briefly to casual user messages. "
+                "If the user asks to build, change, plan, review, or test software, tell them to describe the request or use /new; do not start work yourself.\n\n"
+                f"User: {req.message}")
+        result=await complete("chat", prompt, model, allow_mock=False, timeout_s=config.providers.request_timeout_s)
+        return JSONResponse(dump(AssistantReplyResponse(message=result.text.strip(),model=model,usage=TokenUsage.model_validate(result.usage))))
     return await endpoint(request, inner)
 
 async def blocker_create(request):
@@ -232,19 +255,36 @@ async def file_locks(request):
 async def get_config(request): return await endpoint(request, lambda r: asyncio.sleep(0, JSONResponse(dump(config))))
 async def put_config(request):
     async def inner(r):
-        global config; config=NexussyConfig.model_validate(await r.json()); return JSONResponse(dump(config))
+        global config
+        next_config=NexussyConfig.model_validate(await r.json())
+        cfg_path=pathlib.Path(os.environ.get("NEXUSSY_CONFIG", str(pathlib.Path(next_config.home_dir).expanduser()/"nexussy.yaml"))).expanduser()
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp=cfg_path.with_suffix(cfg_path.suffix+".tmp")
+        tmp.write_text(yaml.safe_dump(next_config.model_dump(mode="json"), sort_keys=False))
+        tmp.replace(cfg_path)
+        config=next_config
+        return JSONResponse(dump(config))
     return await endpoint(request, inner)
 async def secrets(request):
     async def inner(r):
-        names=["OPENAI_API_KEY","ANTHROPIC_API_KEY","OPENROUTER_API_KEY","GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","TOGETHER_API_KEY","FIREWORKS_API_KEY","XAI_API_KEY","GLM_API_KEY","ZAI_API_KEY","REQUESTY_API_KEY","AETHER_API_KEY","OLLAMA_BASE_URL"]
-        return JSONResponse([dump(SecretSummary(name=n,source="env",configured=bool(os.environ.get(n)))) for n in names])
+        env_path=pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", str(pathlib.Path(config.home_dir).expanduser()/".env"))).expanduser()
+        return JSONResponse([dump(secret_summary(n, env_path=env_path, service=config.security.keyring_service)) for n in secret_names()])
     return await endpoint(request, inner)
 async def put_secret(request):
     async def inner(r):
-        name=r.path_params["name"]; data=await r.json(); os.environ[name]=data.get("value",""); ss=SecretSummary(name=name,source="env",configured=True,updated_at=datetime.now(timezone.utc)); return JSONResponse(dump(ss))
+        name=r.path_params["name"]; data=await r.json()
+        if not isinstance(data, dict) or not isinstance(data.get("value"), str):
+            raise ValueError([{"loc":["body","value"],"msg":"value must be a string","type":"value_error"}])
+        env_path=pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", str(pathlib.Path(config.home_dir).expanduser()/".env"))).expanduser()
+        return JSONResponse(dump(set_secret(name, data["value"], env_path=env_path, service=config.security.keyring_service)))
     return await endpoint(request, inner)
 async def del_secret(request):
-    async def inner(r): name=r.path_params["name"]; os.environ.pop(name,None); return JSONResponse(dump(ControlResponse(run_id=name,status=RunStatus.cancelled,message="secret deleted")))
+    async def inner(r):
+        name=r.path_params["name"]
+        env_path=pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", str(pathlib.Path(config.home_dir).expanduser()/".env"))).expanduser()
+        if not delete_secret(name, env_path=env_path, service=config.security.keyring_service):
+            raise KeyError(name)
+        return JSONResponse(dump(ControlResponse(run_id=name,status=RunStatus.cancelled,message="secret deleted")))
     return await endpoint(request, inner)
 async def memory_list(request):
     async def inner(r):
@@ -271,7 +311,7 @@ async def events(request):
     async def inner(r): return JSONResponse([dump(e) for e in await engine.replay(r.query_params["run_id"], None, int(r.query_params.get("after_sequence",0)), int(r.query_params.get("limit",500)))])
     return await endpoint(request, inner)
 
-routes=[Route('/health',health),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
+routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
 app=Starlette(routes=routes,on_startup=[ensure_db])
 app.add_middleware(CORSMiddleware, allow_origins=config.core.cors_allow_origins, allow_methods=["*"], allow_headers=["*"])
 

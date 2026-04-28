@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, json, os, signal
+import asyncio, json, os, pathlib, signal, sys
 from dataclasses import dataclass, field
 
 from nexussy.api.schemas import ErrorCode, ErrorResponse, WorkerStreamPayload
@@ -60,8 +60,15 @@ class PiRPCProcess:
 
 async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, project_root: str, worktree: str, core_base_url: str = "http://127.0.0.1:7771") -> PiRPCProcess:
     env = os.environ.copy() | {"NEXUSSY_RUN_ID":run_id,"NEXUSSY_WORKER_ID":worker_id,"NEXUSSY_WORKER_ROLE":role,"NEXUSSY_PROJECT_ROOT":project_root,"NEXUSSY_WORKTREE":worktree,"NEXUSSY_CORE_BASE_URL":core_base_url}
+    command = config.pi.command
+    args = list(config.pi.args)
+    if command == "pi" and os.environ.get("NEXUSSY_DISABLE_BUNDLED_PI") != "1":
+        command = sys.executable
+        args = ["-m", "nexussy.swarm.local_pi_worker"]
+        package_root = str(pathlib.Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = package_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     try:
-        proc = await asyncio.create_subprocess_exec(config.pi.command, *config.pi.args, cwd=worktree, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        proc = await asyncio.create_subprocess_exec(command, *args, cwd=worktree, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
     except FileNotFoundError as e:
         raise RuntimeError(f"missing Pi CLI: {config.pi.command}") from e
     rpc = PiRPCProcess(proc)

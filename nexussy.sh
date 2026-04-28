@@ -38,6 +38,20 @@ PY
   return 1
 }
 
+ensure_runtime_python() {
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    printf '%s\n' "$VENV_DIR/bin/python"
+    return 0
+  fi
+  PY=$(python_cmd) || return 1
+  info "creating runtime virtual environment: $VENV_DIR" >&2
+  "$PY" -m venv "$VENV_DIR" || return 1
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip >/dev/null || return 1
+  info "installing runtime core/web dependencies" >&2
+  (cd "$ROOT_DIR" && "$VENV_DIR/bin/python" -m pip install -e core/ -e web/) >/dev/null || return 1
+  printf '%s\n' "$VENV_DIR/bin/python"
+}
+
 is_running() {
   pid_file=$1
   [ -f "$pid_file" ] || return 1
@@ -86,13 +100,13 @@ start_core() {
   cleanup_stale_pid "$CORE_PID"
   if is_running "$CORE_PID"; then info "core already running"; return 0; fi
   if curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)"; then info "core already healthy on $CORE_HOST:$CORE_PORT (no duplicate started)"; return 0; fi
-  PYTHON=$(python_cmd) || { warn "Python 3.11+ not found"; return 1; }
   ensure_dirs
+  PYTHON=$(ensure_runtime_python) || { warn "Python 3.11+ runtime or dependency install failed"; return 1; }
   prepare_log "$CORE_LOG" || fail "cannot write core log: $CORE_LOG"
   info "starting core on $CORE_HOST:$CORE_PORT"
   old_pwd=$(pwd)
   cd "$ROOT_DIR" || return 1
-  NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" PYTHONPATH="$ROOT_DIR/core${PYTHONPATH:+:$PYTHONPATH}" nohup "$PYTHON" -m nexussy.api.server >> "$CORE_LOG" 2>&1 &
+  NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" NEXUSSY_CORE_HOST="$CORE_HOST" NEXUSSY_CORE_PORT="$CORE_PORT" PYTHONPATH="$ROOT_DIR/core${PYTHONPATH:+:$PYTHONPATH}" nohup "$PYTHON" -m nexussy.api.server >> "$CORE_LOG" 2>&1 &
   printf '%s\n' "$!" > "$CORE_PID"
   cd "$old_pwd" || return 1
   wait_for_url "$(health_url "$CORE_HOST" "$CORE_PORT" health)" || { warn "core did not become healthy; see $CORE_LOG"; cleanup_stale_pid "$CORE_PID"; return 1; }
@@ -102,13 +116,13 @@ start_web() {
   cleanup_stale_pid "$WEB_PID"
   if is_running "$WEB_PID"; then info "web already running"; return 0; fi
   if curl_ok "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)"; then info "web already healthy on $WEB_HOST:$WEB_PORT (no duplicate started)"; return 0; fi
-  PYTHON=$(python_cmd) || { warn "Python 3.11+ not found"; return 1; }
   ensure_dirs
+  PYTHON=$(ensure_runtime_python) || { warn "Python 3.11+ runtime or dependency install failed"; return 1; }
   prepare_log "$WEB_LOG" || fail "cannot write web log: $WEB_LOG"
   info "starting web on $WEB_HOST:$WEB_PORT"
   old_pwd=$(pwd)
   cd "$ROOT_DIR" || return 1
-  NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" PYTHONPATH="$ROOT_DIR/web${PYTHONPATH:+:$PYTHONPATH}" nohup "$PYTHON" -m nexussy_web.app >> "$WEB_LOG" 2>&1 &
+  NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" NEXUSSY_WEB_HOST="$WEB_HOST" NEXUSSY_WEB_PORT="$WEB_PORT" NEXUSSY_CORE_HOST="$CORE_HOST" NEXUSSY_CORE_PORT="$CORE_PORT" PYTHONPATH="$ROOT_DIR/web${PYTHONPATH:+:$PYTHONPATH}" nohup "$PYTHON" -m nexussy_web.app >> "$WEB_LOG" 2>&1 &
   printf '%s\n' "$!" > "$WEB_PID"
   cd "$old_pwd" || return 1
   wait_for_url "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)" || { warn "web health proxy did not become healthy; see $WEB_LOG"; cleanup_stale_pid "$WEB_PID"; return 1; }
@@ -116,17 +130,14 @@ start_web() {
 
 start_tui() {
   curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)" || { warn "core health check failed; run ./nexussy.sh start first"; return 1; }
-  cleanup_stale_pid "$TUI_PID"
-  if is_running "$TUI_PID"; then info "tui already running"; return 0; fi
   have bun || { warn "bun not found"; return 1; }
-  ensure_dirs
-  prepare_log "$TUI_LOG" || fail "cannot write tui log: $TUI_LOG"
-  info "starting tui"
+  info "starting tui interactively; press Ctrl+C or type /quit to exit"
   old_pwd=$(pwd)
   cd "$ROOT_DIR/tui" || return 1
-  nohup bun run start >> "$TUI_LOG" 2>&1 &
-  printf '%s\n' "$!" > "$TUI_PID"
+  bun run start
+  rc=$?
   cd "$old_pwd" || return 1
+  return "$rc"
 }
 
 stop_one() {
@@ -194,7 +205,16 @@ doctor() {
   else printf 'config: missing (%s)\n' "$NEXUSSY_CONFIG"; rc=1; fi
   printf 'core port: %s (%s, tcp=%s)\n' "$CORE_PORT" "$(curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)" && printf responding || printf not-responding)" "$(port_open "$CORE_HOST" "$CORE_PORT" && printf open || printf closed)"
   printf 'web port: %s (%s, tcp=%s)\n' "$WEB_PORT" "$(curl_ok "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)" && printf responding || printf not-responding)" "$(port_open "$WEB_HOST" "$WEB_PORT" && printf open || printf closed)"
-  if have "${NEXUSSY_PI_COMMAND:-pi}"; then printf 'pi command: ok (%s)\n' "${NEXUSSY_PI_COMMAND:-pi}"; else printf 'pi command: missing (install Pi CLI or set NEXUSSY_PI_COMMAND)\n'; fi
+  if have "${NEXUSSY_PI_COMMAND:-pi}"; then
+    printf 'pi command: ok (%s)\n' "${NEXUSSY_PI_COMMAND:-pi}"
+  elif PY=$(python_cmd) && PYTHONPATH="$ROOT_DIR/core${PYTHONPATH:+:$PYTHONPATH}" "$PY" - <<'PY' >/dev/null 2>&1
+import nexussy.swarm.local_pi_worker
+PY
+  then
+    printf 'pi command: external missing; bundled nexussy Pi-compatible fallback available\n'
+  else
+    printf 'pi command: missing (install Pi CLI or set NEXUSSY_PI_COMMAND)\n'
+  fi
   keys="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY FIREWORKS_API_KEY XAI_API_KEY GLM_API_KEY ZAI_API_KEY REQUESTY_API_KEY AETHER_API_KEY OLLAMA_BASE_URL"
   configured=0
   for k in $keys; do

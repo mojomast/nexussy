@@ -34,6 +34,12 @@ The installer creates `~/.nexussy/`, `~/.nexussy/run/`, `~/.nexussy/logs/`, `~/.
 ./nexussy.sh doctor     # checks dependencies, config, ports, Pi, and provider keys
 ```
 
+To start core/web, verify health, and print the TUI launch instructions in one step:
+
+```bash
+./launch_verify.sh
+```
+
 Logs:
 
 ```bash
@@ -71,17 +77,62 @@ bash -n install.sh nexussy.sh ops_tests.sh
 
 ## TUI
 
-Start the terminal UI after core is healthy:
+Start the interactive terminal UI after core is healthy:
 
 ```bash
 ./nexussy.sh start-tui
 ```
 
-The TUI consumes only the core HTTP/SSE API and writes its launcher log to `/tmp/nexussy-tui.log`.
+The TUI consumes only the core HTTP/SSE API and stays attached to the current terminal. Type `/quit` to exit.
+
+Provider/model setup is available as a single-terminal wizard. If core is not already running, the TUI starts a local core process for setup and stops the process when setup finishes:
+
+```bash
+cd tui
+bun run start -- --setup
+```
+
+The wizard currently supports OpenRouter, OpenAI, and Anthropic provider choices. For OpenRouter, it prompts for `OPENROUTER_API_KEY` and lets you choose a model for all pipeline stages. To go directly to OpenRouter setup:
+
+```bash
+cd tui
+bun run start -- --setup-openrouter
+```
+
+Direct hidden-input key setup is also available:
+
+```bash
+cd tui
+bun run start -- --set-key OPENAI_API_KEY
+```
+
+The prompt does not echo secret values. Core stores keys in the OS keyring when available and falls back to the configured env file. If the local keyring backend hangs or is unavailable, core falls back to the env file after a short timeout. Model choices are persisted to the configured YAML file. Inside the TUI, use `/secrets` to refresh provider key status and `/delete-key NAME` to remove a configured key; the UI displays only `configured`/`missing` summaries and never renders secret values.
 
 ## Web dashboard
 
 The web dashboard starts with `./nexussy.sh start` and listens on `http://127.0.0.1:7772`. It proxies `/api/*` calls and SSE streams to core.
+
+## Interview API
+
+The pipeline starts with an interview stage that generates 4-8 plain-language questions and stores the answered `InterviewArtifact` for downstream design and devplan prompts.
+
+For automated runs and CI, set `auto_approve_interview` to `true`; core generates questions, synthesizes answers from `description`, and continues without user input:
+
+```bash
+curl -s http://127.0.0.1:7771/pipeline/start \
+  -H 'Content-Type: application/json' \
+  -d '{"project_name":"HabitTrack","description":"A Python REST API for tracking habits","auto_approve_interview":true}'
+```
+
+For interactive runs, omit `auto_approve_interview` or set it to `false`. The run pauses after writing `.nexussy/artifacts/interview.json` with pending questions. Read the artifact through `GET /pipeline/artifacts/interview?session_id=<session_id>`, then submit answers:
+
+```bash
+curl -s http://127.0.0.1:7771/pipeline/<session_id>/interview/answer \
+  -H 'Content-Type: application/json' \
+  -d '{"answers":{"q_name":"HabitTrack","q_lang":"Python","q_desc":"A REST API for tracking habits","q_type":"API"}}'
+```
+
+After every question has a non-empty answer, the pipeline resumes into design with the interview summary injected into downstream prompts.
 
 ## Mock mode and production gates
 
@@ -105,7 +156,7 @@ Important defaults:
 
 ## Provider keys
 
-Set `NEXUSSY_API_KEY` when API auth is enabled. Set provider keys in the OS keyring through nexussy secrets flows when available, or fill placeholders in `~/.nexussy/.env`:
+Set `NEXUSSY_API_KEY` when API auth is enabled. This is separate from provider keys. Set provider keys through guided TUI setup when possible, or fill placeholders in `~/.nexussy/.env`:
 
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`, `GLM_API_KEY`, `ZAI_API_KEY`, `REQUESTY_API_KEY`, `AETHER_API_KEY`, and `OLLAMA_BASE_URL`.
 

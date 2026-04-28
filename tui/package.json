@@ -9,9 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-tui": "latest",
+    "@mariozechner/pi-agent-core": "latest",
     "@mariozechner/pi-ai": "latest",
-    "@mariozechner/pi-agent-core": "latest"
+    "@mariozechner/pi-tui": "latest",
+    "@opentui/core": "^0.1.106"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createState, reduceConnectionError, reduceEvent, toggleToolRow } from "../src/state";
+import { createState, reduceConnectionError, reduceEvent, reduceSecrets, toggleToolRow } from "../src/state";
 import { exportHtml, loadOptionalPiRuntime, renderPanels } from "../src/renderer";
 import { EVENT_TYPES } from "../src/types";
 import { minimalPayloadFor } from "../src/sse";
@@ -73,4 +73,12 @@ test("export html escapes displayed session data", () => {
   expect(html).toContain("&lt;left&gt;");
   expect(html).toContain("center &amp; stream");
   expect(html).toContain("right &gt; files");
+});
+
+test("provider key panel renders only secret summaries", () => {
+  const s = reduceSecrets(createState(), [{ name:"OPENAI_API_KEY", source:"keyring", configured:true } as any]);
+  const panels = renderPanels(s);
+  expect(panels.right).toContain("Provider Keys");
+  expect(panels.right).toContain("configured OPENAI_API_KEY (keyring)");
+  expect(panels.right).not.toContain("sk-");
 });

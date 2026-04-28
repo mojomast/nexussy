@@ -1,5 +1,5 @@
 import { applyReconnect, parseEnvelope, parseSSEFrames, reconnectHeaders, type ReconnectState } from "./sse";
-import type { ErrorResponse, EventEnvelope, PipelineStatusResponse, RunStartResponse, StageName, WorkerRole } from "./types";
+import type { ErrorResponse, EventEnvelope, PipelineStatusResponse, RunStartResponse, SecretSummary, StageName, WorkerRole } from "./types";
 
 export type ClientMode = "live-core"|"mock-fixture";
 export interface CoreClientOptions { baseUrl?: string; apiKey?: string; mode?: ClientMode; fetchImpl?: typeof fetch; }
@@ -26,6 +26,7 @@ export class CoreClient {
   getSession(sessionId:string){ return this.json("GET",`/sessions/${encodeURIComponent(sessionId)}`); }
   deleteSession(sessionId:string,delete_files=false){ return this.json("DELETE",`/sessions/${encodeURIComponent(sessionId)}`,undefined,{delete_files}); }
   startPipeline(body:unknown){ return this.json<RunStartResponse>("POST","/pipeline/start",body); }
+  chat(body:{message:string;model?:string|null}){ return this.json<{ok:boolean;message:string;model:string;usage?:unknown}>("POST","/assistant/reply",body); }
   status(run_id:string){ return this.json<PipelineStatusResponse>("GET","/pipeline/status",undefined,{run_id}); }
   inject(body:{run_id:string;message:string;worker_id?:string|null;stage?:StageName|null}){ return this.json("POST","/pipeline/inject",body); }
   pause(run_id:string, reason="user"){ return this.json("POST","/pipeline/pause",{run_id,reason}); }
@@ -43,8 +44,8 @@ export class CoreClient {
   fileLocks(run_id:string){ return this.json("GET","/swarm/file-locks",undefined,{run_id}); }
   config(){ return this.json("GET","/config"); }
   updateConfig(body:unknown){ return this.json("PUT","/config",body); }
-  secrets(){ return this.json("GET","/secrets"); }
-  setSecret(name:string,value:string){ return this.json("PUT",`/secrets/${encodeURIComponent(name)}`,{value}); }
+  secrets(){ return this.json<SecretSummary[]>("GET","/secrets"); }
+  setSecret(name:string,value:string){ return this.json<SecretSummary>("PUT",`/secrets/${encodeURIComponent(name)}`,{value}); }
   deleteSecret(name:string){ return this.json("DELETE",`/secrets/${encodeURIComponent(name)}`); }
   memory(session_id?:string){ return this.json("GET","/memory",undefined,{session_id}); }
   createMemory(body:unknown){ return this.json("POST","/memory",body); }
@@ -96,4 +97,5 @@ export class FixtureCoreClient extends CoreClient {
     const start = state.lastEventId ? this.eventsFixture.findIndex(e => e.event_id === state.lastEventId) + 1 : 0;
     for (const env of this.eventsFixture.slice(Math.max(0,start))) yield env;
   }
+  override chat(body:{message:string;model?:string|null}){ return Promise.resolve({ ok:true, message:`mock assistant reply: ${body.message}`, model:body.model ?? "mock/model" }); }
 }

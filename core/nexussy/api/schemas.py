@@ -120,6 +120,24 @@ class ControlResponse(StrictModel):
     ok:bool=True; run_id:str; status:RunStatus; message:str
 class StageSkipRequest(StrictModel):
     run_id:str; stage:StageName; reason:str
+class InterviewAnswerRequest(StrictModel):
+    answers:dict[str,str]
+    @field_validator("answers")
+    @classmethod
+    def answers_non_empty(cls, v):
+        if not v: raise ValueError("answers required")
+        for key, value in v.items():
+            if not key.strip() or not isinstance(value, str) or not value.strip(): raise ValueError("answers must be non-empty strings")
+        return v
+class AssistantReplyRequest(StrictModel):
+    message:str; model:str|None=None
+    @field_validator("model")
+    @classmethod
+    def model_valid(cls, v):
+        if v is not None and "/" not in v: raise ValueError("invalid model string")
+        return v
+class AssistantReplyResponse(StrictModel):
+    ok:bool=True; message:str; model:str; usage:TokenUsage=Field(default_factory=TokenUsage)
 
 class InterviewQuestionAnswer(StrictModel):
     question_id:str; question:str; answer:str; source:Literal["user","auto","default"]="user"

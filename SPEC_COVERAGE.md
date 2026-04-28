@@ -28,8 +28,8 @@ Status values are limited to `missing`, `partial`, `implemented-untested`, `test
 | R-021 | 8.3 | Pipeline schemas/routes/controls. | A/B/C | core server/schemas, clients | core/tui/web tests | tested | Pipeline start/status/control/skip/blocker tests and slash command tests pass. | |
 | R-022 | 8.4 | Artifact schemas/routes. | A/B/C | artifact store/routes/UI | core/web tests | tested | Artifact manifest/content and dashboard artifact target tests pass. | |
 | R-023 | 8.5 | Swarm schemas/routes/blockers/develop reports. | A/B/C | core swarm/server, TUI/web | core/tui/web tests | tested | Worker task, blocker, develop/merge report, UI state tests pass. | |
-| R-024 | 8.6 | Config schemas/routes. | A/B/C/D | config/server/web/installer | core/web/ops tests | tested | Config precedence, route proxy, generated config tests pass. | |
-| R-025 | 10.6 | Secrets, memory, graph schemas/routes. | A/C | core server, web UI | core/web tests | tested | Core route scaffolds plus web proxy/UI route tests pass. | |
+| R-024 | 8.6 | Config schemas/routes. | A/B/C/D | config/server/web/installer | core/web/ops tests | tested | Config precedence, YAML persistence, route proxy, generated config tests pass. | |
+| R-025 | 10.6 | Secrets, memory, graph schemas/routes. | A/C | core server, providers, web UI | core/web tests | tested | Core secrets persistence/validation/no-echo summary tests plus web proxy/UI route tests pass. | |
 | R-026 | 9.1-9.2 | SSE envelope fields and frame format. | A/B/C | engine/server/parser/proxy | core/tui/web tests | tested | Core events, TUI `parseEnvelope`, web proxy preservation tests pass. | |
 | R-027 | 9.3 | SSE payload schemas for all event types. | A/B/C | schemas/types/parsers | core/tui tests | tested | TUI fixture for every Section 9 event, core emitted event tests pass. | |
 | R-028 | 9.4 | SSE persistence/replay/heartbeat/bounded slow-client behavior. | A/B/C | engine/server/client/proxy | core/tui/web tests | tested | Replay tests, reconnect tests, slow-client terminal error test pass. | |
@@ -38,7 +38,7 @@ Status values are limited to `missing`, `partial`, `implemented-untested`, `test
 | R-031 | 10.3 | Pipeline routes: start/stream/status/inject/pause/resume/skip/cancel/blocker. | A/B/C | server/clients/proxy | core/tui/web tests | tested | Control/blocker/pause/skip tests, slash command and web proxy tests pass. | |
 | R-032 | 10.4 | Artifact manifest/content routes. | A/C | core routes/web UI | core/web tests | tested | Artifact route assertions and web artifact controls pass. | |
 | R-033 | 10.5 | Swarm routes and worker streams. | A/B/C | core server/TUI/web | core/tui/web tests | tested | Worker spawn/assign/task/stream/proxy/state tests pass. | |
-| R-034 | 10.6 | Config/secrets/memory/graph/events routes. | A/C | core server/web | core/web tests | tested | Events/replay, config/secrets/memory/graph route/proxy tests pass. | |
+| R-034 | 10.6 | Config/secrets/memory/graph/events routes. | A/C | core server/providers/web | core/web tests | tested | Events/replay, config YAML persistence, secrets keyring/env fallback, memory/graph route/proxy tests pass. | |
 | R-035 | 10.7, 19 | Web `/api/*` proxy, SSE proxy, passthrough, no business logic. | C | `web/nexussy_web/app.py` | `web/tests/test_app.py` | tested | 43 web tests passed, including method/body/query/auth/status and incremental SSE. | |
 | R-036 | 11.1-11.2 | Stage order, validate correction, review return-to-plan. | A | engine | core tests | tested | `test_validate_review_correction_loops_and_controls`, max failure tests pass. | |
 | R-037 | 11.2 | Interview stage entry/outputs/retry/checkpoint. | A | engine/providers/artifacts | core tests | tested | Full pipeline events/artifacts tests pass. | |
@@ -62,8 +62,8 @@ Status values are limited to `missing`, `partial`, `implemented-untested`, `test
 | R-055 | 15.2 | Provider rate-limit persistence/blocking. | A | providers/db | core tests | tested | Rate-limit table and active blocking test pass. | |
 | R-056 | 16 | Required SQLite tables/project/concurrency behavior. | A | db | core tests | tested | Required tables including blockers, WAL, busy timeout, write lock tests pass. | |
 | R-057 | 17 | Security integration: sanitizer, scrubber, auth, CORS, worker cwd/write locks. | A/C/D | security/server/swarm/scripts | tests | tested | Path, symlink, scrub, auth/error, worker cwd/fake Pi tests pass. | |
-| R-058 | 18.1 | TUI Pi packages/live/mock modes/three panels. | B | `tui/src/*`, package | `tui/tests/*` | tested | Pi runtime probe, render panels, `bun test`, typecheck pass. | |
-| R-059 | 18.2 | TUI slash commands and export. | B | commands/client/renderer | TUI tests | tested | Exact endpoint/body/export escaping tests pass. | |
+| R-058 | 18.1 | TUI Pi packages/live/mock modes/three panels. | B | `tui/src/*`, package | `tui/tests/*` | tested | Pi runtime probe, provider-key status panel, render panels, `bun test`, typecheck pass. | |
+| R-059 | 18.2 | TUI slash commands and export. | B | commands/client/renderer/index | TUI tests | tested | Exact endpoint/body/export escaping, safe `/secrets`/`/set-key`/`/delete-key`, and single-terminal provider setup tests pass. | |
 | R-060 | 9.4, 18.2 | TUI SSE reconnect/heartbeat/done/error/auth states. | B | client/sse/state | TUI tests | tested | Reconnect Last-Event-ID, auth failure, heartbeat/done/error render tests pass. | |
 | R-061 | 19 | Web required tabs and render targets. | C | web template | web tests | tested | Web tab/target fixture tests pass. | |
 | R-062 | 19 | Web unavailable/auth/malformed SSE/devplan/worker/config/secrets displays. | C | web app/template | web tests | tested | 43 web tests pass for error and fixture/live render evidence. | |
@@ -71,7 +71,7 @@ Status values are limited to `missing`, `partial`, `implemented-untested`, `test
 | R-064 | 20.2 | Launcher PID/logs/duplicate/stale/status/doctor. | D | `nexussy.sh` | `ops_tests.sh`, smoke | tested | Duplicate/stale/logs/doctor/start/status/stop evidence pass. | |
 | R-065 | 21 | AGENTS.md required sections/order/content. | D | `AGENTS.md` | audit | tested | Current `AGENTS.md` matches Section 21. | |
 | R-066 | 22 | Core Definition of Done. | A | core modules | core tests/smoke | tested | `python3 -m pytest -q core/tests` passes; live core health smoke passed. | |
-| R-067 | 23 | TUI Definition of Done. | B | `tui/**` | TUI tests | tested | `bun install && bun test && bun run typecheck` passed. | |
+| R-067 | 23 | TUI Definition of Done. | B | `tui/**` | TUI tests | tested | `bun test && bun run typecheck` passed with 27 tests. | |
 | R-068 | 24 | Web Definition of Done. | C | `web/**` | web tests/smoke | tested | `python3 -m pytest -q web/tests` passed; web app smoke previously passed. | |
 | R-069 | 25 | Installer Definition of Done. | D | root ops files | ops tests/smoke | tested | `bash -n`, dry-run, isolated install/start/status/stop, ops tests passed. | |
 | R-070 | 26 | Integration test matrix. | A/B/C/D/F | test suites | core/tui/web/ops tests | tested | Full fake-provider/fake-Pi/core/web/TUI/installer evidence commands pass. | |
