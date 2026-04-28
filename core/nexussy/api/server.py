@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, logging, os, pathlib, shutil, yaml
+import asyncio, json, logging, multiprocessing, os, pathlib, shutil, yaml
 from datetime import datetime, timezone
 from uuid import uuid4
 from starlette.applications import Starlette
@@ -67,6 +67,12 @@ async def _do_startup():
     config=config if config is not None and config.database.global_path == loaded.database.global_path else loaded
     db=Database(config.database.global_path, config.database.busy_timeout_ms, config.database.write_retry_count, config.database.write_retry_base_ms)
     engine=Engine(db,config)
+    if multiprocessing.current_process().name != "MainProcess":
+        logging.getLogger(__name__).warning(
+            "nexussy is running in a child worker process. "
+            "The in-memory engine state (queues, tasks, paused runs, interview waiters) "
+            "is NOT shared across workers. Run with --workers 1 to avoid data loss."
+        )
     await db.init()
 
 async def startup():

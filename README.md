@@ -120,6 +120,11 @@ Reruns preserve existing config, env, and generated systemd user unit files.
 
 ## Start, Stop, And Diagnose
 
+> ⚠️ **Important:** nexussy must run with `--workers 1`. The pipeline engine holds
+> in-memory state (active run queues, interview waiters, pause flags) that is
+> not replicated across processes. Multi-worker deployments will silently lose
+> run state. Use the provided `Dockerfile` which enforces this constraint.
+
 ```bash
 ./nexussy.sh start      # start core and web
 ./nexussy.sh status     # show config path, ports, PID files, and health
