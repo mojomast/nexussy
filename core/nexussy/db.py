@@ -1,4 +1,11 @@
 from __future__ import annotations
+"""SQLite helpers with serialized writes and WAL-friendly unlocked reads.
+
+Writes use a process-local async lock plus `BEGIN IMMEDIATE` to avoid concurrent
+writer conflicts. Reads intentionally do not take that lock; callers that need
+strict read-after-write visibility must await the preceding write first.
+"""
+
 import asyncio, json, pathlib, sqlite3, time
 
 SCHEMA = """
@@ -32,6 +39,7 @@ class Database:
         await project_db.init()
         return project_db.path
     async def write(self, fn):
+        """Run a serialized SQLite write transaction with bounded retries."""
         async with self._lock:
             last=None
             for i in range(self.retries):
@@ -47,8 +55,11 @@ class Database:
                     except Exception: pass
                     await asyncio.sleep(self.retry*(2**i))
             raise last
-    # Reads intentionally do not acquire the process write lock. SQLite WAL
-    # allows concurrent readers, but callers needing strict read-after-write
-    # visibility should await the preceding write before issuing the read.
     async def read(self, sql, args=()):
-        con=self.connect(); rows=[dict(r) for r in con.execute(sql,args).fetchall()]; con.close(); return rows
+        """Run an unlocked SQLite read and always close the connection."""
+        con=self.connect()
+        try:
+            rows=[dict(r) for r in con.execute(sql,args).fetchall()]
+        finally:
+            con.close()
+        return rows

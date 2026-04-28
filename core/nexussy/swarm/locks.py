@@ -5,7 +5,7 @@ from nexussy.api.schemas import FileLock, LockStatus, now_utc
 from nexussy.security import sanitize_relative_path
 
 async def claim_file(db, run_id: str, path: str, worker_id: str, timeout_s=120, retry_ms=250, emit=None) -> FileLock:
-    rel=sanitize_relative_path(path); deadline=asyncio.get_event_loop().time()+timeout_s
+    loop=asyncio.get_running_loop(); rel=sanitize_relative_path(path); deadline=loop.time()+timeout_s
     waiting_emitted=False
     while True:
         now=now_utc(); exp=now+timedelta(seconds=timeout_s)
@@ -21,7 +21,7 @@ async def claim_file(db, run_id: str, path: str, worker_id: str, timeout_s=120, 
             if emit and not waiting_emitted:
                 waiting_emitted=True
                 await emit("file_lock_waiting", FileLock(path=rel,worker_id=worker_id,run_id=run_id,status=LockStatus.waiting,claimed_at=now,expires_at=exp))
-            if asyncio.get_event_loop().time() >= deadline: raise TimeoutError("file_locked")
+            if loop.time() >= deadline: raise TimeoutError("file_locked")
             await asyncio.sleep(retry_ms/1000)
 
 async def release_file(db, run_id: str, path: str, worker_id: str) -> FileLock:

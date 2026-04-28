@@ -156,6 +156,22 @@ Core exposes a minimal MCP tool surface for external agents:
 - `POST /mcp/call` invokes a tool by name with `arguments`.
 - Built-in tools include `nexussy_start_pipeline` and `nexussy_get_status`.
 
+## Security
+
+Configure production CORS explicitly in `~/.nexussy/nexussy.yaml`:
+
+```yaml
+security:
+  cors_origins:
+    - "https://your-dashboard.example"
+```
+
+The default `cors_origins: ["*"]` preserves local compatibility. Do not use wildcard origins for internet-facing production deployments; core emits a warning when `NEXUSSY_ENV=production` or `ENV=production` is set with wildcard CORS.
+
+`NEXUSSY_MOCK_PROVIDER=1` and request metadata such as `{"metadata":{"mock_provider":true}}` are for local development and smoke tests only. Never set mock provider mode in production because it bypasses real provider execution.
+
+Provider secrets are resolved in this order: OS keyring first, process/environment variables second, then the configured env file (`~/.nexussy/.env` by default). Guided setup stores keys in the OS keyring when available and falls back to the env file after a short keyring timeout; UIs and summaries report only configured/missing status and never render secret values.
+
 ## Mock mode and production gates
 
 nexussy can be exercised in explicit mock mode with request metadata such as `{"metadata":{"mock_provider":true}}`; this is suitable for local UI and pipeline smoke checks without provider secrets. Deterministic production-path provider testing can use `NEXUSSY_PROVIDER_MODE=fake`. Production provider execution uses LiteLLM and requires at least one configured provider key in `~/.nexussy/.env` or the OS keyring. Rate-limited provider starts return `429` with `Retry-After` when a reset time is known. Production swarm development uses the Pi RPC subprocess adapter and requires the `pi` command (or `NEXUSSY_PI_COMMAND`) to be installed for live Pi workers. `./nexussy.sh doctor` reports provider-key and Pi readiness without crashing.
@@ -170,7 +186,7 @@ Important defaults:
 
 - Core: `127.0.0.1:7771`
 - Web: `127.0.0.1:7772`
-- Core CORS: `http://127.0.0.1:7772`
+- Core CORS: `security.cors_origins` in `nexussy.yaml` (default `['*']` for local compatibility)
 - Web core base URL: `http://127.0.0.1:7771`
 - Auth header: `X-API-Key` when auth is enabled
 - Projects: `~/nexussy-projects/`

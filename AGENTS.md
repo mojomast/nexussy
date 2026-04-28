@@ -72,6 +72,10 @@ Resolve paths through the path sanitizer, validate anchors before writes, create
 | Web | `python -m pytest -q web/tests`; `python -m nexussy_web.app` |
 | Installer | `bash -n install.sh nexussy.sh`; `./install.sh --non-interactive --dry-run`; `./install.sh --non-interactive`; `./nexussy.sh start`; `./nexussy.sh status`; `./nexussy.sh stop`; `./nexussy.sh doctor` |
 
+# CORE WORKER ORCHESTRATION
+
+Develop-stage workers spawn and run in parallel, then merge serially to keep git conflict handling deterministic. Use `_run_single_worker` for custom worker spawn/RPC behavior and `_merge_single_worker` for custom merge/report behavior.
+
 # DO NOT
 
 - Do not make cross-boundary edits.

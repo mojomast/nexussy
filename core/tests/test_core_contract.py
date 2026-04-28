@@ -45,12 +45,13 @@ def test_security_helpers(tmp_path):
     assert "[REDACTED]" in scrub_log("secret=" + "b" * 64)
     assert "[REDACTED]" in scrub_log("ghp_" + "A" * 36)
     assert "[REDACTED]" in scrub_log("ghs_" + "Z" * 36)
-    assert "[REDACTED]" in scrub_log("leaked " + "a" * 40)
+    git_sha = "a" * 40
     short_hash = "a" * 39
     sha256 = "c" * 64
     upper_hex = "D" * 40
     assert short_hash in scrub_log("token=" + short_hash)
-    assert sha256 in scrub_log("sha256=" + sha256)
+    assert git_sha in scrub_log("commit " + git_sha)
+    assert "[REDACTED]" in scrub_log("hash=" + sha256)
     assert upper_hex in scrub_log("token=" + upper_hex)
 
 

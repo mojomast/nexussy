@@ -2,10 +2,22 @@ from __future__ import annotations
 import asyncio, json, os, re, pathlib, shutil, hashlib
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
-from nexussy.api.schemas import *
+from nexussy.api.schemas import (
+    ArtifactRef, ArtifactUpdatedPayload, ChangedFilesManifest, ComplexityLevel,
+    ComplexityProfile, DevelopReport, DonePayload, ErrorCode, ErrorResponse,
+    EventEnvelope, GitEventAction, GitEventPayload, InterviewArtifact,
+    InterviewQuestionAnswer, JsonValue, MergeReport, PausePayload,
+    PipelineStartRequest, ReviewReport, RunStartResponse, RunStatus,
+    RunSummary, SSEEventType, SessionCreateRequest, SessionDetail,
+    SessionSummary, StageName, StageRunStatus, StageStatusSchema,
+    StageTransitionPayload, TokenUsage, ToolName, ValidationIssue,
+    ValidationReport, Worker, WorkerRole, WorkerStatus, WorkerTaskPayload,
+    WorkerTaskStatus,
+)
 from nexussy.artifacts.store import safe_write, artifact_path, sha256_text
 from nexussy.checkpoint import STAGE_ORDER, latest_checkpoint, resume_from_checkpoint, save_checkpoint
 from nexussy.providers import active_rate_limit, complete, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
+from nexussy.session import now_utc
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees, remove_worktree
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
@@ -382,7 +394,13 @@ class Engine:
                 fut=asyncio.get_running_loop().create_future(); self.interview_waiters[sid]=fut; self.paused[rid]=True
                 await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("paused",rid)))
                 await self.emit(SSEEventType.pause_state_changed,sid,rid,PausePayload(paused=True,reason="waiting for interview answers"))
-                answered=await fut
+                interview_cfg=getattr(self.config.stages, "interview", None)
+                timeout_s=getattr(interview_cfg, "answer_timeout_s", 3600) if interview_cfg else 3600
+                try:
+                    answered=await asyncio.wait_for(fut, timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
+                    raise RuntimeError("interview answer timeout - user did not respond in time")
                 self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
             ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=answered,requirements=[qa.answer for qa in answered])
             return [await self._save_art(rid,sid,root,"interview",ia.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"complexity_profile",cp.model_dump_json(indent=2))]
@@ -456,62 +474,68 @@ class Engine:
 
     async def _merge_workers(self, req, detail, rid, root, context):
         sid=context["sid"]; main=context["main"]; workers_root=context["workers_root"]; artifacts_dir=context["artifacts_dir"]; base=context["base"]; cfg=context["cfg"]; roles=context["roles"]; workers=context["workers"]; merged=context["merged"]; orch=context["orch"]; selected_models=context["selected_models"]
-        for idx, role in enumerate(roles, start=1):
-            wid=f"{role.value}-{uuid4().hex[:6]}"; wt, branch=create_worktree(str(main), str(workers_root), wid, base); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_created,worker_id=wid,branch_name=branch,message="worktree created"))
-            worker=Worker(worker_id=wid,run_id=rid,role=role,status=WorkerStatus.running,task_id=f"task-{uuid4().hex[:6]}",task_title=f"Develop task {idx}",worktree_path=wt,branch_name=branch,model=selected_models.get("develop") or self.config.stages.develop.model)
-            await self._persist_worker(worker); await self.emit(SSEEventType.worker_spawned,sid,rid,worker)
-            await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
-            await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
-            rpc=await spawn_pi_worker(cfg,rid,wid,role.value,str(main),wt)
-            self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
-            req_id=await rpc.request(worker.task_title, "nexussy develop task")
-            paused_for_resume=False
-            try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
-            except TimeoutError:
-                if self.paused.get(rid): paused_for_resume=True
-                else: raise
-            finally:
-                for frame in rpc.frames:
-                    await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
-                await rpc.stop(self.config.pi.shutdown_timeout_s)
-                if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
-            if paused_for_resume or self.paused.get(rid):
-                worker.status=WorkerStatus.paused; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
-                await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.queued)
-                await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.queued))
-                ck=await save_checkpoint(self.db, rid, StageName.develop, f".nexussy/checkpoints/develop-{worker.task_id}.json", sha256_text(worker.task_id or wid))
-                await self.emit(SSEEventType.checkpoint_saved,sid,rid,ck)
-                while self.paused.get(rid): await asyncio.sleep(.05)
-                worker.status=WorkerStatus.running; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
-                await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
-                await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
-                rpc=await spawn_pi_worker(cfg,rid,wid,role.value,str(main),wt)
-                self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
-                req_id=await rpc.request(worker.task_title, "nexussy develop task")
-                try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
-                finally:
-                    for frame in rpc.frames:
-                        await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
-                    await rpc.stop(self.config.pi.shutdown_timeout_s)
-                    if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
-            if not list(pathlib.Path(wt).glob("**/*")):
-                pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
-            commit=commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
-            await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_started,worker_id=wid,branch_name=branch,commit_sha=commit,message="merge started"))
-            mr=merge_no_ff(str(main), branch); last_merge=mr
-            if not mr.passed:
-                await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_conflict,worker_id=wid,branch_name=branch,paths=mr.conflicts,message="merge conflict"))
-                await self._save_art(rid,sid,root,"merge_report",MergeReport(run_id=rid,base_commit=base,merged_workers=merged,conflicts=mr.conflicts,passed=False).model_dump_json(indent=2))
-                await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=False,workers=workers+[worker],tasks_total=len(roles),tasks_passed=len(merged),tasks_failed=1).model_dump_json(indent=2))
-                raise RuntimeError("merge conflict")
-            merged.append(wid); remove_worktree(str(main), wt, branch); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_removed,worker_id=wid,branch_name=branch,message="worktree removed"))
-            worker.status=WorkerStatus.finished; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker); workers.append(worker)
-            await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.passed)
-            await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.passed))
+        worker_results=await asyncio.gather(*[self._run_single_worker(req, detail, rid, root, role, idx, context) for idx, role in enumerate(roles, start=1)], return_exceptions=True)
+        for result in worker_results:
+            if isinstance(result, Exception): raise result
+            await self._merge_single_worker(result, req, detail, rid, root, context)
         prune_worktrees(str(main)); manifest=extract_changed_files(str(main),base,str(artifacts_dir/"changed-files"),rid)
         orch.status=WorkerStatus.finished; await self._persist_worker(orch); await self.emit(SSEEventType.worker_status,sid,rid,orch)
         merge_report=MergeReport(run_id=rid,base_commit=base,merge_commit=manifest.merge_commit,merged_workers=merged,passed=True)
         return [await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=True,workers=workers,tasks_total=len(workers),tasks_passed=len(workers)).model_dump_json(indent=2)), await self._save_art(rid,sid,root,"merge_report",merge_report.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"changed_files",manifest.model_dump_json(indent=2))]
+
+    async def _run_single_worker(self, req, detail, rid, root, role, idx, context):
+        sid=context["sid"]; main=context["main"]; workers_root=context["workers_root"]; base=context["base"]; cfg=context["cfg"]; selected_models=context["selected_models"]
+        wid=f"{role.value}-{uuid4().hex[:6]}"; wt, branch=create_worktree(str(main), str(workers_root), wid, base); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_created,worker_id=wid,branch_name=branch,message="worktree created"))
+        worker=Worker(worker_id=wid,run_id=rid,role=role,status=WorkerStatus.running,task_id=f"task-{uuid4().hex[:6]}",task_title=f"Develop task {idx}",worktree_path=wt,branch_name=branch,model=selected_models.get("develop") or self.config.stages.develop.model)
+        await self._persist_worker(worker); await self.emit(SSEEventType.worker_spawned,sid,rid,worker)
+        await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
+        await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
+        await self._run_worker_rpc(rid, sid, worker, idx, cfg, role, main, wt)
+        if not [p for p in pathlib.Path(wt).glob("**/*") if ".git" not in p.parts]:
+            pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
+        commit=commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
+        return {"worker":worker,"idx":idx,"wid":wid,"wt":wt,"branch":branch,"commit":commit}
+
+    async def _run_worker_rpc(self, rid, sid, worker, idx, cfg, role, main, wt):
+        rpc=await spawn_pi_worker(cfg,rid,worker.worker_id,role.value,str(main),wt)
+        self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
+        req_id=await rpc.request(worker.task_title, "nexussy develop task")
+        paused_for_resume=False
+        try: await rpc.wait_response(req_id, self.config.swarm.worker_task_timeout_s)
+        except TimeoutError:
+            if self.paused.get(rid): paused_for_resume=True
+            else: raise
+        finally:
+            for frame in rpc.frames:
+                await self.emit(SSEEventType.worker_stream,sid,rid,frame.payload)
+            await rpc.stop(self.config.pi.shutdown_timeout_s)
+            if rpc in self.active_worker_rpcs.get(rid,[]): self.active_worker_rpcs[rid].remove(rpc)
+        if paused_for_resume or self.paused.get(rid):
+            worker.status=WorkerStatus.paused; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
+            await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.queued)
+            await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.queued))
+            ck=await save_checkpoint(self.db, rid, StageName.develop, f".nexussy/checkpoints/develop-{worker.task_id}.json", sha256_text(worker.task_id or worker.worker_id))
+            await self.emit(SSEEventType.checkpoint_saved,sid,rid,ck)
+            while self.paused.get(rid): await asyncio.sleep(.05)
+            worker.status=WorkerStatus.running; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
+            await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
+            await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.running))
+            await self._run_worker_rpc(rid, sid, worker, idx, cfg, role, main, wt)
+
+    async def _merge_single_worker(self, result, req, detail, rid, root, context):
+        sid=context["sid"]; main=context["main"]; base=context["base"]; roles=context["roles"]; workers=context["workers"]; merged=context["merged"]
+        worker=result["worker"]; idx=result["idx"]; wid=result["wid"]; wt=result["wt"]; branch=result["branch"]; commit=result["commit"]
+        await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_started,worker_id=wid,branch_name=branch,commit_sha=commit,message="merge started"))
+        mr=merge_no_ff(str(main), branch)
+        if not mr.passed:
+            await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.merge_conflict,worker_id=wid,branch_name=branch,paths=mr.conflicts,message="merge conflict"))
+            await self._save_art(rid,sid,root,"merge_report",MergeReport(run_id=rid,base_commit=base,merged_workers=merged,conflicts=mr.conflicts,passed=False).model_dump_json(indent=2))
+            await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=False,workers=workers+[worker],tasks_total=len(roles),tasks_passed=len(merged),tasks_failed=1).model_dump_json(indent=2))
+            raise RuntimeError("merge conflict")
+        merged.append(wid); remove_worktree(str(main), wt, branch); await self.emit(SSEEventType.git_event,sid,rid,GitEventPayload(action=GitEventAction.worktree_removed,worker_id=wid,branch_name=branch,message="worktree removed"))
+        worker.status=WorkerStatus.finished; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker); workers.append(worker)
+        await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.passed)
+        await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.passed))
 
     async def _persist_worker(self, w: Worker):
         await self.db.write(lambda con: con.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(w.worker_id,w.run_id,w.role,w.status,w.task_id,w.worktree_path,w.branch_name,w.pid,w.usage.model_dump_json(),w.last_error.model_dump_json() if w.last_error else None,w.model_dump_json())))

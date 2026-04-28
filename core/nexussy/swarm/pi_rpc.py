@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio, json, os, pathlib, signal, sys
+from collections import deque
 from dataclasses import dataclass, field
 
 from nexussy.api.schemas import ErrorCode, ErrorResponse, WorkerStreamPayload
 from nexussy.security import scrub_log
+
+MAX_FRAMES = 10_000
 
 @dataclass
 class PiFrame:
@@ -14,7 +17,7 @@ class PiFrame:
 @dataclass
 class PiRPCProcess:
     process: asyncio.subprocess.Process
-    frames: list[PiFrame] = field(default_factory=list)
+    frames: deque[PiFrame] = field(default_factory=lambda: deque(maxlen=MAX_FRAMES))
     _tasks: list[asyncio.Task] = field(default_factory=list)
     cancelled: bool = False
     responses: dict[str, dict] = field(default_factory=dict)
@@ -28,8 +31,8 @@ class PiRPCProcess:
         return rid
 
     async def wait_response(self, request_id: str, timeout_s: float = 900) -> dict:
-        deadline = asyncio.get_event_loop().time() + timeout_s
-        while asyncio.get_event_loop().time() < deadline:
+        loop = asyncio.get_running_loop(); deadline = loop.time() + timeout_s
+        while loop.time() < deadline:
             if request_id in self.responses:
                 return self.responses[request_id]
             if self.process.returncode is not None:

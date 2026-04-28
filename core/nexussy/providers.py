@@ -196,9 +196,17 @@ async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = Fa
         import litellm
     except Exception as e:
         raise RuntimeError("LiteLLM is not installed") from e
-    os.environ.update({k:v for k,v in effective_secret_env().items() if k in DISCOVERY and v})
+    call_env = {k:v for k,v in effective_secret_env().items() if k in DISCOVERY and v}
+    provider = provider_for_model(model)
+    call_kwargs = {}
+    for key, name in DISCOVERY.items():
+        if name == provider and key.endswith("_API_KEY") and call_env.get(key):
+            call_kwargs["api_key"] = call_env[key]
+            break
+    if provider == "ollama" and call_env.get("OLLAMA_BASE_URL"):
+        call_kwargs["api_base"] = call_env["OLLAMA_BASE_URL"]
     try:
-        response = await asyncio.wait_for(litellm.acompletion(model=model, messages=[{"role":"user","content":prompt}]), timeout=timeout_s)
+        response = await asyncio.wait_for(litellm.acompletion(model=model, messages=[{"role":"user","content":prompt}], **call_kwargs), timeout=timeout_s)
     except asyncio.TimeoutError as e:
         raise TimeoutError(f"provider timeout after {timeout_s}s") from e
     msg = response.choices[0].message.content if getattr(response, "choices", None) else ""

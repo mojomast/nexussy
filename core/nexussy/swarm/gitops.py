@@ -28,7 +28,13 @@ def create_worktree(repo: str, worker_root: str, worker_id: str, base_commit: st
     return str(wt), branch
 
 def commit_worker(worktree: str, message: str = "worker changes") -> str:
-    wt = Path(worktree); _git(wt, "add", "."); _git(wt, "commit", "-m", message)
+    wt = Path(worktree); _git(wt, "add", ".")
+    try:
+        _git(wt, "commit", "-m", message)
+    except subprocess.CalledProcessError as e:
+        if "nothing to commit" in (e.output or ""):
+            return _git(wt, "rev-parse", "HEAD")
+        raise
     return _git(wt, "rev-parse", "HEAD")
 
 def remove_worktree(repo: str, worktree: str, branch: str):

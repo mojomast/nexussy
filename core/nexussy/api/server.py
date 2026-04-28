@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, os, pathlib, shutil, yaml
+import asyncio, json, logging, os, pathlib, shutil, yaml
 from datetime import datetime, timezone
 from uuid import uuid4
 from starlette.applications import Starlette
@@ -10,7 +10,19 @@ from pydantic import ValidationError
 import uvicorn
 
 from nexussy import __version__
-from nexussy.api.schemas import *
+from nexussy.api.schemas import (
+    ArtifactContentResponse, ArtifactManifestResponse, ArtifactRef,
+    AssistantReplyRequest, AssistantReplyResponse, Blocker, BlockerCreateRequest,
+    BlockerResolveRequest, ControlResponse, ErrorCode, ErrorResponse,
+    EventEnvelope, FileLock, GraphEdge, GraphNode, GraphResponse,
+    HealthResponse, HeartbeatPayload, InterviewAnswerRequest, MemoryEntry,
+    MemoryEntryCreateRequest, NexussyConfig, PausePayload, PipelineInjectRequest,
+    PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary,
+    SSEEventType, SessionCreateRequest, SessionDetail, StageName,
+    StageRunStatus, StageSkipRequest, StageStatusSchema, TokenUsage, Worker,
+    WorkerAssignRequest, WorkerInjectRequest, WorkerSpawnRequest, WorkerStatus,
+    WorkerTaskPayload, WorkerTaskStatus,
+)
 from nexussy.config import load_config
 from nexussy.db import Database
 from nexussy.mcp import call_tool, list_tools
@@ -18,8 +30,15 @@ from nexussy.pipeline.engine import Engine
 from nexussy.pipeline.engine import ProviderStartError
 from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, provider_error_for_model, provider_for_model, secret_names, secret_summary, set_secret
 from nexussy.security import sanitize_path, sanitize_relative_path
+from nexussy.session import now_utc
 
 config=None; db=None; engine=None
+
+def cors_origins_for(cfg):
+    origins = cfg.security.cors_origins if cfg is not None else ["*"]
+    if "*" in origins and os.environ.get("NEXUSSY_ENV", os.environ.get("ENV", "")).lower() == "production":
+        logging.getLogger(__name__).warning("wildcard CORS origin is enabled in production")
+    return origins
 
 async def startup():
     global config, db, engine
@@ -88,7 +107,7 @@ async def sessions_create(request):
     return await endpoint(request, inner)
 async def sessions_list(request):
     async def inner(r):
-        lim=int(r.query_params.get("limit",50)); off=int(r.query_params.get("offset",0)); rows=await db.read("SELECT detail_json FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",(lim,off))
+        lim=min(int(r.query_params.get("limit",50)),200); off=int(r.query_params.get("offset",0)); rows=await db.read("SELECT detail_json FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?",(lim,off))
         return JSONResponse([dump(SessionDetail.model_validate_json(x["detail_json"]).session) for x in rows])
     return await endpoint(request, inner)
 async def sessions_get(request):
@@ -120,7 +139,13 @@ async def mcp_tools(request):
 
 async def mcp_call(request):
     async def inner(r):
-        data=await r.json(); result=await call_tool(data["name"], data.get("arguments") or {}, engine=engine, db=db)
+        data=await r.json()
+        if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+            raise ValueError([{"loc":["body","name"],"msg":"name is required and must be a string","type":"value_error"}])
+        args=data.get("arguments") or {}
+        if not isinstance(args, dict):
+            raise ValueError([{"loc":["body","arguments"],"msg":"arguments must be an object","type":"value_error"}])
+        result=await call_tool(data["name"], args, engine=engine, db=db)
         return JSONResponse(dump(result))
     return await endpoint(request, inner)
 async def interview_answer(request):
@@ -392,7 +417,7 @@ async def events(request):
 
 routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/mcp/tools',mcp_tools),Route('/mcp/call',mcp_call,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
 app=Starlette(routes=routes,on_startup=[startup])
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=cors_origins_for(config or load_config()), allow_methods=["*"], allow_headers=["*"])
 
 if __name__ == "__main__":
     cfg=load_config()
