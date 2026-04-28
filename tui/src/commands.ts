@@ -6,6 +6,7 @@ import type { StageName, WorkerRole } from "./types";
 export type CommandResult = { local?:true; endpoint?:string; method?:"GET"|"POST"|"DELETE"; message:string; html?:string };
 const stages = new Set(["interview","design","validate","plan","review","develop"]);
 const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
+export const WORKER_ID_PATTERN = /^(orchestrator|backend|frontend|qa|devops|writer|analyst)-[a-z0-9]{6,12}$/;
 const providerSecrets = new Set(["OPENAI_API_KEY","ANTHROPIC_API_KEY","OPENROUTER_API_KEY","GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","TOGETHER_API_KEY","FIREWORKS_API_KEY","XAI_API_KEY","GLM_API_KEY","ZAI_API_KEY","REQUESTY_API_KEY","AETHER_API_KEY","OLLAMA_BASE_URL"]);
 
 export async function runSlash(input:string, client:CoreClient, state:TuiState): Promise<CommandResult> {
@@ -25,8 +26,9 @@ export async function runSlash(input:string, client:CoreClient, state:TuiState):
   if (!run_id) throw new Error("run_id is required for remote slash commands");
   if (cmd === "/pause") { const reason=rest.join(" ")||"user"; await client.pause(run_id, reason); return {endpoint:"/pipeline/pause",method:"POST",message:reason}; }
   if (cmd === "/resume") { await client.resume(run_id); return {endpoint:"/pipeline/resume",method:"POST",message:"resumed"}; }
-  if (cmd === "/stage") { const stage=rest[0]; if(!stages.has(stage)) throw new Error("invalid stage"); await client.skip(run_id, stage as StageName, "user slash stage skip"); return {endpoint:"/pipeline/skip",method:"POST",message:`stage ${stage}`}; }
+  if (cmd === "/stage") { const stage=rest[0]; if(!stages.has(stage)) throw new Error("invalid stage"); return {local:true,message:`current stage view: ${stage}. Use /skip ${stage} <reason> to mutate the run.`}; }
+  if (cmd === "/skip") { const stage=rest.shift(); const reason=rest.join(" "); if(!stage || !stages.has(stage)) throw new Error("invalid stage"); if(!reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(run_id, stage as StageName, reason); return {endpoint:"/pipeline/skip",method:"POST",message:`skipped ${stage}`}; }
   if (cmd === "/spawn") { const role=rest.shift(); if(!role||!roles.has(role)) throw new Error("invalid role"); const task=rest.join(" "); if(!task) throw new Error("task required"); await client.spawn({run_id, role:role as WorkerRole, task}); return {endpoint:"/swarm/spawn",method:"POST",message:task}; }
-  if (cmd === "/inject") { const maybe=rest[0]; const workerId = maybe && /^[a-z]+-[a-z0-9]{6,12}$/.test(maybe) ? rest.shift() : undefined; const message=rest.join(" "); if(!message) throw new Error("message required"); if(workerId){ await client.injectWorker(workerId,{run_id,worker_id:workerId,message}); return {endpoint:`/swarm/workers/${workerId}/inject`,method:"POST",message}; } await client.inject({run_id,message}); return {endpoint:"/pipeline/inject",method:"POST",message}; }
+  if (cmd === "/inject") { const maybe=rest[0]; const workerId = maybe && WORKER_ID_PATTERN.test(maybe) ? rest.shift() : undefined; const message=rest.join(" "); if(!message) throw new Error("message required"); if(workerId){ await client.injectWorker(workerId,{run_id,worker_id:workerId,message}); return {endpoint:`/swarm/workers/${workerId}/inject`,method:"POST",message}; } await client.inject({run_id,message}); return {endpoint:"/pipeline/inject",method:"POST",message}; }
   throw new Error(`unknown command ${cmd}`);
 }

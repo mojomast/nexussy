@@ -98,7 +98,7 @@ def secret_summary(name: str, *, env: dict | None = None, env_path: Path | None 
     if env.get(name):
         return SecretSummary(name=name, source="env", configured=True)
     if read_env_file(env_path).get(name):
-        return SecretSummary(name=name, source="file", configured=True)
+        return SecretSummary(name=name, source="config", configured=True)
     return SecretSummary(name=name, source="env", configured=False)
 
 def set_secret(name: str, value: str, *, env_path: Path | None = None, service: str = "nexussy") -> SecretSummary:
@@ -115,7 +115,7 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None, service: 
     logger.warning("keyring unavailable; secret %s will be stored as plaintext in %s", name, target_path)
     _write_env_file_value(target_path, name, value)
     os.environ[name] = value
-    return SecretSummary(name=name, source="file", configured=True, updated_at=datetime.now(timezone.utc))
+    return SecretSummary(name=name, source="config", configured=True, updated_at=datetime.now(timezone.utc))
 
 def delete_secret(name: str, *, env_path: Path | None = None, service: str = "nexussy") -> bool:
     validate_secret_name(name)
@@ -231,12 +231,20 @@ async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = Fa
         return ProviderResult(text=f"mock {stage} output for {prompt[:40]}", usage={"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
     if os.environ.get("NEXUSSY_PROVIDER_MODE") == "fake":
         return ProviderResult(text=f"fake provider {stage} output for {prompt[:80]}", usage={"input_tokens":len(prompt.split()),"output_tokens":8,"cost_usd":0.0,"provider":"fake","model":model})
+    provider = provider_for_model(model)
+    if db is not None:
+        limited = await active_rate_limit(db, provider, model)
+        if limited:
+            reset = datetime.fromisoformat(str(limited["reset_at"]).replace("Z", "+00:00"))
+            exc = RuntimeError(f"provider rate limited until {limited['reset_at']}")
+            setattr(exc, "status_code", 429)
+            setattr(exc, "headers", {"retry-after": str(max(0, int((reset - datetime.now(timezone.utc)).total_seconds())))})
+            raise exc
     try:
         import litellm
     except Exception as e:
         raise RuntimeError("LiteLLM is not installed") from e
     call_env = {k:v for k,v in (_env or effective_secret_env()).items() if k in DISCOVERY and v}
-    provider = provider_for_model(model)
     call_kwargs = {}
     for key, name in DISCOVERY.items():
         if name == provider and key.endswith("_API_KEY") and call_env.get(key):

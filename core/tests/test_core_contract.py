@@ -564,7 +564,7 @@ def test_health_reports_pi_availability(monkeypatch, tmp_path):
 
 def test_cors_uses_runtime_config_not_import_time_config(monkeypatch, tmp_path):
     monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
-    server.config = load_config({"security":{"cors_origins":["https://runtime.example"]}})
+    server.config = load_config({"core":{"cors_allow_origins":["https://runtime.example"]}, "security":{"cors_origins":["https://ignored.example"]}})
     server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
     server.engine = Engine(server.db, server.config)
     server.app.middleware_stack = None
@@ -573,6 +573,8 @@ def test_cors_uses_runtime_config_not_import_time_config(monkeypatch, tmp_path):
         denied = c.get("/health", headers={"Origin":"https://import.example"})
     assert allowed.headers.get("access-control-allow-origin") == "https://runtime.example"
     assert "access-control-allow-origin" not in denied.headers
+    monkeypatch.setenv("NEXUSSY_CORS_ALLOW_ORIGINS", "https://env-one.example, https://env-two.example")
+    assert load_config().core.cors_allow_origins == ["https://env-one.example", "https://env-two.example"]
 
 
 def test_provider_keys_load_from_env_file(tmp_path, monkeypatch):
@@ -643,7 +645,7 @@ def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path,
         assert c.put("/secrets/ANTHROPIC_API_KEY", json={"value":123}).status_code == 400
         r = c.put("/secrets/ANTHROPIC_API_KEY", json={"value":"sk-anthropic-secret"})
         assert r.status_code == 200, r.text
-        assert r.json()["source"] == "file"
+        assert r.json()["source"] == "config"
         assert "keyring unavailable" in caplog.text
         assert "ANTHROPIC_API_KEY=sk-anthropic-secret" in (tmp_path / ".env").read_text()
         assert "anthropic" in server.configured_providers()
@@ -656,7 +658,7 @@ def test_set_secret_failing_keyring_warns_and_uses_file(monkeypatch, tmp_path, c
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     env = tmp_path / ".env"
     summary = set_secret("GROQ_API_KEY", "sk-groq-secret", env_path=env)
-    assert summary.source == "file"
+    assert summary.source == "config"
     assert "GROQ_API_KEY=sk-groq-secret" in env.read_text()
     assert "keyring unavailable" in caplog.text
 
@@ -677,7 +679,7 @@ def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
     with TestClient(app) as c:
         r = c.put("/secrets/OPENROUTER_API_KEY", json={"value":"sk-openrouter-secret"})
         assert r.status_code == 200, r.text
-        assert r.json()["source"] == "file"
+        assert r.json()["source"] == "config"
         assert "OPENROUTER_API_KEY=sk-openrouter-secret" in (tmp_path / ".env").read_text()
 
 
@@ -1107,7 +1109,79 @@ async def test_worker_tool_permission_failure_emits_tool_output(tmp_path):
     result = await engine.execute_worker_tool("rid", "analyst-1", ToolName.write_file, {"path":"src/app.py"})
     assert result["success"] is False
     events = await engine.replay("rid")
-    assert any(e.type == "tool_output" and e.payload["success"] is False for e in events)
+    call = next(e for e in events if e.type == "tool_call")
+    out = next(e for e in events if e.type == "tool_output")
+    assert call.payload["call_id"] == out.payload["call_id"]
+    assert call.payload["stage"] == "develop"
+    assert call.payload["tool_name"] == "write_file"
+    assert call.payload["arguments"] == {"path":"src/app.py"}
+    assert out.payload["success"] is False
+    assert out.payload["error"]
+
+
+def test_existing_repo_path_rejects_symlink_escape_and_copies_safe_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    outside = tmp_path / "outside"; outside.mkdir(); (outside / "secret.txt").write_text("secret")
+    repo = tmp_path / "repo"; repo.mkdir(); (repo / "README.md").write_text("ok")
+    subprocess_run = __import__("subprocess").run
+    subprocess_run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    (repo / "escape").symlink_to(outside / "secret.txt")
+    server.config = load_config({"projects_dir": str(tmp_path / "projects")})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        bad = c.post("/sessions", json={"project_name":"Bad Import","description":"x","existing_repo_path":str(repo)})
+        assert bad.status_code == 400
+        (repo / "escape").unlink()
+        good = c.post("/sessions", json={"project_name":"Good Import","description":"x","existing_repo_path":str(repo)})
+        assert good.status_code == 200, good.text
+        main = Path(good.json()["main_worktree"])
+        assert (main / "README.md").read_text() == "ok"
+
+
+def test_unknown_resources_return_404(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"projects_dir": str(tmp_path / "projects")})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        assert c.get("/pipeline/runs/nope/stream").status_code == 404
+        assert c.get("/events", params={"run_id":"nope"}).status_code == 404
+        assert c.delete("/memory/nope").status_code == 404
+        assert c.get("/pipeline/artifacts", params={"session_id":"nope"}).status_code == 404
+        assert c.post("/swarm/spawn", json={"run_id":"nope","role":"backend","task":"x"}).status_code == 404
+
+
+def test_worker_stream_filters_replay_to_requested_worker(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"projects_dir": str(tmp_path / "projects"), "sse":{"heartbeat_interval_s":60}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    async def seed():
+        await server.db.init()
+        now = datetime.now(timezone.utc).isoformat()
+        await server.db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
+        for wid in ("backend-1", "frontend-1"):
+            worker = Worker(worker_id=wid, run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, worktree_path=str(tmp_path), branch_name=f"worker/{wid}", model="openai/gpt-5.5-fast")
+            await server.db.write(lambda con, worker=worker: con.execute("INSERT INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(worker.worker_id,worker.run_id,worker.role,worker.status,worker.task_id,worker.worktree_path,worker.branch_name,worker.pid,worker.usage.model_dump_json(),None,worker.model_dump_json())))
+        await server.engine.emit(SSEEventType.worker_stream, "sid", "rid", server.WorkerStreamPayload(worker_id="frontend-1", stream_kind="rpc", line="front"))
+        await server.engine.emit(SSEEventType.worker_stream, "sid", "rid", server.WorkerStreamPayload(worker_id="backend-1", stream_kind="rpc", line="back"))
+    asyncio.run(seed())
+    class Req:
+        headers = {}
+        query_params = {}
+        path_params = {"worker_id":"backend-1"}
+        url = types.SimpleNamespace(path="/swarm/workers/backend-1/stream")
+    async def first_frame():
+        resp = await server.stream(Req())
+        frame = await anext(resp.body_iterator)
+        await resp.body_iterator.aclose()
+        return frame
+    body = json.loads(asyncio.run(first_frame()).split("data: ", 1)[1].split("\n", 1)[0])
+    assert body["payload"]["worker_id"] == "backend-1"
+    assert body["payload"]["line"] == "back"
+    with TestClient(app) as c:
+        assert c.get("/swarm/workers/missing/stream").status_code == 404
 
 
 @pytest.mark.asyncio

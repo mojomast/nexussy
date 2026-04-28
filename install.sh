@@ -148,8 +148,8 @@ swarm:
   file_lock_retry_ms: 250
   merge_strategy: "no_ff"
 pi:
-  command: "pi"
-  args: ["--rpc"]
+  command: "nexussy-pi"
+  args: []
   startup_timeout_s: 30
   shutdown_timeout_s: 10
   max_stdout_line_bytes: 1048576
@@ -214,6 +214,28 @@ prompt_keyring() {
   esac
 }
 
+systemd_safe_value() {
+  value="$1"
+  # Generated units intentionally use simple unquoted assignments. Reject
+  # characters that systemd would parse specially or that need escaping, rather
+  # than emitting ambiguous units for unusual install paths.
+  case "$value" in
+    ''|*[[:space:]]*|*%*|*\"*) return 1 ;;
+    *\\*|*\;*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+validate_systemd_user_paths() {
+  systemd_safe_value "$ROOT_DIR" || fail "--systemd-user does not support repository paths with spaces or systemd-special characters: $ROOT_DIR"
+  systemd_safe_value "$NEXUSSY_CONFIG" || fail "--systemd-user does not support config paths with spaces or systemd-special characters: $NEXUSSY_CONFIG"
+  systemd_safe_value "$NEXUSSY_ENV_FILE" || fail "--systemd-user does not support env-file paths with spaces or systemd-special characters: $NEXUSSY_ENV_FILE"
+  systemd_safe_value "$PYTHON" || fail "--systemd-user does not support Python paths with spaces or systemd-special characters: $PYTHON"
+  if [ -n "${1:-}" ]; then
+    systemd_safe_value "$1" || fail "--systemd-user does not support resolved Python paths with spaces or systemd-special characters: $1"
+  fi
+}
+
 install_packages() {
   if [ "$DRY_RUN" -eq 1 ]; then
     dry "would run: $PYTHON -m pip install -e core/"
@@ -234,6 +256,7 @@ write_systemd_user() {
   if [ "$DRY_RUN" -eq 1 ]; then dry "would write systemd user units under $HOME/.config/systemd/user"; return 0; fi
   unit_dir="$HOME/.config/systemd/user"
   python_path=$(command -v "$PYTHON")
+  validate_systemd_user_paths "$python_path"
   mkdir -p "$unit_dir"
   # Idempotency contract: generated user units are created only when absent so
   # rerunning install does not overwrite local systemd customizations.

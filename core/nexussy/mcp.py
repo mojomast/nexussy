@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from nexussy.api.schemas import ArtifactManifestResponse, ArtifactRef, Blocker, ControlResponse, ErrorCode, ErrorResponse, InterviewAnswerRequest, PipelineInjectRequest, PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary, SSEEventType, SessionDetail, StageStatusSchema, Worker, WorkerAssignRequest, WorkerSpawnRequest, WorkerStatus, WorkerTaskPayload, WorkerTaskStatus
+from nexussy.api.schemas import ArtifactManifestResponse, ArtifactRef, Blocker, ControlResponse, ErrorCode, ErrorResponse, InterviewAnswerRequest, PausePayload, PipelineInjectRequest, PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary, SSEEventType, SessionDetail, StageStatusSchema, Worker, WorkerAssignRequest, WorkerSpawnRequest, WorkerStatus, WorkerTaskPayload, WorkerTaskStatus
 from nexussy.session import now_utc
 
 ToolHandler = Callable[..., Awaitable[Any]]
@@ -52,6 +52,11 @@ async def _pause(arguments: dict[str, Any], *, engine, db):
     if not rows:
         raise KeyError("run")
     engine.paused[run_id] = True
+    cfg = getattr(engine, "config", None)
+    for rpc in list(getattr(engine, "active_worker_rpcs", {}).get(run_id, [])):
+        await rpc.stop(getattr(getattr(cfg, "pi", None), "shutdown_timeout_s", 10))
+    if hasattr(engine, "emit"):
+        await engine.emit(SSEEventType.pause_state_changed, rows[0]["session_id"], run_id, PausePayload(paused=True, reason=arguments.get("reason", "user"), requested_by="mcp"))
     await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("paused", run_id)))
     return ControlResponse(run_id=run_id, status=RunStatus.paused, message="paused")
 
@@ -62,6 +67,8 @@ async def _resume(arguments: dict[str, Any], *, engine, db):
     if not rows:
         raise KeyError("run")
     engine.paused.pop(run_id, None)
+    if hasattr(engine, "emit"):
+        await engine.emit(SSEEventType.pause_state_changed, rows[0]["session_id"], run_id, PausePayload(paused=False, reason="resume", requested_by="mcp"))
     await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("running", run_id)))
     return ControlResponse(run_id=run_id, status=RunStatus.running, message="resumed")
 
@@ -75,6 +82,8 @@ async def _cancel(arguments: dict[str, Any], *, engine, db):
     if task:
         task.cancel()
     engine.paused.pop(run_id, None)
+    if hasattr(engine, "emit"):
+        await engine.emit(SSEEventType.pause_state_changed, rows[0]["session_id"], run_id, PausePayload(paused=False, reason=arguments.get("reason", "cancelled"), requested_by="mcp"))
     await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("cancelled", run_id)))
     return ControlResponse(run_id=run_id, status=RunStatus.cancelled, message=arguments.get("reason", "cancelled"))
 
@@ -114,6 +123,9 @@ async def _inject(arguments: dict[str, Any], *, engine=None, db=None):
 
 async def _worker_spawn(arguments: dict[str, Any], *, engine, db):
     req = WorkerSpawnRequest.model_validate(arguments)
+    run_rows = await db.read("SELECT session_id FROM runs WHERE run_id=?", (req.run_id,))
+    if not run_rows:
+        raise KeyError("run")
     cfg = getattr(engine, "config", None)
     projects_dir = getattr(cfg, "projects_dir", ".") if cfg is not None else "."
     default_model = getattr(getattr(cfg, "providers", None), "default_model", "mock/model")
@@ -121,9 +133,8 @@ async def _worker_spawn(arguments: dict[str, Any], *, engine, db):
     wt = str(pathlib.Path(projects_dir).expanduser() / "workers" / wid)
     worker = Worker(worker_id=wid, run_id=req.run_id, role=req.role, status=WorkerStatus.idle, task_title=req.task, worktree_path=wt, branch_name=f"worker/{wid}", model=req.model or default_model)
     await db.write(lambda con: con.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)", (worker.worker_id, worker.run_id, worker.role, worker.status, worker.task_id, worker.worktree_path, worker.branch_name, worker.pid, worker.usage.model_dump_json(), None, worker.model_dump_json())))
-    rows = await db.read("SELECT session_id FROM runs WHERE run_id=?", (req.run_id,))
-    if rows and hasattr(engine, "emit"):
-        await engine.emit(SSEEventType.worker_spawned, rows[0]["session_id"], req.run_id, worker)
+    if hasattr(engine, "emit"):
+        await engine.emit(SSEEventType.worker_spawned, run_rows[0]["session_id"], req.run_id, worker)
     return worker
 
 

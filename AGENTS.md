@@ -98,7 +98,7 @@ The bundled `local_pi_worker` bash tool uses a stripped environment:
 | Working dir | Always `cwd=worktree` |
 
 **This worker is for local development only.** For multi-tenant production,
-set `PI_COMMAND` in `nexussy.yaml` to a sandboxed executor.
+set `pi.command` in `nexussy.yaml` (or `NEXUSSY_PI_COMMAND`) to a sandboxed executor.
 The prior regex denylist (`_DANGEROUS_BASH`) was removed - it was bypassable
 and created false security confidence.
 

@@ -38,6 +38,9 @@
 - Subagent C zero-build dashboard refresh complete: web now serves separate vanilla `index.html`, `app.js`, and `style.css` assets with no CDN/build step; sessions and pipeline status poll through `/api/*`, run SSE connects via `/api/pipeline/runs/{run_id}/stream`, pause interview answers POST to `/api/pipeline/{session_id}/interview/answer`, and web tests pass.
 - Bundled Pi worker/RPC pass complete: core now ships `nexussy-pi`, local JSON-RPC stdio worker tools, real `pi --rpc-mode` settings handoff, and Pi worker regression tests. Checks passed: `python3 -m pytest -q core/tests` (78 passed).
 - Stub wiring integration complete: core worker inject/stop/stream, pipeline inject, existing repo import, session lifecycle transitions, token usage aggregation, MCP expansion, bundled/real Pi worker paths, core `/ui`, and web dashboard assets are wired. Checks passed: `python3 -m pytest tests/ -v --tb=short` from `core/` (78 passed), `python3 -m pytest -q web/tests` (47 passed), `bash ops_tests.sh`, `cd tui && bun test`, and `cd tui && bun run typecheck`; `python` and `ruff` are unavailable in this environment.
+- Root ops/docs review fixes complete: launcher startup failures now terminate just-started core/web processes and clear PID files, foreground TUI runs have minimal PID/lifecycle-log management, Pi/CORS docs match actual config/env keys, systemd user units reject unsupported unescaped paths, and ops tests keep temporary outputs under their private temp root. Checks passed: `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run`.
+- Web-owned review fixes complete: dashboard interview submissions now use `{answers:{question_id:answer}}`, core auth keys are injected by the proxy for fetch/SSE when missing, SPEC status/session response shapes are consumed, required tabs and graph proxy loading are present, swarm/file locks hydrate on status refresh, and stale root-level web assets are neutralized. Checks passed: `python3 -m pytest -q web/tests` (50 passed).
+- Full codebase review fix pass complete: core SSE/tool payloads, worker streams, existing-repo import validation, rate-limit handling, CORS/secret schema drift, 404 semantics, and MCP controls were tightened; TUI restored Pi TUI as default, removed non-contract handoff endpoints, made `/stage` view-only, and hydrates status/workers/artifacts; web and ops fixes are recorded above. Coordinator checks passed: `python3 -m pytest -q core/tests` (86 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck`, `python3 -m pytest -q web/tests` (50 passed), shell syntax, ops tests, installer dry-run, core startup smoke, and alternate-port web startup smoke.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -64,6 +67,9 @@
 - [✅] A: bundled Pi worker/RPC implementation completed for local JSON-RPC stdio worker, shim entrypoint, Pi command settings, default command, and core tests.
 - [✅] C: zero-build vanilla web dashboard refresh with session polling, pipeline status polling, SSE live log, and paused interview answer form.
 - [✅] L1: Stub/gap wiring pass completed for bundled Pi, MCP tools, worker controls, pipeline inject, existing repo import, session lifecycle, cost tracking, core `/ui`, and docs/coverage.
+- [✅] C: web-owned review fixes for interview answer schema, auth-aware proxying, SPEC status/session shapes, required tabs/graph, swarm hydration, tests, and stale asset neutralization.
+- [✅] M1: Root ops/docs-owned review findings fixed for launcher cleanup, TUI PID/log handling, Pi/CORS docs, systemd path safety, and ops test temp-file safety.
+- [✅] M2: Full codebase review findings fixed across core, TUI, web, and ops/docs with passing coordinator verification.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

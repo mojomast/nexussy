@@ -1,6 +1,6 @@
 import { CoreClient, FixtureCoreClient } from "./client";
 import { CONTRACT_EVENT_FIXTURES, FIXTURE_RUN_ID } from "./fixtures";
-import { createState, reduceEvent } from "./state";
+import { createState, reduceEvent, reduceStatusSnapshot } from "./state";
 import { loadOptionalPiRuntime, renderPanels } from "./renderer";
 import { createInterface } from "node:readline/promises";
 import { runSlash } from "./commands";
@@ -172,6 +172,10 @@ export function useIsolatedSetupCore(client:CoreClient): void {
   client.baseUrl = `http://127.0.0.1:${port}`;
 }
 
+export function shouldUseOpenTuiRenderer(env:{ NEXUSSY_TUI_RENDERER?: string }=process.env as any): boolean {
+  return env.NEXUSSY_TUI_RENDERER === "opentui";
+}
+
 export async function ensureCoreForSetup(client:CoreClient, output:NodeJS.WriteStream=process.stdout, start=startCoreProcess): Promise<CoreProcess|undefined> {
   try { await client.health(); return undefined; }
   catch { const proc = start(output); await waitForCore(client); return proc; }
@@ -280,11 +284,15 @@ export async function main() {
   const state = createState();
   const runId = mockMode ? FIXTURE_RUN_ID : process.argv[2];
   if (!runId) {
-    if (process.env.NEXUSSY_TUI_RENDERER === "pi-tui") await runPiTui(client, state);
-    else await runOpenTui(client, state);
+    if (shouldUseOpenTuiRenderer()) await runOpenTui(client, state);
+    else await runPiTui(client, state);
     return;
   }
   let current: typeof state = { ...state, runId };
+  if (!mockMode) {
+    try { current = reduceStatusSnapshot(current, await client.status(runId)); }
+    catch (e) { console.error(`warning: failed to fetch run status before streaming: ${e instanceof Error ? e.message : String(e)}`); }
+  }
   for await (const env of client.streamRun(runId)) { current = reduceEvent(current, env); console.clear(); const p=renderPanels(current); console.log(`${p.left}\n---\n${p.center}\n---\n${p.right}`); if(env.type==="done") break; }
 }
 if (import.meta.main) main().catch(e => { console.error(e); process.exit(1); });

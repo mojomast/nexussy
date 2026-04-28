@@ -1,6 +1,6 @@
 import { getAnchorBlock, setAnchorBlock } from "./anchors";
 import { STAGES, type HandoffPrompt, type TuiState } from "../state";
-import type { PipelineStartRequest, StageName, Worker } from "../types";
+import type { StageName, Worker } from "../types";
 
 export type HandoffTrigger = HandoffPrompt["trigger"];
 
@@ -14,11 +14,7 @@ export interface HandoffInputs {
 }
 
 export interface HandoffClient {
-  compact(runId:string): Promise<{compacted_tokens:number}>|{compacted_tokens:number};
-  pauseRun?(runId:string, reason:string): Promise<unknown>|unknown;
   pause?(runId:string, reason:string): Promise<unknown>|unknown;
-  patchSessionArtifact(sessionId:string, kind:string, content:string): Promise<unknown>|unknown;
-  startPipeline(body:PipelineStartRequest): Promise<{run_id:string; session_id:string}>|{run_id:string; session_id:string};
 }
 
 export function generateHandoffDocument(input:HandoffInputs): string {
@@ -70,15 +66,6 @@ export function firstIncompleteStage(state:TuiState): StageName {
   return STAGES.find(stage => state.stages[stage] !== "passed") ?? "develop";
 }
 
-export function buildAutoRestartRequest(state:TuiState, handoffDoc:string): PipelineStartRequest {
-  return {
-    project_name: state.config.projectName ?? "nexussy handoff",
-    description: handoffDoc,
-    metadata:{ handoff_from_session:state.sessionId ?? "", handoff_from_run:state.runId ?? "" },
-    start_stage:firstIncompleteStage(state),
-  };
-}
-
 export function applyCompaction(state:TuiState, compactedTokens:number): TuiState {
   const total = Math.max(0, state.usage.total_tokens - compactedTokens);
   const usage = { ...state.usage, total_tokens:total };
@@ -86,28 +73,12 @@ export function applyCompaction(state:TuiState, compactedTokens:number): TuiStat
   return { ...state, usage, contextBudget:{ ...state.contextBudget, totalTokens:total, fillRatio, nearLimit:fillRatio >= 0.75, atLimit:fillRatio >= 0.90 }, logs:[...state.logs, { id:`compact-${state.logs.length + 1}`, kind:"system", title:"compact", text:`Context compacted - ${compactedTokens} tokens freed`, collapsed:false }] };
 }
 
-export async function compactContext(client:HandoffClient, state:TuiState): Promise<TuiState> {
-  if (!state.runId) throw new Error("run_id is required to compact context");
-  const result = await client.compact(state.runId);
-  return applyCompaction(state, result.compacted_tokens);
-}
-
-export async function generatePatchAndPause(client:HandoffClient, input:HandoffInputs): Promise<string> {
+export async function generateLocalHandoffAndPause(client:HandoffClient, input:HandoffInputs): Promise<string> {
   if (!input.state.sessionId || !input.state.runId) throw new Error("session_id and run_id are required for handoff");
   const doc = generateHandoffDocument(input);
-  await client.patchSessionArtifact(input.state.sessionId, "handoff", doc);
-  if (client.pauseRun) await client.pauseRun(input.state.runId, "handoff");
-  else if (client.pause) await client.pause(input.state.runId, "handoff");
+  if (client.pause) await client.pause(input.state.runId, "handoff");
   else throw new Error("client does not support pausing runs");
   return doc;
-}
-
-export async function autoRestartFromHandoff(client:HandoffClient, input:HandoffInputs): Promise<{state:TuiState; handoffDoc:string}> {
-  if (!input.state.sessionId) throw new Error("session_id is required for handoff");
-  const handoffDoc = generateHandoffDocument(input);
-  await client.patchSessionArtifact(input.state.sessionId, "handoff", handoffDoc);
-  const started = await client.startPipeline(buildAutoRestartRequest(input.state, handoffDoc));
-  return { handoffDoc, state:{ ...input.state, runId:started.run_id, sessionId:started.session_id, finalStatus:undefined, paused:false, handoffPrompt:undefined, logs:[...input.state.logs, { id:`handoff-restart-${input.state.logs.length + 1}`, kind:"system", title:"handoff", text:"New context window started from handoff", collapsed:false }] } };
 }
 
 function artifactsForStage(state:TuiState, stage:StageName): string[] {

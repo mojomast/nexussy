@@ -4,6 +4,7 @@ set -u
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 TMP_ROOT=${TMPDIR:-/tmp}/nexussy-ops-tests.$$
+OUT_DIR="$TMP_ROOT/out"
 FAILURES=0
 
 pass() { printf 'ok - %s\n' "$*"; }
@@ -13,7 +14,7 @@ assert_no_file() { [ ! -e "$1" ] && pass "$2" || fail "$2"; }
 assert_contains() { case "$1" in *"$2"*) pass "$3" ;; *) fail "$3" ;; esac; }
 assert_not_contains() { case "$1" in *"$2"*) fail "$3" ;; *) pass "$3" ;; esac; }
 
-mkdir -p "$TMP_ROOT" || exit 1
+mkdir -p "$OUT_DIR" || exit 1
 cleanup() {
   if [ -n "${SLEEP_PID:-}" ]; then kill "$SLEEP_PID" >/dev/null 2>&1 || true; fi
   rm -rf "$TMP_ROOT"
@@ -90,26 +91,26 @@ mkdir -p "$RUN_HOME/run" "$RUN_HOME/logs" || exit 1
   . "$ROOT_DIR/nexussy.sh"
   curl_ok() { return 0; }
   sleep 60 & SLEEP_PID=$!
-  printf '%s\n' "$SLEEP_PID" > /tmp/nexussy-ops-sleep-pid.$$
+  printf '%s\n' "$SLEEP_PID" > "$OUT_DIR/sleep-pid"
   printf '%s\n' "$SLEEP_PID" > "$CORE_PID"
   printf '%s\n' "$SLEEP_PID" > "$WEB_PID"
-  start_core >/tmp/nexussy-ops-start-core.$$ 2>&1
-  status >/tmp/nexussy-ops-status.$$ 2>&1
+  start_core >"$OUT_DIR/start-core.out" 2>&1
+  status >"$OUT_DIR/status.out" 2>&1
   printf '999999\n' > "$WEB_PID"
   cleanup_stale_pid "$WEB_PID"
   printf 'core log line\n' > "$CORE_LOG"
-  show_logs --no-follow core >/tmp/nexussy-ops-logs.$$ 2>&1
+  show_logs --no-follow core >"$OUT_DIR/logs.out" 2>&1
   export NEXUSSY_PI_COMMAND="nexussy-missing-pi-command-$$"
   unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY FIREWORKS_API_KEY XAI_API_KEY GLM_API_KEY ZAI_API_KEY REQUESTY_API_KEY AETHER_API_KEY OLLAMA_BASE_URL
   python_cmd() { return 1; }
-  doctor >/tmp/nexussy-ops-doctor.$$ 2>&1 || true
+  doctor >"$OUT_DIR/doctor.out" 2>&1 || true
   kill "$SLEEP_PID" >/dev/null 2>&1 || true
 )
-start_text=$(tr '\n' ' ' < /tmp/nexussy-ops-start-core.$$ 2>/dev/null || true)
-status_text=$(tr '\n' ' ' < /tmp/nexussy-ops-status.$$ 2>/dev/null || true)
-logs_text=$(tr '\n' ' ' < /tmp/nexussy-ops-logs.$$ 2>/dev/null || true)
-doctor_text=$(tr '\n' ' ' < /tmp/nexussy-ops-doctor.$$ 2>/dev/null || true)
-sleep_pid=$(cat /tmp/nexussy-ops-sleep-pid.$$ 2>/dev/null || true)
+start_text=$(tr '\n' ' ' < "$OUT_DIR/start-core.out" 2>/dev/null || true)
+status_text=$(tr '\n' ' ' < "$OUT_DIR/status.out" 2>/dev/null || true)
+logs_text=$(tr '\n' ' ' < "$OUT_DIR/logs.out" 2>/dev/null || true)
+doctor_text=$(tr '\n' ' ' < "$OUT_DIR/doctor.out" 2>/dev/null || true)
+sleep_pid=$(tr -d '\n' < "$OUT_DIR/sleep-pid" 2>/dev/null || true)
 assert_contains "$start_text" "core already running" "duplicate core start does not spawn"
 assert_contains "$status_text" "config: $RUN_HOME/nexussy.yaml" "status reports config path"
 assert_contains "$status_text" "core:  127.0.0.1 port=7771 pid=$sleep_pid health=healthy" "status reports core port pid health"
@@ -121,7 +122,30 @@ assert_contains "$doctor_text" "nexussy doctor" "doctor prints diagnostics heade
 assert_contains "$doctor_text" "pi command: missing (install Pi CLI or set NEXUSSY_PI_COMMAND)" "doctor reports missing Pi command remediation"
 assert_contains "$doctor_text" "provider keys" "doctor reports provider key readiness"
 assert_contains "$doctor_text" "mock mode only" "doctor explains missing provider key behavior"
-rm -f /tmp/nexussy-ops-start-core.$$ /tmp/nexussy-ops-status.$$ /tmp/nexussy-ops-logs.$$ /tmp/nexussy-ops-doctor.$$ /tmp/nexussy-ops-sleep-pid.$$
+
+# Health-wait failures must clean up the process that was just started and its
+# PID file, rather than leaving an orphaned service around a stale PID.
+FAIL_HOME="$TMP_ROOT/fail-home"
+mkdir -p "$FAIL_HOME/run" "$FAIL_HOME/logs" || exit 1
+cat > "$OUT_DIR/fake-long-service" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" > "$NEXUSSY_FAKE_SERVICE_PID_FILE"
+sleep 60
+SH
+chmod +x "$OUT_DIR/fake-long-service"
+(
+  export NEXUSSY_SH_TEST_MODE=1 NEXUSSY_HOME="$FAIL_HOME" NEXUSSY_CONFIG="$FAIL_HOME/nexussy.yaml" NEXUSSY_ENV_FILE="$FAIL_HOME/.env"
+  export NEXUSSY_CORE_LOG="$FAIL_HOME/logs/core.log" NEXUSSY_WEB_LOG="$FAIL_HOME/logs/web.log" NEXUSSY_FAKE_SERVICE_PID_FILE="$OUT_DIR/fake-service.pid"
+  # shellcheck source=nexussy.sh
+  . "$ROOT_DIR/nexussy.sh"
+  ensure_runtime_python() { printf '%s\n' "$OUT_DIR/fake-long-service"; }
+  wait_for_url() { i=0; while [ "$i" -lt 10 ] && [ ! -f "$NEXUSSY_FAKE_SERVICE_PID_FILE" ]; do i=$((i + 1)); sleep 1; done; return 1; }
+  curl_ok() { return 1; }
+  start_core >"$OUT_DIR/start-core-fail.out" 2>&1 || true
+)
+failed_pid=$(tr -d '\n' < "$OUT_DIR/fake-service.pid" 2>/dev/null || true)
+assert_no_file "$FAIL_HOME/run/core.pid" "core health failure removes PID file"
+if [ -n "$failed_pid" ] && kill -0 "$failed_pid" >/dev/null 2>&1; then fail "core health failure terminates process"; else pass "core health failure terminates process"; fi
 
 # Exercise start-tui and update command wiring with fake tools so no real TUI,
 # git pull, package install, or service process is launched.
@@ -144,23 +168,44 @@ SH
 chmod +x "$FAKE_BIN/bun" "$FAKE_BIN/git" "$FAKE_BIN/python3"
 (
   export NEXUSSY_SH_TEST_MODE=1 NEXUSSY_HOME="$LAUNCH_HOME" NEXUSSY_CONFIG="$LAUNCH_HOME/nexussy.yaml" NEXUSSY_ENV_FILE="$LAUNCH_HOME/.env"
+  export NEXUSSY_TUI_LOG="$LAUNCH_HOME/logs/tui.log"
   export NEXUSSY_FAKE_TOOL_LOG="$LAUNCH_HOME/tool.log" PATH="$FAKE_BIN:$PATH"
   # shellcheck source=nexussy.sh
   . "$ROOT_DIR/nexussy.sh"
   curl_ok() { return 0; }
   python_cmd() { printf '%s\n' "$FAKE_BIN/python3"; }
-  start_tui >/tmp/nexussy-ops-start-tui.$$ 2>&1
-  update >/tmp/nexussy-ops-update.$$ 2>&1
+  start_tui >"$OUT_DIR/start-tui.out" 2>&1
+  update >"$OUT_DIR/update.out" 2>&1
 )
 tool_text=$(tr '\n' ' ' < "$LAUNCH_HOME/tool.log" 2>/dev/null || true)
-start_tui_text=$(tr '\n' ' ' < /tmp/nexussy-ops-start-tui.$$ 2>/dev/null || true)
+start_tui_text=$(tr '\n' ' ' < "$OUT_DIR/start-tui.out" 2>/dev/null || true)
+tui_log_text=$(tr '\n' ' ' < "$LAUNCH_HOME/logs/tui.log" 2>/dev/null || true)
 assert_contains "$start_tui_text" "starting tui interactively" "start-tui verifies core and starts TUI command"
 assert_contains "$tool_text" "bun:$ROOT_DIR/tui:run start" "start-tui runs bun start from tui directory"
+assert_no_file "$LAUNCH_HOME/run/tui.pid" "start-tui removes PID file after foreground exit"
+assert_contains "$tui_log_text" "tui started" "start-tui writes lifecycle log"
+assert_contains "$tui_log_text" "tui exited" "start-tui logs foreground exit status"
 assert_contains "$tool_text" "git:$ROOT_DIR:pull" "update runs git pull from repo root"
 assert_contains "$tool_text" "python:$ROOT_DIR:-m pip install -e core/" "update reinstalls core"
 assert_contains "$tool_text" "python:$ROOT_DIR:-m pip install -e web/" "update reinstalls web"
 assert_contains "$tool_text" "bun:$ROOT_DIR/tui:install" "update runs bun install from tui directory"
-rm -f /tmp/nexussy-ops-start-tui.$$ /tmp/nexussy-ops-update.$$
+
+# Refuse ambiguous systemd units for unsupported paths instead of writing
+# unescaped WorkingDirectory/Environment/ExecStart values.
+BAD_SYSTEMD_HOME="$TMP_ROOT/systemd bad-home"
+mkdir -p "$BAD_SYSTEMD_HOME" || exit 1
+(
+  export NEXUSSY_INSTALL_TEST_MODE=1 HOME="$BAD_SYSTEMD_HOME" NEXUSSY_HOME="$BAD_SYSTEMD_HOME/.nexussy"
+  export NEXUSSY_CONFIG="$BAD_SYSTEMD_HOME/.nexussy/nexussy.yaml" NEXUSSY_ENV_FILE="$BAD_SYSTEMD_HOME/.nexussy/.env"
+  # shellcheck source=install.sh
+  . "$ROOT_DIR/install.sh"
+  SYSTEMD_USER=1
+  DRY_RUN=0
+  PYTHON=$(command -v python3 || command -v python)
+  write_systemd_user >"$OUT_DIR/bad-systemd.out" 2>&1
+) >/dev/null 2>&1 && bad_systemd_rc=0 || bad_systemd_rc=$?
+[ "$bad_systemd_rc" -ne 0 ] && pass "systemd-user rejects paths requiring escaping" || fail "systemd-user rejects paths requiring escaping"
+assert_no_file "$BAD_SYSTEMD_HOME/.config/systemd/user/nexussy-core.service" "systemd rejection writes no core unit"
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "$ROOT_DIR/install.sh" "$ROOT_DIR/nexussy.sh" "$ROOT_DIR/ops_tests.sh" "$ROOT_DIR/launch_verify.sh" && pass "shellcheck passes" || fail "shellcheck passes"

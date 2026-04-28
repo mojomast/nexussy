@@ -249,7 +249,7 @@ Local development modes:
 
 ## Pi Worker Execution
 
-The develop stage uses the Pi JSON-RPC subprocess adapter for workers. The default command is `nexussy-pi`, a bundled Pi-compatible worker shim installed with `nexussy-core`; no separate npm install is required for local operation.
+The develop stage uses the Pi-compatible JSON-RPC subprocess adapter for workers. Fresh installs default to the bundled `nexussy-pi` shim (`pi.command: "nexussy-pi"`, `pi.args: []`), so no separate npm install is required for local operation. Set `NEXUSSY_PI_COMMAND=pi` or `pi.command: "pi"` when you want the installed Pi CLI instead of the bundled shim.
 
 Worker behavior:
 
@@ -264,8 +264,8 @@ Using the real Pi CLI:
 | Step | Command |
 |---|---|
 | Install Pi | `npm install -g @mariozechner/pi-coding-agent` |
-| Select Pi CLI | Add `NEXUSSY_PI_COMMAND=pi` to `~/.nexussy/.env` |
-| Runtime mode | Core launches `pi --rpc-mode` and writes `.pi/agent/settings.json` in the worker worktree |
+| Select Pi CLI | Add `NEXUSSY_PI_COMMAND=pi` to `~/.nexussy/.env`, or set `pi.command: "pi"` in `~/.nexussy/nexussy.yaml` |
+| Runtime mode | Core launches the real CLI as `pi --rpc-mode` and writes `.pi/agent/settings.json` in the worker worktree |
 
 Set provider keys through `/secrets`, the TUI setup flow, or environment variables. Core passes configured provider environment into the worker subprocess without hardcoding keys.
 
@@ -327,15 +327,16 @@ Secrets:
 CORS:
 
 ```yaml
-security:
-  cors_origins:
+core:
+  cors_allow_origins:
+    - "http://127.0.0.1:7772"
     - "https://your-dashboard.example"
 ```
 
-- Default `cors_origins: ["*"]` preserves local compatibility.
+- The installer-generated default is `core.cors_allow_origins: ["http://127.0.0.1:7772"]` for the local web dashboard.
 - Set `NEXUSSY_ENV=production` for production mode.
 - In production, wildcard CORS is rejected unless `NEXUSSY_ALLOW_WILDCARD_CORS=1` is explicitly set.
-- Deployment automation may use `NEXUSSY_CORS_ORIGINS` and map it into `nexussy.yaml` before startup.
+- Deployment automation should write allowed origins to `core.cors_allow_origins` in `nexussy.yaml` before startup.
 
 Other safeguards:
 

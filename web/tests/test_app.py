@@ -144,7 +144,7 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
     html = response.text
     for section in ["session-list", "stages", "stream-log", "interview-form", "artifact-viewer"]:
         assert f'id="{section}"' in html
-    for tab in ["artifacts", "swarm", "devplan", "config", "secrets"]:
+    for tab in ["chat", "pipeline", "sessions", "graph", "artifacts", "swarm", "devplan", "config", "secrets"]:
         assert f'id="{tab}"' in html
         assert f'href="#{tab}"' in html
     assert '<link rel="stylesheet" href="/style.css">' in html
@@ -159,6 +159,10 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
 def test_all_required_tabs_include_static_render_targets_and_api_routes(client: TestClient) -> None:
     html = client.get("/").text
     expected = {
+        "chat": ["chat-log"],
+        "pipeline": ["stages", "transitions", "interview-question-id"],
+        "sessions": ["session-list", "prev-sessions", "next-sessions"],
+        "graph": ["graph-viewer", "/api/graph"],
         "artifacts": ["artifact-viewer", "review-report"],
         "swarm": ["worker-grid", "file-lock-feed", "worktree-status", "tool-rows"],
         "devplan": ["devplan-content"],
@@ -222,6 +226,22 @@ def test_api_proxy_preserves_method_body_query_auth_status_and_content_type(clie
     assert payload["authorization"] == "Bearer token"
     assert payload["x_api_key"] == "secret"
     assert payload["content_type"] == "application/json"
+
+
+def test_api_proxy_injects_configured_api_key_when_client_header_absent() -> None:
+    core = Starlette(routes=[Route("/echo", echo, methods=["GET"])])
+    transport = httpx.ASGITransport(app=core)
+    client = TestClient(create_app(core_base_url="http://core", core_transport=transport, core_api_key="configured-key"))
+    payload = client.get("/api/echo").json()
+    assert payload["x_api_key"] == "configured-key"
+
+
+def test_api_proxy_does_not_override_client_api_key() -> None:
+    core = Starlette(routes=[Route("/echo", echo, methods=["GET"])])
+    transport = httpx.ASGITransport(app=core)
+    client = TestClient(create_app(core_base_url="http://core", core_transport=transport, core_api_key="configured-key"))
+    payload = client.get("/api/echo", headers={"X-API-Key": "client-key"}).json()
+    assert payload["x_api_key"] == "client-key"
 
 
 @pytest.mark.parametrize(
@@ -298,6 +318,20 @@ def test_sse_proxy_preserves_required_fields_and_last_event_id(client: TestClien
     assert "data: " in body
     assert "event: content_delta" in body
     assert response.headers["cache-control"] == "no-cache"
+
+
+def test_sse_proxy_injects_configured_api_key_for_eventsource() -> None:
+    async def authed_stream(request: Request) -> StreamingResponse:
+        assert request.headers.get("x-api-key") == "configured-key"
+        return StreamingResponse(iter([b"id: 1\nevent: heartbeat\ndata: {}\n\n"]), media_type="text/event-stream")
+
+    core = Starlette(routes=[Route("/pipeline/runs/{run_id:str}/stream", authed_stream)])
+    transport = httpx.ASGITransport(app=core)
+    client = TestClient(create_app(core_base_url="http://core", core_transport=transport, core_api_key="configured-key"))
+    with client.stream("GET", "/api/pipeline/runs/run-1/stream") as response:
+        body = response.read().decode()
+    assert response.status_code == 200
+    assert "event: heartbeat" in body
 
 
 def test_worker_sse_proxy_preserves_sse_lines(client: TestClient) -> None:
@@ -452,7 +486,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           prepend(child) { this.children.unshift(child); this.innerHTML = child.innerHTML + this.innerHTML; }
         }
 
-        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-question','interview-answer'];
+        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-question','interview-question-id','interview-answer','chat-log'];
         const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
         elements['artifact-kind'].value = 'devplan';
         const document = {
@@ -477,10 +511,13 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           fetchCalls.push({ url, options });
           if (responses.length) return responses.shift();
           if (url === '/api/health') return jsonResponse({ status: 'ok', contract_version: '1.0' });
-          if (url.startsWith('/api/sessions')) return jsonResponse([]);
+          if (url.startsWith('/api/sessions')) return jsonResponse({ sessions: [{ session_id: 'session-1', project_name: 'Demo', status: 'running', last_run_id: 'run-1' }] });
           if (url === '/api/secrets') return jsonResponse([{ name: 'OPENAI_API_KEY', configured: false, source: 'env' }]);
           if (url.startsWith('/api/secrets/')) return jsonResponse({ ok: true });
-          if (url.startsWith('/api/pipeline/status')) return jsonResponse({ status: 'running', current_stage: 'interview', run_id: 'run-1', session_id: 'session-1', stages: [{ stage: 'interview', status: 'running' }] });
+          if (url.startsWith('/api/pipeline/status')) return jsonResponse({ status: { run: { status: 'paused', current_stage: 'interview', run_id: 'run-1', session_id: 'session-1' }, stages: [{ stage: 'interview', status: 'running' }], pause_state: { paused: true, questions: [{ id: 'q-1', question: 'What should we build?' }] }, workers: [{ worker_id: 'worker-status', status: 'running' }], file_locks: [{ path: 'web/app.js', worker_id: 'worker-status' }] } });
+          if (url.startsWith('/api/swarm/workers')) return jsonResponse({ workers: [{ worker_id: 'worker-2', role: 'developer', status: 'idle' }] });
+          if (url.startsWith('/api/swarm/file-locks')) return jsonResponse({ file_locks: [{ path: 'web/test.js', worker_id: 'worker-2' }] });
+          if (url.startsWith('/api/graph')) return jsonResponse({ nodes: [], edges: [] });
           if (url.startsWith('/api/pipeline/session-1/interview/answer')) return jsonResponse({ ok: true });
           if (url === '/api/config' && options.method === 'PUT') return jsonResponse(JSON.parse(options.body));
           if (url === '/api/config') return jsonResponse({ version: '1.0', web: { port: 7772 } });
@@ -495,7 +532,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
         }
 
         const event = { preventDefault() {} };
-        const context = { document, localStorage, location, addEventListener, setInterval, alert, prompt, fetch, EventSource, d3, console, Number, JSON, encodeURIComponent, String };
+        const context = { document, localStorage, location, addEventListener, setInterval, alert, prompt, fetch, EventSource, d3, console, Number, JSON, URLSearchParams, encodeURIComponent, String };
         vm.createContext(context);
         vm.runInContext(appScript, context);
 
@@ -518,12 +555,23 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
 
           EventSource.last.emit('pause_state_changed', { type: 'pause_state_changed', payload: { paused: true, session_id: 'session-1', run_id: 'run-1', question: 'What should we build?' } });
           assert(elements['interview-question'].textContent.includes('What should we build?'), 'interview question not shown');
+          assert(elements['interview-question-id'].textContent.length > 0, 'interview question id not shown');
           elements['interview-answer'].value = 'A dashboard';
           await elements['interview-form'].onsubmit(event);
           assert(fetchCalls.some(c => c.url === '/api/pipeline/session-1/interview/answer' && c.options.method === 'POST'), 'interview answer POST not called');
+          const answerCall = fetchCalls.find(c => c.url === '/api/pipeline/session-1/interview/answer' && c.options.method === 'POST');
+          assert(JSON.parse(answerCall.options.body).answers, 'interview answer did not use core answers schema');
+
+          await context.refreshPipelineStatus();
+          assert(elements['pipeline-summary'].textContent.includes('paused interview'), 'status.run shape did not render');
+          assert(fetchCalls.some(c => c.url.startsWith('/api/swarm/workers')), 'swarm workers were not hydrated from real endpoint');
+          assert(fetchCalls.some(c => c.url.startsWith('/api/swarm/file-locks')), 'file locks were not hydrated from real endpoint');
 
           await elements['load-devplan'].onclick();
           assert(elements['devplan-content'].innerHTML.includes('class="anchor"'), 'DevPlan anchors not highlighted');
+
+          await elements['load-graph'].onclick();
+          assert(elements['graph-viewer'].textContent.includes('nodes'), 'graph did not load through proxy');
 
           await elements['load-config'].onclick();
           assert(elements['config-editor'].value.includes('"version"'), 'config editor did not load');

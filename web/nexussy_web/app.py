@@ -45,13 +45,33 @@ def _core_base_url() -> str:
     )
 
 
+def _core_api_key() -> str | None:
+    """Return the dashboard's configured core API key, if any.
+
+    Browser EventSource cannot attach custom headers, so the server-side proxy
+    must inject the configured key whenever the browser did not already send
+    one.  Support both web-scoped and core-scoped environment names so packaged
+    installs and direct development runs can share the same setting.
+    """
+    return (
+        os.getenv("NEXUSSY_WEB_CORE_API_KEY")
+        or os.getenv("NEXUSSY_CORE_API_KEY")
+        or os.getenv("NEXUSSY_API_KEY")
+    )
+
+
 def _forward_headers(request: Request) -> dict[str, str]:
     """Forward client headers, including Last-Event-ID, minus hop-by-hop ones."""
-    return {
+    headers = {
         key: value
         for key, value in request.headers.items()
         if key.lower() not in HOP_BY_HOP_HEADERS
     }
+    if not any(key.lower() == "x-api-key" for key in headers):
+        api_key = getattr(request.app.state, "core_api_key", None)
+        if api_key:
+            headers["X-API-Key"] = api_key
+    return headers
 
 
 def _response_headers(response: httpx.Response) -> dict[str, str]:
@@ -210,10 +230,15 @@ routes = [
 ]
 
 
-def create_app(core_base_url: str | None = None, core_transport: httpx.AsyncBaseTransport | None = None) -> Starlette:
+def create_app(
+    core_base_url: str | None = None,
+    core_transport: httpx.AsyncBaseTransport | None = None,
+    core_api_key: str | None = None,
+) -> Starlette:
     app = Starlette(debug=False, routes=routes)
     app.state.core_base_url = core_base_url or _core_base_url()
     app.state.core_transport = core_transport
+    app.state.core_api_key = core_api_key if core_api_key is not None else _core_api_key()
     return app
 
 

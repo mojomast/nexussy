@@ -8,9 +8,9 @@ export function renderHandoffModal(state:TuiState): string[] {
     `You are approaching the limit for ${model}.`,
     "",
     "Options:",
-    "Compact - Summarise and compress this context window",
-    "Handoff - Generate handoff.md and pause here",
-    "Auto-restart - Generate handoff.md, then start a new run from it",
+    "Copy handoff - Generate local handoff text for your clipboard/editor",
+    "Pause - Call /pipeline/pause after generating the local handoff",
+    "Restart manually - Start a new run with /new after you save the handoff",
     state.contextBudget.atLimit ? "Esc Dismiss (not recommended)" : "Esc Dismiss",
   ];
 }

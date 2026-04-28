@@ -1,6 +1,7 @@
 import { projectNameFromDescription } from "../index";
 import { renderPanels } from "../renderer";
-import { reduceSecrets, triggerHandoff } from "../state";
+import { reduceArtifactsSnapshot, reduceSecrets, reduceStatusSnapshot, reduceWorkersSnapshot, triggerHandoff } from "../state";
+import { WORKER_ID_PATTERN } from "../commands";
 import type { StageName, WorkerRole } from "../types";
 import { closeOverlay } from "./Overlay";
 import type { ChatUiState, ClientLike, CommandOutcome } from "./types";
@@ -68,25 +69,45 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/onboarding") return [{ ...withHistory, overlay:"onboarding" }, { message:"onboarding" }];
   if (cmd === "/dashboard") return [{ ...withHistory, mode:"dashboard" }, { message:"dashboard" }];
   if (cmd === "/chat") return [{ ...withHistory, mode:"chat" }, { message:"chat" }];
-  if (cmd === "/status") return [{ ...withHistory, overlay:"status" }, { message:"status" }];
-  if (cmd === "/stages") return [{ ...withHistory, overlay:"stages" }, { message:"stages" }];
+  if (cmd === "/status") return hydrateStatusOverlay(client, withHistory, "status");
+  if (cmd === "/stages") return hydrateStatusOverlay(client, withHistory, "stages");
   if (cmd === "/plan") return [{ ...withHistory, overlay:"plan" }, { message:"plan" }];
-  if (cmd === "/artifacts") return [{ ...withHistory, overlay:"artifacts" }, { message:"artifacts" }];
+  if (cmd === "/artifacts") return hydrateArtifactsOverlay(client, withHistory);
   if (cmd === "/handoff") return [{ ...withHistory, overlay:"handoff", app:triggerHandoff(withHistory.app, "user_command") }, { message:"handoff triggered by user" }];
-  if (cmd === "/workers") return [{ ...withHistory, overlay:"workers" }, { message:"workers" }];
-  if (cmd === "/worker") return [{ ...withHistory, overlay:"worker", selectedWorkerId:rest[0] }, { message:"worker" }];
+  if (cmd === "/workers") return hydrateWorkersOverlay(client, withHistory);
+  if (cmd === "/worker") { const workerId = rest[0]; if (workerId && !WORKER_ID_PATTERN.test(workerId)) throw new Error("invalid worker_id"); return [{ ...withHistory, overlay:"worker", selectedWorkerId:workerId }, { message:"worker" }]; }
   if (cmd === "/doctor") return [{ ...withHistory, overlay:"doctor" }, { message:"doctor fallback" }];
   if (cmd === "/new") return startNewRun(client, withHistory, rest.join(" "));
-  if (cmd === "/resume" && rest[0]) return [{ ...withHistory, app:{ ...withHistory.app, runId:rest[0], finalStatus:undefined }, statusMessage:`resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }];
+  if (cmd === "/resume" && rest[0]) { const app = await hydrateRunStatus(client, { ...withHistory.app, runId:rest[0], finalStatus:undefined }); return [{ ...withHistory, app, statusMessage:`resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }]; }
   if (cmd === "/secrets") { const secrets = await client.secrets() as any; return [{ ...withHistory, app:reduceSecrets(withHistory.app, secrets), overlay:"secrets" }, { message:"provider key status refreshed" }]; }
   if (cmd === "/export") return [withHistory, { message:"exported displayed session data", html:renderPanels(withHistory.app).html }];
   if (!withHistory.app.runId) throw new Error("start a run first with plain text or /new DESCRIPTION");
   if (cmd === "/pause") { await client.pause(withHistory.app.runId, rest.join(" ") || "user"); return [{ ...withHistory, app:{ ...withHistory.app, paused:true }, statusMessage:"paused" }, { message:"paused" }]; }
   if (cmd === "/resume-run" || cmd === "/resume") { await client.resume(withHistory.app.runId); return [{ ...withHistory, app:{ ...withHistory.app, paused:false }, statusMessage:"resumed" }, { message:"resumed" }]; }
-  if (cmd === "/stage") { const stage = rest[0] as StageName; if (!stages.has(stage)) throw new Error("invalid stage"); await client.skip(withHistory.app.runId, stage, "user slash stage skip"); return [{ ...withHistory, statusMessage:`stage ${stage}` }, { message:`stage ${stage}` }]; }
+  if (cmd === "/stage") { const stage = rest[0] as StageName; if (!stages.has(stage)) throw new Error("invalid stage"); return [{ ...withHistory, overlay:"stages", statusMessage:`viewing ${stage}` }, { message:`viewing ${stage}; use /skip ${stage} <reason> to mutate the run` }]; }
   if (cmd === "/skip") { const stage = rest.shift() as StageName; const reason = rest.join(" "); if (!stage || !reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(withHistory.app.runId, stage, reason); return [{ ...withHistory, statusMessage:`skipped ${stage}` }, { message:`skipped ${stage}` }]; }
   if (cmd === "/spawn") { const role = rest.shift() as WorkerRole; if (!role || !roles.has(role)) throw new Error("invalid role"); const task = rest.join(" "); if (!task) throw new Error("task required"); await client.spawn({ run_id:withHistory.app.runId, role, task }); return [{ ...withHistory, statusMessage:"spawned" }, { message:"spawned" }]; }
-  if (cmd === "/inject") { const maybe = rest[0]; const workerId = maybe && /^[a-z]+-[a-z0-9-]+$/.test(maybe) ? rest.shift() : undefined; const message = rest.join(" "); if (!message) throw new Error("message required"); if (workerId) await client.injectWorker(workerId, { run_id:withHistory.app.runId, worker_id:workerId, message }); else await client.inject({ run_id:withHistory.app.runId, message }); return [{ ...withHistory, statusMessage:"injected" }, { message:"injected" }]; }
+  if (cmd === "/inject") { const maybe = rest[0]; const workerId = maybe && WORKER_ID_PATTERN.test(maybe) ? rest.shift() : undefined; const message = rest.join(" "); if (!message) throw new Error("message required"); if (workerId) await client.injectWorker(workerId, { run_id:withHistory.app.runId, worker_id:workerId, message }); else await client.inject({ run_id:withHistory.app.runId, message }); return [{ ...withHistory, statusMessage:"injected" }, { message:"injected" }]; }
   if (cmd === "/escape") return [closeOverlay(withHistory), { message:"overlay closed" }];
   throw new Error(`unknown command ${cmd}`);
+}
+
+async function hydrateRunStatus(client:ClientLike, app:ChatUiState["app"]): Promise<ChatUiState["app"]> {
+  if (!app.runId) return app;
+  return reduceStatusSnapshot(app, await client.status(app.runId) as any);
+}
+
+async function hydrateStatusOverlay(client:ClientLike, state:ChatUiState, overlay:"status"|"stages"): Promise<[ChatUiState, CommandOutcome]> {
+  const app = state.app.runId ? await hydrateRunStatus(client, state.app) : state.app;
+  return [{ ...state, overlay, app }, { message:overlay }];
+}
+
+async function hydrateWorkersOverlay(client:ClientLike, state:ChatUiState): Promise<[ChatUiState, CommandOutcome]> {
+  const app = state.app.runId ? reduceWorkersSnapshot(state.app, await client.workers(state.app.runId) as any) : state.app;
+  return [{ ...state, overlay:"workers", app }, { message:"workers" }];
+}
+
+async function hydrateArtifactsOverlay(client:ClientLike, state:ChatUiState): Promise<[ChatUiState, CommandOutcome]> {
+  const app = state.app.sessionId ? reduceArtifactsSnapshot(state.app, await client.artifacts(state.app.sessionId, state.app.runId) as any) : state.app;
+  return [{ ...state, overlay:"artifacts", app }, { message:"artifacts" }];
 }

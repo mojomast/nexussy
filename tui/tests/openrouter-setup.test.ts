@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyOpenRouterModel, ensureCoreForSetup, normalizeOpenRouterModel, projectNameFromDescription, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
+import { applyOpenRouterModel, ensureCoreForSetup, normalizeOpenRouterModel, projectNameFromDescription, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
 
 class Output { text=""; write(s:string){ this.text += s; return true; } }
 
@@ -99,4 +99,10 @@ test("explicit new helper can start a pipeline run", async () => {
   const started = await startPipelineFromText(client, "build a tiny api with tests please");
   expect(started).toEqual({ runId:"run-1", sessionId:"sess-1" });
   expect(calls[0]).toEqual({ project_name:"build a tiny api with tests", description:"build a tiny api with tests please", auto_approve_interview:true });
+});
+
+test("SPEC Pi TUI is default and OpenTUI requires explicit opt-in", () => {
+  expect(shouldUseOpenTuiRenderer({})).toBe(false);
+  expect(shouldUseOpenTuiRenderer({ NEXUSSY_TUI_RENDERER:"pi-tui" })).toBe(false);
+  expect(shouldUseOpenTuiRenderer({ NEXUSSY_TUI_RENDERER:"opentui" })).toBe(true);
 });

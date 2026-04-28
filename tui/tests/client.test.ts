@@ -15,13 +15,15 @@ test("live-core mode preserves auth headers across HTTP routes used by UI", asyn
   expect(seen.every(s => (s.init.headers as Record<string,string>)["X-API-Key"] === "secret")).toBe(true);
 });
 
-test("artifact PATCH sends session artifact content payload", async () => {
+test("contract artifacts route uses session and optional run query", async () => {
   const seen: Array<{url:string; init:RequestInit}> = [];
-  const client = new CoreClient({ fetchImpl: (async (url, init) => { seen.push({ url:String(url), init:init ?? {} }); return response({ ok:true }); }) as typeof fetch });
-  await client.patchSessionArtifact("sess 1", "handoff", "updated handoff");
-  expect(new URL(seen[0].url).pathname).toBe("/pipeline/sessions/sess%201/artifacts/handoff");
-  expect(seen[0].init.method).toBe("PATCH");
-  expect(JSON.parse(String(seen[0].init.body))).toEqual({ content:"updated handoff" });
+  const client = new CoreClient({ fetchImpl: (async (url, init) => { seen.push({ url:String(url), init:init ?? {} }); return response({ ok:true, artifacts:[] }); }) as typeof fetch });
+  await client.artifacts("sess 1", "run-1");
+  const url = new URL(seen[0].url);
+  expect(url.pathname).toBe("/pipeline/artifacts");
+  expect(url.searchParams.get("session_id")).toBe("sess 1");
+  expect(url.searchParams.get("run_id")).toBe("run-1");
+  expect(seen[0].init.method).toBe("GET");
 });
 
 test("HTTP auth and connection errors are surfaced with core error body", async () => {

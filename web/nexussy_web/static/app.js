@@ -4,6 +4,7 @@ let source = null;
 let sessionOffset = 0;
 let activeRunId = localStorage.getItem('nexussy.runId') || '';
 let activeSessionId = localStorage.getItem('nexussy.sessionId') || '';
+let activeInterviewQuestionId = localStorage.getItem('nexussy.interviewQuestionId') || '';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -57,12 +58,30 @@ function normalizeSessions(body) {
   return body.sessions || body.items || body.rows || [];
 }
 
+function normalizeStatus(body) {
+  const status = body.status && typeof body.status === 'object' ? body.status : body;
+  const run = status.run || body.run || {};
+  return {
+    raw: body,
+    status,
+    run,
+    run_id: run.run_id || status.run_id || body.run_id || activeRunId,
+    session_id: run.session_id || status.session_id || body.session_id || activeSessionId,
+    state: run.status || status.status || body.status || 'unknown',
+    current_stage: run.current_stage || status.current_stage || body.current_stage || '',
+    stages: status.stages || status.stage_statuses || body.stages || body.stage_statuses || [],
+    pause_state: status.pause_state || body.pause_state || run.pause_state || null,
+    workers: status.workers || body.workers || [],
+    file_locks: status.file_locks || status.locks || body.file_locks || body.locks || [],
+  };
+}
+
 async function loadSessions() {
   const rows = normalizeSessions(await api(`/sessions?limit=12&offset=${sessionOffset}`));
   $('#session-list').innerHTML = '';
   rows.forEach((session) => {
     const id = session.session_id || session.id || '';
-    const runId = session.run_id || session.latest_run_id || '';
+    const runId = session.last_run_id || session.run_id || session.latest_run_id || '';
     const card = document.createElement('button');
     card.className = 'card';
     card.innerHTML = `<b>${escapeHtml(session.project_name || session.name || id)}</b><p>${escapeHtml(session.status || '')} ${escapeHtml(session.current_stage || '')}</p><small>${escapeHtml(id)}</small>`;
@@ -126,12 +145,36 @@ function lock(type, payload) {
   append('#file-lock-feed', `<b>${escapeHtml(type)}</b> ${escapeHtml(payload.path || '')} by ${escapeHtml(payload.worker_id || '')}`);
 }
 
+function renderFileLocks(rows = []) {
+  $('#file-lock-feed').innerHTML = '';
+  rows.forEach((row) => lock(row.status || row.type || 'file_lock', row));
+}
+
+function questionCandidates(payload = {}) {
+  if (Array.isArray(payload.questions) && payload.questions.length) return payload.questions;
+  if (Array.isArray(payload.pending_questions) && payload.pending_questions.length) return payload.pending_questions;
+  if (payload.question || payload.prompt || payload.reason || payload.question_id) return [payload];
+  return [];
+}
+
+function stableQuestionId(payload = {}) {
+  const base = payload.run_id || payload.session_id || activeRunId || activeSessionId || 'unknown';
+  return `interview:${base}:question-1`;
+}
+
 function showInterview(payload = {}) {
   const paused = payload.paused === true || payload.status === 'paused';
   $('#interview-form').classList.toggle('hidden', !paused);
   if (!paused) return;
   if (payload.session_id) selectSession(payload.session_id, payload.run_id || activeRunId);
-  $('#interview-question').textContent = payload.question || payload.prompt || payload.reason || 'Run is paused for interview input.';
+  const questions = questionCandidates(payload);
+  const first = questions[0] || payload;
+  const questionId = first.question_id || first.id || payload.question_id || activeInterviewQuestionId || stableQuestionId(payload);
+  activeInterviewQuestionId = questionId;
+  localStorage.setItem('nexussy.interviewQuestionId', questionId);
+  const text = first.question || first.prompt || payload.question || payload.prompt || payload.reason || 'Run is paused for interview input.';
+  $('#interview-question-id').textContent = questionId;
+  $('#interview-question').textContent = text;
 }
 
 function handleEvent(ev) {
@@ -166,14 +209,39 @@ async function refreshPipelineStatus() {
   const runId = $('#run-id').value.trim() || activeRunId;
   if (!runId) return;
   try {
-    const status = await api('/pipeline/status?run_id=' + encodeURIComponent(runId));
-    $('#pipeline-summary').textContent = `${status.status || 'unknown'} ${status.current_stage || ''}`.trim();
+    const status = normalizeStatus(await api('/pipeline/status?run_id=' + encodeURIComponent(runId)));
+    $('#pipeline-summary').textContent = `${status.state || 'unknown'} ${status.current_stage || ''}`.trim();
     selectSession(status.session_id || activeSessionId, status.run_id || runId);
-    (status.stages || status.stage_statuses || []).forEach(stage);
+    status.stages.forEach(stage);
+    status.workers.forEach(worker);
+    if (status.file_locks.length) renderFileLocks(status.file_locks);
     if (status.pause_state) showInterview({ ...status.pause_state, session_id: status.session_id, run_id: status.run_id || runId });
+    await refreshSwarmState(status.run_id || runId);
   } catch (error) {
     reportError('pipeline status failed', error);
   }
+}
+
+async function refreshSwarmState(runId = activeRunId) {
+  if (!runId) return;
+  try {
+    const workersBody = await api('/swarm/workers?run_id=' + encodeURIComponent(runId));
+    (workersBody.workers || workersBody.items || workersBody.rows || workersBody || []).forEach(worker);
+  } catch (_) {}
+  try {
+    const locksBody = await api('/swarm/file-locks?run_id=' + encodeURIComponent(runId));
+    const rows = locksBody.file_locks || locksBody.locks || locksBody.items || locksBody.rows || locksBody || [];
+    if (Array.isArray(rows)) renderFileLocks(rows);
+  } catch (_) {}
+}
+
+async function loadGraph() {
+  const sid = activeSessionId || prompt('session_id?');
+  const rid = $('#run-id').value.trim() || activeRunId;
+  const query = new URLSearchParams();
+  if (sid) query.set('session_id', sid);
+  if (rid) query.set('run_id', rid);
+  $('#graph-viewer').textContent = JSON.stringify(await api('/graph' + (query.toString() ? '?' + query.toString() : '')), null, 2);
 }
 
 const anchors = ['PROGRESS_LOG_START','PROGRESS_LOG_END','NEXT_TASK_GROUP_START','NEXT_TASK_GROUP_END','PHASE_TASKS_START','PHASE_TASKS_END','PHASE_PROGRESS_START','PHASE_PROGRESS_END','QUICK_STATUS_START','QUICK_STATUS_END','HANDOFF_NOTES_START','HANDOFF_NOTES_END','SUBAGENT_A_ASSIGNMENT_START','SUBAGENT_A_ASSIGNMENT_END','SUBAGENT_B_ASSIGNMENT_START','SUBAGENT_B_ASSIGNMENT_END','SUBAGENT_C_ASSIGNMENT_START','SUBAGENT_C_ASSIGNMENT_END','SUBAGENT_D_ASSIGNMENT_START','SUBAGENT_D_ASSIGNMENT_END'];
@@ -191,13 +259,14 @@ $('#run-id').value = activeRunId;
 $('#run-id').onchange = () => selectSession(activeSessionId, $('#run-id').value.trim());
 $('#load-artifact').onclick = async () => { try { const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const kind = $('#artifact-kind').value; const body = await api('/pipeline/artifacts/' + kind + '?session_id=' + encodeURIComponent(sid)); $('#artifact-viewer').textContent = body.content_text || JSON.stringify(body, null, 2); if (kind === 'review_report') $('#review-report').textContent = $('#artifact-viewer').textContent; } catch (e) { reportError('artifact load failed', e); } };
 $('#load-devplan').onclick = async () => { const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const body = await api('/pipeline/artifacts/devplan?session_id=' + encodeURIComponent(sid)); $('#devplan-content').innerHTML = highlightAnchors(body.content_text || ''); };
+$('#load-graph').onclick = () => loadGraph().catch((e) => reportError('graph load failed', e));
 $('#load-config').onclick = async () => { $('#config-editor').value = JSON.stringify(await api('/config'), null, 2); };
 $('#save-config').onclick = async () => { $('#config-editor').value = JSON.stringify(await api('/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: $('#config-editor').value }), null, 2); };
 async function loadSecrets() { const rows = await api('/secrets'); $('#secret-list').innerHTML = ''; rows.forEach((secret) => append('#secret-list', `<b>${escapeHtml(secret.name)}</b> ${secret.configured ? 'configured' : 'missing'} <span class="muted">${escapeHtml(secret.source)}</span>`)); }
 $('#load-secrets').onclick = loadSecrets;
 $('#set-secret').onclick = async () => { await api('/secrets/' + encodeURIComponent($('#secret-name').value), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: $('#secret-value').value }) }); await loadSecrets(); };
 $('#delete-secret').onclick = async () => { await api('/secrets/' + encodeURIComponent($('#secret-name').value), { method: 'DELETE' }); await loadSecrets(); };
-$('#interview-form').onsubmit = async (event) => { event.preventDefault(); const sid = activeSessionId || prompt('session_id?'); if (!sid) return; await api('/pipeline/' + encodeURIComponent(sid) + '/interview/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answer: $('#interview-answer').value }) }); $('#interview-answer').value = ''; $('#interview-form').classList.add('hidden'); };
+$('#interview-form').onsubmit = async (event) => { event.preventDefault(); const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const questionId = activeInterviewQuestionId || stableQuestionId({ session_id: sid, run_id: activeRunId }); await api('/pipeline/' + encodeURIComponent(sid) + '/interview/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answers: { [questionId]: $('#interview-answer').value } }) }); $('#interview-answer').value = ''; $('#interview-form').classList.add('hidden'); };
 
 ['interview','design','validate','plan','review','develop'].forEach((name) => stage({ stage: name, status: 'pending' }));
 addEventListener('hashchange', activateTabs);

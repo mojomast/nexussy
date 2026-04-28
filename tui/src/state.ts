@@ -1,5 +1,5 @@
 import { computeBudget, defaultContextWindowSize, type ContextBudget } from "./lib/contextBudget";
-import type { ArtifactRef, Blocker, EventEnvelope, FileLock, GitEventPayload, SecretSummary, StageName, StageRunStatus, TokenUsage, Worker } from "./types";
+import type { ArtifactRef, Blocker, EventEnvelope, FileLock, GitEventPayload, PipelineStatusResponse, SecretSummary, StageName, StageRunStatus, TokenUsage, Worker } from "./types";
 
 export interface LogRow { id:string; kind:"content"|"tool"|"system"; title:string; text:string; collapsed:boolean; }
 export interface TuiConfig { contextWindowSize?:number; model?:string; projectName?:string; }
@@ -10,6 +10,15 @@ export const zeroUsage: TokenUsage = { input_tokens:0, output_tokens:0, cache_re
 export function createState(config:TuiConfig = {}): TuiState { const usage={...zeroUsage, model:config.model}; return { stages:Object.fromEntries(STAGES.map(s=>[s,"pending"])) as Record<StageName,StageRunStatus>, checkpoints:{}, workers:{}, locks:[], logs:[], devplan:[], usage, contextBudget:budgetFor(usage, config), config, paused:false, gitEvents:[], blockers:{}, artifacts:[], secrets:[] }; }
 export function reduceSecrets(state:TuiState, secrets:SecretSummary[], notice?:string): TuiState { return { ...state, secrets:[...secrets], secretNotice:notice }; }
 export function reduceConnectionError(state:TuiState, error:unknown): TuiState { const message = error instanceof Error ? error.message : String(error); return { ...state, connectionError:message, authError:/unauthorized|401/i.test(message) ? message : state.authError, logs:[...state.logs,{id:`connection-${state.logs.length+1}`,kind:"system",title:"connection_error",text:message,collapsed:false}] }; }
+export function reduceStatusSnapshot(state:TuiState, snapshot:PipelineStatusResponse): TuiState {
+  const stages = { ...state.stages };
+  for (const stage of snapshot.stages ?? []) stages[stage.stage] = stage.status;
+  const workers = Object.fromEntries((snapshot.workers ?? []).map(worker => [worker.worker_id, worker])) as Record<string,Worker>;
+  const artifacts = (snapshot.stages ?? []).flatMap(stage => [...(stage.input_artifacts ?? []), ...(stage.output_artifacts ?? [])]);
+  return { ...state, runId:snapshot.run.run_id, sessionId:snapshot.run.session_id, stages, workers:{ ...state.workers, ...workers }, paused:snapshot.paused, blockers:Object.fromEntries((snapshot.blockers ?? []).map(blocker => [blocker.blocker_id, blocker])) as Record<string,Blocker>, usage:snapshot.run.usage ?? state.usage, contextBudget:budgetFor(snapshot.run.usage ?? state.usage, state.config), finalStatus:snapshot.run.status === "running" || snapshot.run.status === "created" ? undefined : snapshot.run.status, artifacts:artifacts.length ? mergeArtifacts(state.artifacts, artifacts) : state.artifacts };
+}
+export function reduceWorkersSnapshot(state:TuiState, workers:Worker[]): TuiState { return { ...state, workers:{ ...state.workers, ...Object.fromEntries(workers.map(worker => [worker.worker_id, worker])) as Record<string,Worker> } }; }
+export function reduceArtifactsSnapshot(state:TuiState, response:unknown): TuiState { const artifacts = extractArtifacts(response); return artifacts.length ? { ...state, artifacts:mergeArtifacts(state.artifacts, artifacts) } : state; }
 export function reduceEvent(state:TuiState, env:EventEnvelope): TuiState {
   const s:TuiState = { ...state, stages:{...state.stages}, checkpoints:{...state.checkpoints}, workers:{...state.workers}, locks:[...state.locks], logs:[...state.logs], devplan:[...state.devplan], usage:{...state.usage}, contextBudget:{...state.contextBudget}, gitEvents:[...state.gitEvents], blockers:{...state.blockers}, artifacts:[...state.artifacts], lastEventId:env.event_id, runId:env.run_id, sessionId:env.session_id, connectionError:undefined, authError:undefined };
   const p = env.payload as any;
@@ -38,3 +47,13 @@ export function toggleToolRow(state:TuiState, id:string): TuiState { return { ..
 export function triggerHandoff(state:TuiState, trigger:HandoffPrompt["trigger"]="user_command"): TuiState { return { ...state, handoffPrompt:{trigger,blocking:trigger==="token_critical"} }; }
 function budgetFor(usage:TokenUsage, config:TuiConfig): ContextBudget { return computeBudget(usage, config.contextWindowSize ?? defaultContextWindowSize(config.model ?? usage.model ?? "")); }
 function isRetryTransition(from:StageName|undefined|null, to:StageName, reason?:string): boolean { return /retry/i.test(reason ?? "") || (from === "validate" && to === "design") || (from === "review" && to === "plan"); }
+function mergeArtifacts(current:ArtifactRef[], next:ArtifactRef[]): ArtifactRef[] { return [...current.filter(a => !next.some(b => b.kind === a.kind && b.path === a.path)), ...next]; }
+function extractArtifacts(response:unknown): ArtifactRef[] {
+  if (Array.isArray(response)) return response.filter(isArtifactRef);
+  if (response && typeof response === "object") {
+    const obj = response as Record<string,unknown>;
+    if (Array.isArray(obj.artifacts)) return obj.artifacts.filter(isArtifactRef);
+  }
+  return [];
+}
+function isArtifactRef(value:unknown): value is ArtifactRef { return Boolean(value && typeof value === "object" && typeof (value as ArtifactRef).kind === "string" && typeof (value as ArtifactRef).path === "string"); }

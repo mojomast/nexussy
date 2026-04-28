@@ -78,6 +78,19 @@ class ArtifactRef(StrictModel):
         return sanitize_relative_path(v)
 class ToolDisplay(StrictModel):
     kind:Literal["text","json","diff","table","tree","markdown"]="text"; title:str|None=None; text:str|None=None; language:str|None=None; json:JsonValue|None=None; truncated:bool=False
+class ToolCallPayload(StrictModel):
+    model_config = ConfigDict(extra="forbid", use_enum_values=True, strict=True)
+    call_id:str; stage:StageName; tool_name:str; arguments:dict[str,JsonValue]=Field(default_factory=dict); worker_id:str|None=None
+class ToolOutputPayload(StrictModel):
+    model_config = ConfigDict(extra="forbid", use_enum_values=True, strict=True)
+    call_id:str; stage:StageName; success:bool; result_text:str|None=None; error:str|None=None; worker_id:str|None=None
+    @model_validator(mode="after")
+    def result_or_error(self):
+        if self.success and self.result_text is None:
+            raise ValueError("successful tool output requires result_text")
+        if not self.success and self.error is None:
+            raise ValueError("failed tool output requires error")
+        return self
 
 class SessionCreateRequest(StrictModel):
     project_name:str; project_slug:str|None=None; description:str; existing_repo_path:str|None=None; model_overrides:dict[StageName,str]=Field(default_factory=dict); tags:list[str]=Field(default_factory=list)
@@ -217,7 +230,7 @@ class NexussyConfig(StrictModel):
 
 class HealthResponse(StrictModel):
     ok:bool=True; status:str="ok"; version:str; contract_version:str="1.0"; db_ok:bool; providers_configured:list[str]=Field(default_factory=list); pi_available:bool=False
-class SecretSummary(StrictModel): name:str; source:Literal["keyring","env","file"]; configured:bool; updated_at:datetime|None=None
+class SecretSummary(StrictModel): name:str; source:Literal["keyring","env","config"]; configured:bool; updated_at:datetime|None=None
 class MemoryEntryCreateRequest(StrictModel): session_id:str|None=None; key:str; value:str; tags:list[str]=Field(default_factory=list)
 class MemoryEntry(StrictModel): memory_id:str=Field(default_factory=new_id); session_id:str|None=None; key:str; value:str; tags:list[str]=Field(default_factory=list); created_at:datetime=Field(default_factory=now_utc); updated_at:datetime=Field(default_factory=now_utc)
 class GraphNode(StrictModel): id:str; label:str; kind:Literal["session","run","stage","worker","artifact","file","task"]; status:str|None=None; metadata:dict[str,JsonValue]=Field(default_factory=dict)

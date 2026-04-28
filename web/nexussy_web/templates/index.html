@@ -15,18 +15,19 @@
     <span id="error-banner" class="badge" role="status">errors: none</span>
   </header>
   <main class="dashboard">
-    <section class="panel sessions-panel">
+    <section id="sessions" class="panel sessions-panel tab">
       <div class="panel-title"><h2>Sessions</h2><span class="muted">polls /api/sessions</span></div>
       <div class="row"><button id="prev-sessions">Prev</button><button id="next-sessions">Next</button></div>
       <div id="session-list" class="list"></div>
     </section>
 
-    <section class="panel pipeline-panel">
+    <section id="pipeline" class="panel pipeline-panel tab">
       <div class="panel-title"><h2>Pipeline</h2><span id="pipeline-summary" class="badge">no run selected</span></div>
       <div id="stages" class="grid"></div>
       <h3>Transitions</h3><div id="transitions" class="list compact"></div>
       <form id="interview-form" class="interview hidden">
         <h3>Interview answer required</h3>
+        <p class="muted">Question ID: <code id="interview-question-id">pending</code></p>
         <p id="interview-question" class="muted">Run is paused for interview input.</p>
         <textarea id="interview-answer" rows="5" placeholder="Answer the paused interview question"></textarea>
         <button type="submit">Submit answer</button>
@@ -40,7 +41,9 @@
     </section>
 
     <section class="panel details-panel">
-      <nav id="tabs"><a href="#artifacts">Artifacts</a><a href="#swarm">Swarm</a><a href="#devplan">DevPlan</a><a href="#config">Config</a><a href="#secrets">Secrets</a></nav>
+      <nav id="tabs"><a href="#chat">Chat</a><a href="#pipeline">Pipeline</a><a href="#sessions">Sessions</a><a href="#graph">Graph</a><a href="#artifacts">Artifacts</a><a href="#swarm">Swarm</a><a href="#devplan">DevPlan</a><a href="#config">Config</a><a href="#secrets">Secrets</a></nav>
+      <section id="chat" class="tab"><h2>Chat</h2><p class="muted">Use the TUI or pipeline inject endpoint for active conversations.</p><div id="chat-log" class="list compact"></div></section>
+      <section id="graph" class="tab" data-api-route="/api/graph"><h2>Graph</h2><button id="load-graph">Load Graph</button><pre id="graph-viewer"></pre></section>
       <section id="artifacts" class="tab"><h2>Artifacts</h2><select id="artifact-kind"><option>devplan</option><option>handoff</option><option>review_report</option><option>develop_report</option></select><button id="load-artifact">Load</button><pre id="artifact-viewer"></pre><h3>Review report</h3><pre id="review-report"></pre></section>
       <section id="swarm" class="tab"><h2>Swarm</h2><div id="worker-grid" class="grid"></div><h3>File locks</h3><div id="file-lock-feed" class="list compact"></div><h3>Worktree</h3><div id="worktree-status" class="list compact"></div><h3>Tool rows</h3><div id="tool-rows" class="list compact"></div></section>
       <section id="devplan" class="tab"><h2>Live devplan.md</h2><button id="load-devplan">Load DevPlan</button><pre id="devplan-content"></pre></section>

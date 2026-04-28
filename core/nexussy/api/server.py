@@ -41,7 +41,7 @@ def _get_startup_lock() -> asyncio.Lock:
     return _startup_lock
 
 def cors_origins_for(cfg):
-    origins = cfg.security.cors_origins if cfg is not None else ["*"]
+    origins = cfg.core.cors_allow_origins if cfg is not None else ["*"]
     if "*" in origins and os.environ.get("NEXUSSY_ENV", os.environ.get("ENV", "")).lower() == "production":
         if os.environ.get("NEXUSSY_ALLOW_WILDCARD_CORS") != "1":
             raise RuntimeError(
@@ -281,23 +281,39 @@ async def stream(request):
     if a: return a
     await ensure_db(); rid=request.path_params.get("run_id") or request.query_params.get("run_id")
     worker_id=request.path_params.get("worker_id")
-    if not rid and worker_id:
+    if worker_id:
         rows=await db.read("SELECT run_id FROM workers WHERE worker_id=?", (worker_id,))
-        rid=rows[0]["run_id"] if rows else None
+        if not rows:
+            return err(ErrorCode.worker_not_found,"worker not found",404)
+        worker_run_id=rows[0]["run_id"]
+        if rid and rid != worker_run_id:
+            return err(ErrorCode.worker_not_found,"worker not found",404)
+        rid=worker_run_id
     if not rid:
         return err(ErrorCode.worker_not_found,"worker not found",404) if worker_id else err(ErrorCode.not_found,"run not found",404)
+    if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (rid,)):
+        return err(ErrorCode.not_found,"run not found",404)
+    def event_for_worker(e: EventEnvelope) -> bool:
+        if not worker_id:
+            return True
+        payload = e.payload if isinstance(e.payload, dict) else {}
+        return payload.get("worker_id") == worker_id
     async def gen():
         for e in await engine.replay(rid, request.headers.get("last-event-id")):
-            yield sse_frame(e)
+            if event_for_worker(e):
+                yield sse_frame(e)
         q=asyncio.Queue(maxsize=config.sse.client_queue_max_events); engine.queues.setdefault(rid,set()).add(q)
         try:
             while True:
                 try:
-                    e=await asyncio.wait_for(q.get(), timeout=config.sse.heartbeat_interval_s); yield sse_frame(e)
+                    e=await asyncio.wait_for(q.get(), timeout=config.sse.heartbeat_interval_s)
+                    if event_for_worker(e):
+                        yield sse_frame(e)
                     if e.type == SSEEventType.pipeline_error and isinstance(e.payload, dict) and e.payload.get("error_code") == ErrorCode.sse_client_slow.value: break
                 except asyncio.TimeoutError:
                     rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(rid,)); sid=rows[0]["session_id"] if rows else "unknown"
-                    hb=await engine.emit(SSEEventType.heartbeat,sid,rid,HeartbeatPayload()); yield sse_frame(hb)
+                    if not worker_id:
+                        hb=await engine.emit(SSEEventType.heartbeat,sid,rid,HeartbeatPayload()); yield sse_frame(hb)
         finally: engine.queues.get(rid,set()).discard(q)
     return StreamingResponse(gen(), media_type="text/event-stream; charset=utf-8")
 
@@ -384,7 +400,13 @@ async def assistant_reply(request):
                 "Reply naturally and briefly to casual user messages. "
                 "If the user asks to build, change, plan, review, or test software, tell them to describe the request or use /new; do not start work yourself.\n\n"
                 f"User: {req.message}")
-        result=await complete("chat", prompt, model, allow_mock=False, timeout_s=config.providers.request_timeout_s)
+        try:
+            result=await complete("chat", prompt, model, allow_mock=False, timeout_s=config.providers.request_timeout_s, db=db)
+        except Exception as e:
+            limited=await active_rate_limit(db, provider, model)
+            if limited:
+                raise ProviderStartError(ErrorResponse(error_code=ErrorCode.rate_limited,message="provider rate limited",details={"provider":provider,"model":model,"reset_at":limited["reset_at"]},retryable=True)) from e
+            raise
         return JSONResponse(dump(AssistantReplyResponse(message=result.text.strip(),model=model,usage=TokenUsage.model_validate(result.usage))))
     return await endpoint(request, inner)
 
@@ -422,8 +444,12 @@ async def blocker_resolve(request):
 async def artifacts_manifest(request):
     async def inner(r):
         sid=r.query_params["session_id"]; rid=r.query_params.get("run_id")
+        if not await db.read("SELECT session_id FROM sessions WHERE session_id=?", (sid,)):
+            raise KeyError("session")
         if not rid:
             rows=await db.read("SELECT run_id FROM runs WHERE session_id=? ORDER BY started_at DESC LIMIT 1",(sid,)); rid=rows[0]["run_id"] if rows else None
+        elif not await db.read("SELECT run_id FROM runs WHERE run_id=? AND session_id=?", (rid, sid)):
+            raise KeyError("run")
         rows=await db.read("SELECT * FROM artifacts WHERE run_id=?",(rid,)) if rid else []
         arts=[ArtifactRef(kind=x["kind"],path=x["path"],sha256=x["sha256"],bytes=x["bytes"],updated_at=datetime.fromisoformat(x["updated_at"]),phase_number=x["phase_number"]) for x in rows]
         return JSONResponse(dump(ArtifactManifestResponse(session_id=sid,run_id=rid,artifacts=arts)))
@@ -450,7 +476,10 @@ async def worker_get(request):
     return await endpoint(request, inner)
 async def spawn(request):
     async def inner(r):
-        req=await body(r,WorkerSpawnRequest); wid=f"{req.role.value}-{uuid4().hex[:8]}"; wt=str(pathlib.Path(config.projects_dir).expanduser()/"workers"/wid)
+        req=await body(r,WorkerSpawnRequest)
+        if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (req.run_id,)):
+            raise KeyError("run")
+        wid=f"{req.role.value}-{uuid4().hex[:8]}"; wt=str(pathlib.Path(config.projects_dir).expanduser()/"workers"/wid)
         w=Worker(worker_id=wid,run_id=req.run_id,role=req.role,status=WorkerStatus.idle,task_title=req.task,worktree_path=wt,branch_name=f"worker/{wid}",model=req.model or config.providers.default_model)
         await db.write(lambda con: con.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(w.worker_id,w.run_id,w.role,w.status,w.task_id,w.worktree_path,w.branch_name,w.pid,w.usage.model_dump_json(),None,w.model_dump_json())))
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(req.run_id,));
@@ -566,7 +595,12 @@ async def memory_create(request):
         return JSONResponse(dump(m))
     return await endpoint(request, inner)
 async def memory_delete(request):
-    async def inner(r): mid=r.path_params["memory_id"]; await db.write(lambda con: con.execute("DELETE FROM memory_entries WHERE memory_id=?",(mid,))); return JSONResponse(dump(ControlResponse(run_id=mid,status=RunStatus.cancelled,message="memory deleted")))
+    async def inner(r):
+        mid=r.path_params["memory_id"]
+        if not await db.read("SELECT memory_id FROM memory_entries WHERE memory_id=?", (mid,)):
+            raise KeyError("memory")
+        await db.write(lambda con: con.execute("DELETE FROM memory_entries WHERE memory_id=?",(mid,)))
+        return JSONResponse(dump(ControlResponse(run_id=mid,status=RunStatus.cancelled,message="memory deleted")))
     return await endpoint(request, inner)
 async def graph(request):
     async def inner(r):
@@ -576,7 +610,11 @@ async def graph(request):
         return JSONResponse(dump(GraphResponse(nodes=nodes,edges=edges)))
     return await endpoint(request, inner)
 async def events(request):
-    async def inner(r): return JSONResponse([dump(e) for e in await engine.replay(r.query_params["run_id"], None, int(r.query_params.get("after_sequence",0)), int(r.query_params.get("limit",500)))])
+    async def inner(r):
+        rid=r.query_params["run_id"]
+        if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (rid,)):
+            raise KeyError("run")
+        return JSONResponse([dump(e) for e in await engine.replay(rid, None, int(r.query_params.get("after_sequence",0)), int(r.query_params.get("limit",500)))])
     return await endpoint(request, inner)
 
 routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/mcp/tools',mcp_tools),Route('/mcp/call',mcp_call,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]

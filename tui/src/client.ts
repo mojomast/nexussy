@@ -30,15 +30,11 @@ export class CoreClient {
   status(run_id:string){ return this.json<PipelineStatusResponse>("GET","/pipeline/status",undefined,{run_id}); }
   inject(body:{run_id:string;message:string;worker_id?:string|null;stage?:StageName|null}){ return this.json("POST","/pipeline/inject",body); }
   pause(run_id:string, reason="user"){ return this.json("POST","/pipeline/pause",{run_id,reason}); }
-  pauseRun(run_id:string, reason="user"){ return this.json("POST",`/pipeline/runs/${encodeURIComponent(run_id)}/pause`,{reason}); }
-  compact(run_id:string){ return this.json<{compacted_tokens:number}>("POST",`/pipeline/runs/${encodeURIComponent(run_id)}/compact`); }
   resume(run_id:string){ return this.json("POST","/pipeline/resume",{run_id}); }
   skip(run_id:string, stage:StageName, reason:string){ return this.json("POST","/pipeline/skip",{run_id,stage,reason}); }
   cancel(run_id:string, reason:string){ return this.json("POST","/pipeline/cancel",{run_id,reason}); }
   artifacts(session_id:string, run_id?:string){ return this.json("GET","/pipeline/artifacts",undefined,{session_id,run_id}); }
   artifact(kind:string, session_id:string, phase_number?:number){ return this.json("GET",`/pipeline/artifacts/${kind}`,undefined,{session_id,phase_number}); }
-  sessionArtifact(session_id:string, kind:string){ return this.json<{ok?:boolean; content:string; artifact?:unknown}>("GET",`/pipeline/sessions/${encodeURIComponent(session_id)}/artifacts/${encodeURIComponent(kind)}`); }
-  patchSessionArtifact(session_id:string, kind:string, content:string){ return this.json("PATCH",`/pipeline/sessions/${encodeURIComponent(session_id)}/artifacts/${encodeURIComponent(kind)}`,{content}); }
   workers(run_id:string){ return this.json("GET","/swarm/workers",undefined,{run_id}); }
   worker(worker_id:string, run_id:string){ return this.json("GET",`/swarm/workers/${worker_id}`,undefined,{run_id}); }
   spawn(body:{run_id:string;role:WorkerRole;task:string;phase_number?:number|null;model?:string}){ return this.json("POST","/swarm/spawn",body); }

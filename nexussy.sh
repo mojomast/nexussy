@@ -67,6 +67,19 @@ cleanup_stale_pid() {
   fi
 }
 
+terminate_pid_file() {
+  pid_file="$1"
+  pid=$(cat "$pid_file" 2>/dev/null || true)
+  case "$pid" in ''|*[!0-9]*) rm -f "$pid_file"; return 0 ;; esac
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill "$pid" >/dev/null 2>&1 || true
+    i=0
+    while [ "$i" -lt 5 ] && kill -0 "$pid" >/dev/null 2>&1; do i=$((i + 1)); sleep 1; done
+    kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$pid_file"
+}
+
 port_open() {
   host="$1"; port="$2"
   ( : > "/dev/tcp/$host/$port" ) >/dev/null 2>&1
@@ -109,7 +122,7 @@ start_core() {
   NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" NEXUSSY_CORE_HOST="$CORE_HOST" NEXUSSY_CORE_PORT="$CORE_PORT" PYTHONPATH="$ROOT_DIR/core${PYTHONPATH:+:$PYTHONPATH}" nohup "$PYTHON" -m nexussy.api.server >> "$CORE_LOG" 2>&1 &
   printf '%s\n' "$!" > "$CORE_PID"
   cd "$old_pwd" || return 1
-  wait_for_url "$(health_url "$CORE_HOST" "$CORE_PORT" health)" || { warn "core did not become healthy; see $CORE_LOG"; cleanup_stale_pid "$CORE_PID"; return 1; }
+  wait_for_url "$(health_url "$CORE_HOST" "$CORE_PORT" health)" || { warn "core did not become healthy; see $CORE_LOG"; terminate_pid_file "$CORE_PID"; return 1; }
 }
 
 start_web() {
@@ -125,18 +138,29 @@ start_web() {
   NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" NEXUSSY_WEB_HOST="$WEB_HOST" NEXUSSY_WEB_PORT="$WEB_PORT" NEXUSSY_CORE_HOST="$CORE_HOST" NEXUSSY_CORE_PORT="$CORE_PORT" PYTHONPATH="$ROOT_DIR/web${PYTHONPATH:+:$PYTHONPATH}" nohup "$PYTHON" -m nexussy_web.app >> "$WEB_LOG" 2>&1 &
   printf '%s\n' "$!" > "$WEB_PID"
   cd "$old_pwd" || return 1
-  wait_for_url "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)" || { warn "web health proxy did not become healthy; see $WEB_LOG"; cleanup_stale_pid "$WEB_PID"; return 1; }
+  wait_for_url "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)" || { warn "web health proxy did not become healthy; see $WEB_LOG"; terminate_pid_file "$WEB_PID"; return 1; }
 }
 
 start_tui() {
+  cleanup_stale_pid "$TUI_PID"
+  if is_running "$TUI_PID"; then info "tui already running"; return 0; fi
   curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)" || { warn "core health check failed; run ./nexussy.sh start first"; return 1; }
   have bun || { warn "bun not found"; return 1; }
+  ensure_dirs
+  prepare_log "$TUI_LOG" || fail "cannot write tui log: $TUI_LOG"
+  tui_launcher_pid=${BASHPID:-$$}
+  printf '%s\n' "$tui_launcher_pid" > "$TUI_PID"
+  printf '%s\n' "[nexussy] tui started at $(date -u +%Y-%m-%dT%H:%M:%SZ) pid=$tui_launcher_pid" >> "$TUI_LOG"
   info "starting tui interactively; press Ctrl+C or type /quit to exit"
   old_pwd=$(pwd)
-  cd "$ROOT_DIR/tui" || return 1
+  cd "$ROOT_DIR/tui" || { rm -f "$TUI_PID"; return 1; }
+  set +e
   bun run start
   rc=$?
-  cd "$old_pwd" || return 1
+  set -e
+  cd "$old_pwd" || { rm -f "$TUI_PID"; return 1; }
+  printf '%s\n' "[nexussy] tui exited at $(date -u +%Y-%m-%dT%H:%M:%SZ) status=$rc" >> "$TUI_LOG"
+  rm -f "$TUI_PID"
   return "$rc"
 }
 
@@ -205,8 +229,9 @@ doctor() {
   else printf 'config: missing (%s)\n' "$NEXUSSY_CONFIG"; rc=1; fi
   printf 'core port: %s (%s, tcp=%s)\n' "$CORE_PORT" "$(curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)" && printf responding || printf not-responding)" "$(port_open "$CORE_HOST" "$CORE_PORT" && printf open || printf closed)"
   printf 'web port: %s (%s, tcp=%s)\n' "$WEB_PORT" "$(curl_ok "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)" && printf responding || printf not-responding)" "$(port_open "$WEB_HOST" "$WEB_PORT" && printf open || printf closed)"
-  if have "${NEXUSSY_PI_COMMAND:-pi}"; then
-    printf 'pi command: ok (%s)\n' "${NEXUSSY_PI_COMMAND:-pi}"
+  pi_cmd=${NEXUSSY_PI_COMMAND:-nexussy-pi}
+  if have "$pi_cmd"; then
+    printf 'pi command: ok (%s)\n' "$pi_cmd"
   elif PY=$(python_cmd) && PYTHONPATH="$ROOT_DIR/core${PYTHONPATH:+:$PYTHONPATH}" "$PY" - <<'PY' >/dev/null 2>&1
 import nexussy.swarm.local_pi_worker
 PY
@@ -247,7 +272,7 @@ case "$cmd" in
   start-tui) start_tui ;;
   stop) stop_one tui "$TUI_PID"; stop_one web "$WEB_PID"; stop_one core "$CORE_PID" ;;
   status) status ;;
-  logs) shift; show_logs "${1:-}" ;;
+  logs) shift; show_logs "$@" ;;
   update) update ;;
   doctor) doctor ;;
   -h|--help|help|'') usage ;;

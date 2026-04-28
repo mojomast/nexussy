@@ -50,6 +50,7 @@
 - Made checkpoints hash supplied content when available.
 - Reused the provider env-file parser from config loading.
 - Tightened secret scrubbing to avoid non-secret git/hash false positives while retaining API key, `sk-`, and PEM redaction.
+- Hardened root operations: launcher health-wait failures now terminate the just-started service and clear its PID, foreground TUI runs get lifecycle PID/log handling, systemd user units reject unsupported unescaped paths, and ops tests keep temporary outputs under their private temp root.
 
 ### Refactored
 

@@ -20,9 +20,9 @@ class MockClient {
   skip(run_id:string, stage:string, reason:string){ this.calls.push(["skip", run_id, stage, reason]); return {}; }
   spawn(body:any){ this.calls.push(["spawn", body]); return {}; }
   secrets(){ this.calls.push(["secrets"]); return [{ name:"OPENROUTER_API_KEY", source:"config", configured:true }]; }
-  status(run_id:string){ this.calls.push(["status", run_id]); return {}; }
-  workers(run_id:string){ this.calls.push(["workers", run_id]); return []; }
-  artifacts(session_id:string, run_id?:string){ this.calls.push(["artifacts", session_id, run_id]); return { artifacts:[] }; }
+  status(run_id:string){ this.calls.push(["status", run_id]); return { ok:true, run:{ run_id, session_id:"sess-1", status:"running", usage }, stages:[{ stage:"design", status:"running" }], workers:[], paused:false, blockers:[] }; }
+  workers(run_id:string){ this.calls.push(["workers", run_id]); return [{ worker_id:"backend-abc123", run_id, role:"backend", status:"running", worktree_path:"", branch_name:"", model:"mock", usage, created_at:"", updated_at:"" }]; }
+  artifacts(session_id:string, run_id?:string){ this.calls.push(["artifacts", session_id, run_id]); return { artifacts:[{ kind:"devplan", path:".nexussy/artifacts/devplan.md", sha256:"abc", bytes:1, updated_at:"now" }] }; }
 }
 
 test("default render is chat transcript, not dashboard columns", () => {
@@ -109,18 +109,19 @@ test("interaction classifier only treats explicit triggers as action buckets", (
 test("slash commands route or open overlays", async () => {
   const client = new MockClient() as any;
   let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  let result;
   [state] = await handleComposerSubmit(client, state, "/new build api"); expect(client.calls.at(-1)[0]).toBe("startPipeline");
   [state] = await handleComposerSubmit(client, state, "/pause stop"); expect(client.calls.at(-1)).toEqual(["pause", "run-123456", "stop"]);
   [state] = await handleComposerSubmit(client, state, "/resume-run"); expect(client.calls.at(-1)).toEqual(["resume", "run-123456"]);
-  [state] = await handleComposerSubmit(client, state, "/stage plan"); expect(client.calls.at(-1)).toEqual(["skip", "run-123456", "plan", "user slash stage skip"]);
+  [state, result] = await handleComposerSubmit(client, state, "/stage plan"); expect(result.message).toContain("use /skip"); expect(client.calls.at(-1)[0]).toBe("resume");
   [state] = await handleComposerSubmit(client, state, "/skip validate reason here"); expect(client.calls.at(-1)).toEqual(["skip", "run-123456", "validate", "reason here"]);
   [state] = await handleComposerSubmit(client, state, "/spawn backend build API"); expect(client.calls.at(-1)).toEqual(["spawn", { run_id:"run-123456", role:"backend", task:"build API" }]);
-  [state] = await handleComposerSubmit(client, state, "/inject worker-123 hello"); expect(client.calls.at(-1)).toEqual(["injectWorker", "worker-123", { run_id:"run-123456", worker_id:"worker-123", message:"hello" }]);
+  [state] = await handleComposerSubmit(client, state, "/inject backend-abc123 hello"); expect(client.calls.at(-1)).toEqual(["injectWorker", "backend-abc123", { run_id:"run-123456", worker_id:"backend-abc123", message:"hello" }]);
   const [, exported] = await handleComposerSubmit(client, state, "/export"); expect(exported.html).toContain("nexussy export");
-  [state] = await handleComposerSubmit(client, state, "/workers"); expect(state.overlay).toBe("workers");
+  [state] = await handleComposerSubmit(client, state, "/workers"); expect(state.overlay).toBe("workers"); expect(state.app.workers["backend-abc123"].status).toBe("running");
   [state] = await handleComposerSubmit(client, state, "/onboarding"); expect(state.overlay).toBe("onboarding");
   [state] = await handleComposerSubmit(client, state, "/plan"); expect(state.overlay).toBe("plan");
-  [state] = await handleComposerSubmit(client, state, "/artifacts"); expect(state.overlay).toBe("artifacts");
+  [state] = await handleComposerSubmit(client, state, "/artifacts"); expect(state.overlay).toBe("artifacts"); expect(state.app.artifacts[0].kind).toBe("devplan");
   [state] = await handleComposerSubmit(client, state, "/doctor"); expect(state.overlay).toBe("doctor");
   [state] = await handleComposerSubmit(client, state, "/secrets"); expect(state.overlay).toBe("secrets");
 });

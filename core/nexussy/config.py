@@ -7,6 +7,7 @@ ENV_MAP = {
  "NEXUSSY_HOME": ("home_dir",), "NEXUSSY_PROJECTS_DIR": ("projects_dir",), "NEXUSSY_CORE_HOST": ("core","host"),
  "NEXUSSY_CORE_PORT": ("core","port"), "NEXUSSY_WEB_HOST": ("web","host"), "NEXUSSY_WEB_PORT": ("web","port"),
  "NEXUSSY_AUTH_ENABLED": ("auth","enabled"), "NEXUSSY_DATABASE_PATH": ("database","global_path"), "NEXUSSY_DEFAULT_MODEL": ("providers","default_model"),
+ "NEXUSSY_CORS_ALLOW_ORIGINS": ("core","cors_allow_origins"),
  "NEXUSSY_INTERVIEW_MODEL": ("stages","interview","model"), "NEXUSSY_DESIGN_MODEL": ("stages","design","model"),
  "NEXUSSY_VALIDATE_MODEL": ("stages","validate","model"), "NEXUSSY_PLAN_MODEL": ("stages","plan","model"),
  "NEXUSSY_REVIEW_MODEL": ("stages","review","model"), "NEXUSSY_DEVELOP_MODEL": ("stages","develop","model"),
@@ -23,7 +24,9 @@ def _set(d, path, val):
     cur=d
     for p in path[:-1]: cur=cur.setdefault(p,{})
     raw = str(val)
-    if raw.lower() in ("true", "false"):
+    if path == ("core", "cors_allow_origins"):
+        val = [item.strip() for item in raw.split(",") if item.strip()]
+    elif raw.lower() in ("true", "false"):
         val = raw.lower() == "true"
     else:
         try:

@@ -11,7 +11,8 @@ from nexussy.api.schemas import (
     PipelineStartRequest, ReviewReport, RunStartResponse, RunStatus,
     RunSummary, SSEEventType, SessionCreateRequest, SessionDetail,
     SessionSummary, StageName, StageRunStatus, StageStatusSchema,
-    StageTransitionPayload, TokenUsage, ToolName, ValidationIssue,
+    StageTransitionPayload, TokenUsage, ToolCallPayload, ToolName,
+    ToolOutputPayload, ValidationIssue,
     ValidationReport, Worker, WorkerRole, WorkerStatus, WorkerTaskPayload,
     WorkerTaskStatus,
 )
@@ -23,9 +24,28 @@ from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merg
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.swarm.roles import enforce_tool
+from nexussy.security import sanitize_path
 
 logger = logging.getLogger(__name__)
 STAGES=[StageName(s) for s in STAGE_ORDER]
+
+def _rate_limited_error(provider: str, model: str, limited) -> ErrorResponse:
+    return ErrorResponse(error_code=ErrorCode.rate_limited, message="provider rate limited", details={"provider":provider,"model":model,"reset_at":limited["reset_at"]}, retryable=True)
+
+def _validate_existing_repo_path(path: str) -> pathlib.Path:
+    """Validate an imported repo path and reject symlinks that escape it."""
+    if "\x00" in path:
+        raise ValueError("path_rejected")
+    raw = pathlib.Path(path).expanduser()
+    resolved = sanitize_path(str(raw), [raw.anchor or "/"], reject_symlink_escape=True).resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError("path_rejected")
+    for child in resolved.rglob("*"):
+        if child.is_symlink():
+            target = child.resolve(strict=True)
+            if target != resolved and resolved not in target.parents:
+                raise ValueError("path_rejected")
+    return resolved
 
 @dataclass
 class WorkerMergeResult:
@@ -124,11 +144,11 @@ class Engine:
         sid=str(uuid4()); now=now_utc();
         root=pathlib.Path(self.config.projects_dir).expanduser()/slug; main=root/"main"; main.mkdir(parents=True,exist_ok=True)
         await self.db.init_project(str(root), self.config.database.project_relative_path)
-        if req.existing_repo_path and pathlib.Path(req.existing_repo_path).exists():
-            src=pathlib.Path(req.existing_repo_path).expanduser().resolve()
+        if req.existing_repo_path:
+            src=_validate_existing_repo_path(req.existing_repo_path)
             result=subprocess.run(["git", "-C", str(src), "rev-parse", "--git-dir"], capture_output=True, text=True)
             if result.returncode == 0:
-                shutil.copytree(src, main, dirs_exist_ok=True, symlinks=True)
+                shutil.copytree(src, main, dirs_exist_ok=True, symlinks=False)
         detail=SessionDetail(session=SessionSummary(session_id=sid,project_name=req.project_name,project_slug=slug,created_at=now,updated_at=now),project_root=str(root),main_worktree=str(main),artifacts=[],runs=[])
         await self.db.write(lambda con: con.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?)",(sid,slug,req.project_name,"created",now.isoformat(),now.isoformat(),detail.model_dump_json())))
         return detail
@@ -140,7 +160,7 @@ class Engine:
             provider = provider_for_model(model)
             limited = await active_rate_limit(self.db, provider, model)
             if limited:
-                raise ProviderStartError(ErrorResponse(error_code=ErrorCode.rate_limited, message="provider rate limited", details={"provider":provider,"model":model,"reset_at":limited["reset_at"]}, retryable=True))
+                raise ProviderStartError(_rate_limited_error(provider, model, limited))
             if not model_available(model, allow_mock=allow_mock):
                 if self.config.providers.allow_fallback and model_available(self.config.providers.default_model, allow_mock=allow_mock):
                     fallbacks.append({"stage":st,"requested_model":model,"fallback_model":self.config.providers.default_model})
@@ -246,17 +266,19 @@ class Engine:
         session_rows=await self.db.read("SELECT session_id FROM runs WHERE run_id=?",(run_id,))
         sid=session_rows[0]["session_id"] if session_rows else "unknown"
         tool_value=tool.value if hasattr(tool,"value") else tool
-        await self.emit(SSEEventType.tool_call,sid,run_id,{"worker_id":worker_id,"tool":tool_value,"arguments":arguments})
+        call_id=str(uuid4())
+        stage=StageName.develop
+        await self.emit(SSEEventType.tool_call,sid,run_id,ToolCallPayload(call_id=call_id,stage=stage,tool_name=tool_value,arguments=arguments,worker_id=worker_id))
         try:
             path=arguments.get("path") if isinstance(arguments, dict) else None
             enforce_tool(worker.role, tool, path)
             if tool in {ToolName.write_file, ToolName.edit_file} and path:
                 await write_requires_lock(self.db, run_id, str(path), worker_id)
-            payload={"worker_id":worker_id,"tool":tool_value,"success":True,"result":{}}
+            payload=ToolOutputPayload(call_id=call_id,stage=stage,success=True,result_text="{}",worker_id=worker_id)
         except PermissionError as e:
-            payload={"worker_id":worker_id,"tool":tool_value,"success":False,"error_code":str(e) or "forbidden"}
+            payload=ToolOutputPayload(call_id=call_id,stage=stage,success=False,error=str(e) or "forbidden",worker_id=worker_id)
         await self.emit(SSEEventType.tool_output,sid,run_id,payload)
-        return payload
+        return payload.model_dump(mode="json")
     async def _provider_text(self, st: StageName, sid: str, rid: str, prompt: str, selected_models, allow_mock: bool) -> str:
         model = (selected_models or {}).get(st.value) or self.config.providers.default_model
         stage_cfg = getattr(self.config.stages, st.value, None)
@@ -264,6 +286,10 @@ class Engine:
         last_error = None
         for attempt in range(max_retries):
             try:
+                provider = provider_for_model(model)
+                limited = await active_rate_limit(self.db, provider, model)
+                if limited:
+                    raise ProviderStartError(_rate_limited_error(provider, model, limited))
                 if self.provider_env_cache is None:
                     self.provider_env_cache = effective_secret_env()
                 result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s, _env=self.provider_env_cache, db=self.db)
@@ -271,6 +297,9 @@ class Engine:
             except Exception as e:
                 last_error = e
                 if attempt + 1 >= max_retries:
+                    limited = await active_rate_limit(self.db, provider_for_model(model), model)
+                    if limited:
+                        raise ProviderStartError(_rate_limited_error(provider_for_model(model), model, limited)) from e
                     if getattr(e, "status_code", None) == 429 or "429" in str(e) or "rate limit" in str(e).lower():
                         raise ProviderStartError(ErrorResponse(error_code=ErrorCode.rate_limited,message="provider rate limited",details={"provider":provider_for_model(model),"model":model,"reset_at":(now_utc()+timedelta(seconds=60)).isoformat()},retryable=True)) from e
                     raise
