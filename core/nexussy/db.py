@@ -22,6 +22,14 @@ CREATE TABLE IF NOT EXISTS file_locks(run_id TEXT, path TEXT, worker_id TEXT, st
 CREATE TABLE IF NOT EXISTS rate_limits(provider TEXT, model TEXT, reset_at TEXT, reason TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS memory_entries(memory_id TEXT PRIMARY KEY, session_id TEXT, key TEXT, value TEXT, tags_json TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, source TEXT, configured INTEGER, updated_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_stage_runs_run ON stage_runs(run_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id, kind);
+CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_worker_tasks_run ON worker_tasks(run_id);
+CREATE INDEX IF NOT EXISTS idx_blockers_run ON blockers(run_id, resolved);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_session ON memory_entries(session_id);
 """
 
 class Database:
@@ -43,17 +51,22 @@ class Database:
         async with self._lock:
             last=None
             for i in range(self.retries):
+                con=None
                 try:
-                    con=self.connect(); con.execute("BEGIN IMMEDIATE"); res=fn(con); con.commit(); con.close(); return res
+                    con=self.connect(); con.execute("BEGIN IMMEDIATE"); res=fn(con); con.commit(); return res
                 except sqlite3.IntegrityError:
-                    try: con.rollback(); con.close()
+                    try: con.rollback()
                     except Exception: pass
                     raise
                 except sqlite3.OperationalError as e:
                     last=e
-                    try: con.rollback(); con.close()
+                    try: con.rollback()
                     except Exception: pass
                     await asyncio.sleep(self.retry*(2**i))
+                finally:
+                    try:
+                        if con is not None: con.close()
+                    except Exception: pass
             raise last
     async def read(self, sql, args=()):
         """Run an unlocked SQLite read and always close the connection."""
