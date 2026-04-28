@@ -1,8 +1,9 @@
 from __future__ import annotations
 import asyncio, logging, os, queue, threading
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from nexussy.api.schemas import ErrorCode, ErrorResponse, SecretSummary
 
@@ -109,7 +110,6 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None, service: 
         sentinel = object()
         stored = _run_keyring_with_timeout(lambda: keyring.set_password(service, name, value), default=sentinel)
         if stored is not sentinel:
-            os.environ[name] = value
             return SecretSummary(name=name, source="keyring", configured=True, updated_at=datetime.now(timezone.utc))
     target_path = env_path or env_file_path()
     logger.warning("keyring unavailable; secret %s will be stored as plaintext in %s", name, target_path)
@@ -192,7 +192,41 @@ class ProviderResult:
     text: str
     usage: dict
 
-async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = False, timeout_s: int = 120, _env: dict | None = None) -> ProviderResult:
+def _is_rate_limit_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429 or "ratelimit" in name or "rate_limit" in name or "rate limit" in text or "429" in text or "status 429" in text
+
+def _rate_limit_headers(exc: Exception) -> dict:
+    headers = getattr(exc, "headers", None) or getattr(getattr(exc, "response", None), "headers", None) or {}
+    return dict(headers) if hasattr(headers, "items") else {}
+
+def _parse_rate_limit_reset(exc: Exception) -> datetime:
+    headers = {str(k).lower(): v for k, v in _rate_limit_headers(exc).items()}
+    for key in ("x-ratelimit-reset", "x-rate-limit-reset", "retry-after"):
+        raw = headers.get(key)
+        if raw is None:
+            continue
+        try:
+            seconds = float(raw)
+            if key == "retry-after":
+                return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+            if seconds > 10_000_000:
+                return datetime.fromtimestamp(seconds, timezone.utc)
+        except (TypeError, ValueError, OSError):
+            pass
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            pass
+        try:
+            return parsedate_to_datetime(str(raw)).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            pass
+    return datetime.now(timezone.utc) + timedelta(minutes=1)
+
+async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = False, timeout_s: int = 120, _env: dict | None = None, db=None) -> ProviderResult:
     if allow_mock:
         return ProviderResult(text=f"mock {stage} output for {prompt[:40]}", usage={"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
     if os.environ.get("NEXUSSY_PROVIDER_MODE") == "fake":
@@ -214,6 +248,16 @@ async def complete(stage: str, prompt: str, model: str, *, allow_mock: bool = Fa
         response = await asyncio.wait_for(litellm.acompletion(model=model, messages=[{"role":"user","content":prompt}], **call_kwargs), timeout=timeout_s)
     except asyncio.TimeoutError as e:
         raise TimeoutError(f"provider timeout after {timeout_s}s") from e
+    except Exception as e:
+        if not _is_rate_limit_error(e):
+            raise
+        reset_at = _parse_rate_limit_reset(e)
+        reason = str(e) or "provider rate limited"
+        if db is None:
+            logger.warning("provider rate limited for %s/%s but no db was supplied; rate limit was not persisted", provider, model)
+            raise
+        await persist_rate_limit(db, provider, model, reset_at, reason)
+        raise
     msg = response.choices[0].message.content if getattr(response, "choices", None) else ""
     usage_obj = getattr(response, "usage", None)
     usage = {

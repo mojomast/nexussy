@@ -6,6 +6,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 from starlette.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
 from pydantic import ValidationError
 import uvicorn
 
@@ -21,7 +22,7 @@ from nexussy.api.schemas import (
     SSEEventType, SessionCreateRequest, SessionDetail, StageName,
     StageRunStatus, StageSkipRequest, StageStatusSchema, TokenUsage, Worker,
     WorkerAssignRequest, WorkerInjectRequest, WorkerSpawnRequest, WorkerStatus,
-    WorkerTaskPayload, WorkerTaskStatus,
+    WorkerStreamPayload, WorkerTaskPayload, WorkerTaskStatus,
 )
 from nexussy.config import load_config
 from nexussy.db import Database
@@ -89,6 +90,60 @@ def retry_after_header(error: ErrorResponse) -> dict[str, str]:
         return {"Retry-After": str(int(dt.timestamp()))}
     except (TypeError, ValueError, OverflowError):
         return {}
+
+def _merge_config_patch(base: dict, patch: dict) -> dict:
+    out = dict(base)
+    for key, value in patch.items():
+        out[key] = _merge_config_patch(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+def _leaf_paths(data: dict, prefix: tuple[str, ...] = ()):
+    for key, value in data.items():
+        path = prefix + (str(key),)
+        if isinstance(value, dict):
+            yield from _leaf_paths(value, path)
+        else:
+            yield path
+
+def _changed_paths(old, new, prefix: tuple[str, ...] = ()):
+    if isinstance(old, dict) and isinstance(new, dict):
+        for key in set(old) | set(new):
+            yield from _changed_paths(old.get(key), new.get(key), prefix + (str(key),))
+    elif old != new:
+        yield prefix
+
+def _unknown_config_paths(data, shape, prefix: tuple[str, ...] = ()):
+    if not isinstance(data, dict) or not isinstance(shape, dict):
+        return
+    for key, value in data.items():
+        path = prefix + (str(key),)
+        if key not in shape:
+            yield path
+        elif isinstance(value, dict):
+            yield from _unknown_config_paths(value, shape[key], path)
+
+def _is_safe_config_path(path: tuple[str, ...]) -> bool:
+    if path == ("logging", "level") or path == ("providers", "default_model"):
+        return True
+    if len(path) >= 2 and path[0] in {"sse", "swarm"}:
+        return True
+    if len(path) == 3 and path[0] == "stages" and path[2] in {"model", "max_iterations", "max_retries"}:
+        return True
+    return False
+
+def _full_config_payload(data: dict) -> bool:
+    return set(data) >= set(NexussyConfig().model_dump(mode="json"))
+
+def _forbidden_config_paths(data: dict, current_cfg: NexussyConfig, next_cfg: NexussyConfig) -> list[str]:
+    old = current_cfg.model_dump(mode="json")
+    new = next_cfg.model_dump(mode="json")
+    forbidden = {"auth", "database", "home_dir", "projects_dir"}
+    paths = set(_changed_paths(old, new))
+    # Partial protected-key patches are rejected even if they happen to match the
+    # current value; a full GET/PUT round-trip may include unchanged protected keys.
+    if not _full_config_payload(data):
+        paths.update(path for path in _leaf_paths(data) if path and path[0] in forbidden)
+    return sorted(".".join(path) for path in paths if path and not _is_safe_config_path(path))
 async def body(request, cls):
     try: return cls.model_validate(await request.json())
     except json.JSONDecodeError as e: raise ValueError([{"loc":["body"],"msg":"invalid JSON","type":"json_invalid","ctx":{"error":str(e)}}])
@@ -194,6 +249,12 @@ async def stream(request):
     a=await auth(request)
     if a: return a
     await ensure_db(); rid=request.path_params.get("run_id") or request.query_params.get("run_id")
+    worker_id=request.path_params.get("worker_id")
+    if not rid and worker_id:
+        rows=await db.read("SELECT run_id FROM workers WHERE worker_id=?", (worker_id,))
+        rid=rows[0]["run_id"] if rows else None
+    if not rid:
+        return err(ErrorCode.worker_not_found,"worker not found",404) if worker_id else err(ErrorCode.not_found,"run not found",404)
     async def gen():
         for e in await engine.replay(rid, request.headers.get("last-event-id")):
             yield sse_frame(e)
@@ -242,7 +303,12 @@ async def control_cancel(request):
     return await endpoint(request, inner)
 async def inject(request):
     async def inner(r):
-        req=await body(r,PipelineInjectRequest); return JSONResponse(dump(ControlResponse(run_id=req.run_id,status=RunStatus.running,message="injected")))
+        req=await body(r,PipelineInjectRequest)
+        rows=await db.read("SELECT session_id,status FROM runs WHERE run_id=?",(req.run_id,))
+        if not rows: raise KeyError("run")
+        await engine.emit(SSEEventType.pipeline_error,rows[0]["session_id"],req.run_id,ErrorResponse(error_code=ErrorCode.run_not_active,message="injected context",details={"message":req.message,"worker_id":req.worker_id,"stage":req.stage.value if req.stage else None},retryable=True))
+        await _append_handoff_note(req.run_id, f"Injected context: {req.message}\n")
+        return JSONResponse(dump(ControlResponse(run_id=req.run_id,status=rows[0]["status"],message="injected")))
     return await endpoint(request, inner)
 async def skip(request):
     async def inner(r):
@@ -263,10 +329,12 @@ async def skip(request):
     return await endpoint(request, inner)
 
 async def _append_handoff_skip_note(run_id: str, reason: str, stage: StageName, task_id: str|None):
+    await _append_handoff_note(run_id, f"- Skipped {'task '+task_id if task_id else 'stage '+stage.value}: {reason}\n")
+
+async def _append_handoff_note(run_id: str, note: str):
     rows=await db.read("SELECT path,content_text FROM artifacts WHERE run_id=? AND kind='handoff' ORDER BY updated_at DESC LIMIT 1",(run_id,))
     if not rows: return
     marker="<!-- HANDOFF_NOTES_END -->"
-    note=f"- Skipped {'task '+task_id if task_id else 'stage '+stage.value}: {reason}\n"
     text=rows[0]["content_text"]
     updated=text.replace(marker, note + marker, 1) if marker in text else text.rstrip()+"\n"+note
     await db.write(lambda con: con.execute("UPDATE artifacts SET content_text=?,updated_at=? WHERE run_id=? AND kind='handoff' AND path=?",(updated,now_utc().isoformat(),run_id,rows[0]["path"])))
@@ -370,10 +438,38 @@ async def assign(request):
         return JSONResponse(dump(w))
     return await endpoint(request, inner)
 async def worker_inject(request):
-    async def inner(r): req=await body(r,WorkerInjectRequest); return JSONResponse(dump(ControlResponse(run_id=req.run_id,status=RunStatus.running,message="worker injected")))
+    async def inner(r):
+        data=await r.json()
+        worker_id=r.path_params["worker_id"]
+        if "worker_id" not in data:
+            data["worker_id"]=worker_id
+        rows=await db.read("SELECT run_id,worker_json FROM workers WHERE worker_id=?",(worker_id,))
+        if not rows: raise KeyError("worker")
+        data.setdefault("run_id", rows[0]["run_id"])
+        req=WorkerInjectRequest.model_validate(data)
+        run_rows=await db.read("SELECT session_id,status FROM runs WHERE run_id=?",(req.run_id,))
+        if not run_rows: raise KeyError("run")
+        payload=WorkerStreamPayload(worker_id=req.worker_id,stream_kind="rpc",line=json.dumps({"type":"inject","message":req.message}),parsed=True)
+        await engine.emit(SSEEventType.worker_stream,run_rows[0]["session_id"],req.run_id,payload)
+        for rpc in list(engine.active_worker_rpcs.get(req.run_id, [])):
+            if getattr(rpc, "worker_id", None) == req.worker_id:
+                await rpc.inject(req.message)
+        return JSONResponse(dump(ControlResponse(run_id=req.run_id,status=run_rows[0]["status"],message="worker injected")))
     return await endpoint(request, inner)
 async def worker_stop(request):
-    async def inner(r): data=await r.json(); return JSONResponse(dump(ControlResponse(run_id=data["run_id"],status=RunStatus.running,message="worker stopped")))
+    async def inner(r):
+        worker_id=r.path_params["worker_id"]
+        rows=await db.read("SELECT run_id,worker_json FROM workers WHERE worker_id=?",(worker_id,))
+        if not rows: raise KeyError("worker")
+        worker=Worker.model_validate_json(rows[0]["worker_json"])
+        for rpc in list(engine.active_worker_rpcs.get(worker.run_id, [])):
+            if getattr(rpc, "worker_id", None) == worker_id:
+                await rpc.stop(config.pi.shutdown_timeout_s)
+        worker.status=WorkerStatus.stopped
+        await db.write(lambda con: con.execute("UPDATE workers SET status=?, worker_json=? WHERE worker_id=?",(worker.status,worker.model_dump_json(),worker_id)))
+        run_rows=await db.read("SELECT session_id,status FROM runs WHERE run_id=?",(worker.run_id,))
+        if run_rows: await engine.emit(SSEEventType.worker_status,run_rows[0]["session_id"],worker.run_id,worker)
+        return JSONResponse(dump(ControlResponse(run_id=worker.run_id,status=run_rows[0]["status"] if run_rows else RunStatus.running,message="worker stopped")))
     return await endpoint(request, inner)
 async def file_locks(request):
     async def inner(r):
@@ -384,7 +480,17 @@ async def get_config(request): return await endpoint(request, lambda r: asyncio.
 async def put_config(request):
     async def inner(r):
         global config
-        next_config=NexussyConfig.model_validate(await r.json())
+        data=await r.json()
+        if not isinstance(data, dict):
+            raise ValueError([{"loc":["body"],"msg":"config must be an object","type":"value_error"}])
+        base=config.model_dump(mode="json")
+        unknown=sorted(".".join(path) for path in _unknown_config_paths(data, base))
+        if unknown:
+            return err(ErrorCode.forbidden,"config key is not mutable",403,{"forbidden_keys":unknown})
+        next_config=NexussyConfig.model_validate(_merge_config_patch(base, data))
+        forbidden=_forbidden_config_paths(data, config, next_config)
+        if forbidden:
+            return err(ErrorCode.forbidden,"config key is not mutable",403,{"forbidden_keys":forbidden})
         cfg_path=pathlib.Path(os.environ.get("NEXUSSY_CONFIG", str(pathlib.Path(next_config.home_dir).expanduser()/"nexussy.yaml"))).expanduser()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         tmp=cfg_path.with_suffix(cfg_path.suffix+".tmp")
@@ -445,6 +551,9 @@ async def events(request):
 routes=[Route('/health',health),Route('/assistant/reply',assistant_reply,methods=['POST']),Route('/mcp/tools',mcp_tools),Route('/mcp/call',mcp_call,methods=['POST']),Route('/sessions',sessions_create,methods=['POST']),Route('/sessions',sessions_list),Route('/sessions/{session_id}',sessions_get),Route('/sessions/{session_id}',sessions_delete,methods=['DELETE']),Route('/pipeline/start',pipeline_start,methods=['POST']),Route('/pipeline/{session_id}/interview/answer',interview_answer,methods=['POST']),Route('/pipeline/runs/{run_id}/stream',stream),Route('/pipeline/status',status),Route('/pipeline/inject',inject,methods=['POST']),Route('/pipeline/pause',control_pause,methods=['POST']),Route('/pipeline/resume',control_resume,methods=['POST']),Route('/pipeline/skip',skip,methods=['POST']),Route('/pipeline/cancel',control_cancel,methods=['POST']),Route('/pipeline/blockers',blocker_create,methods=['POST']),Route('/pipeline/blockers/resolve',blocker_resolve,methods=['POST']),Route('/pipeline/artifacts',artifacts_manifest),Route('/pipeline/artifacts/{kind}',artifact_content),Route('/swarm/workers',workers),Route('/swarm/workers/{worker_id}',worker_get),Route('/swarm/spawn',spawn,methods=['POST']),Route('/swarm/assign',assign,methods=['POST']),Route('/swarm/workers/{worker_id}/stream',stream),Route('/swarm/workers/{worker_id}/inject',worker_inject,methods=['POST']),Route('/swarm/workers/{worker_id}/stop',worker_stop,methods=['POST']),Route('/swarm/file-locks',file_locks),Route('/config',get_config),Route('/config',put_config,methods=['PUT']),Route('/secrets',secrets),Route('/secrets/{name}',put_secret,methods=['PUT']),Route('/secrets/{name}',del_secret,methods=['DELETE']),Route('/memory',memory_list),Route('/memory',memory_create,methods=['POST']),Route('/memory/{memory_id}',memory_delete,methods=['DELETE']),Route('/graph',graph),Route('/events',events)]
 app=Starlette(routes=routes,on_startup=[startup])
 app.add_middleware(LazyCORSMiddleware)
+WEB_DIR=pathlib.Path(__file__).resolve().parents[3]/"web"
+if (WEB_DIR/"index.html").exists():
+    app.mount("/ui", StaticFiles(directory=str(WEB_DIR), html=True), name="web-ui")
 
 if __name__ == "__main__":
     cfg=load_config()

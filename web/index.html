@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nexussy dashboard</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="panel">
+      <h1>nexussy</h1>
+      <p class="muted">Local pipeline dashboard served by core at <code>/ui</code>.</p>
+      <button id="refreshSessions">Refresh Sessions</button>
+      <div id="sessions" class="list"></div>
+    </section>
+    <section class="panel">
+      <h2>Status</h2>
+      <label>Run ID <input id="runId" placeholder="run_id"></label>
+      <button id="watchRun">Watch Run</button>
+      <pre id="status"></pre>
+    </section>
+    <section class="panel wide">
+      <h2>Live Events</h2>
+      <pre id="events"></pre>
+    </section>
+    <section id="interviewPanel" class="panel wide hidden">
+      <h2>Interview Answers</h2>
+      <p class="muted">Enter one answer per line as <code>question_id=answer</code>.</p>
+      <textarea id="answers" rows="8"></textarea>
+      <button id="submitAnswers">Submit Answers</button>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

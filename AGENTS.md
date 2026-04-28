@@ -78,6 +78,27 @@ Develop-stage workers spawn and run in parallel, then merge serially to keep git
 
 Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loops. Manual interview waits time out according to `stages.interview.answer_timeout_s`; timeout cleanup clears paused state before the run is marked failed.
 
+# CURRENT CORE CAPABILITIES
+
+- Bundled worker command: `nexussy-pi`, backed by `nexussy.swarm.local_pi_worker`, speaks Pi-compatible newline-delimited JSON-RPC over stdio.
+- Real Pi command: set `NEXUSSY_PI_COMMAND=pi`; core writes `.pi/agent/settings.json` and launches `pi --rpc-mode`.
+- MCP tools: `nexussy_start_pipeline`, `nexussy_get_status`, `nexussy_list_sessions`, `nexussy_get_artifacts`, `nexussy_interview_answer`, `nexussy_pause`, `nexussy_resume`, `nexussy_cancel`, `nexussy_inject`, `nexussy_worker_spawn`, `nexussy_worker_assign`, and `nexussy_list_workers`.
+- Worker control APIs: `/swarm/workers/{worker_id}/inject`, `/swarm/workers/{worker_id}/stop`, `/swarm/workers/{worker_id}/stream`, `/swarm/spawn`, and `/swarm/assign` are wired to DB state and SSE/RPC where applicable.
+- Core static dashboard: `/ui` serves zero-build HTML/JS/CSS for session polling, run status, SSE logs, and interview answers.
+
+## Code Review Fixes (2026-04-28)
+
+- H1: `PUT /config` now rejects auth, database, home, project, and non-whitelisted config mutations; status complete.
+- H2: orchestrator write paths are normalized before allowlist checks, and phase paths require a real `phase` path segment; status complete.
+- H3: pipeline stage artifact generation now dispatches through per-stage `Engine` handler methods; status complete.
+- M1: keyring-backed `set_secret()` no longer copies secret values into `os.environ`; status complete.
+- M2: SQLite initialization now records `schema_version` rows and defines sequential migration handling; status complete.
+- M3: MCP exposes pause, resume, cancel, artifact, and session tools and returns JSON-RPC parse/invalid/unknown/internal error codes; status complete.
+- M4: Pi RPC response waiting uses `asyncio.Event`, and closed stdin raises `RuntimeError`; status complete.
+- L1: checkpoints can hash supplied artifact content instead of only stage names; status complete.
+- L2: config env-file parsing reuses the provider `read_env_file()` implementation; status complete.
+- L3: log scrubbing avoids non-secret git/hash false positives while preserving API key, `sk-`, and PEM redaction; status complete.
+
 # DO NOT
 
 - Do not make cross-boundary edits.

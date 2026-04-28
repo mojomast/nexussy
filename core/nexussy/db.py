@@ -4,9 +4,17 @@ from __future__ import annotations
 Writes use a process-local async lock plus `BEGIN IMMEDIATE` to avoid concurrent
 writer conflicts. Reads intentionally do not take that lock; callers that need
 strict read-after-write visibility must await the preceding write first.
+
+Migration pattern: keep `SCHEMA` idempotent for the current table shape, then
+run numbered migration functions in ascending order and append one row per
+applied version to `schema_version`. New installs replay the same migrations as
+upgrades, so each migration must be safe after `CREATE TABLE IF NOT EXISTS`.
 """
 
 import asyncio, pathlib, sqlite3
+from datetime import datetime, timezone
+
+CURRENT_SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, project_slug TEXT UNIQUE, project_name TEXT, status TEXT, created_at TEXT, updated_at TEXT, detail_json TEXT);
@@ -22,6 +30,7 @@ CREATE TABLE IF NOT EXISTS file_locks(run_id TEXT, path TEXT, worker_id TEXT, st
 CREATE TABLE IF NOT EXISTS rate_limits(provider TEXT, model TEXT, reset_at TEXT, reason TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS memory_entries(memory_id TEXT PRIMARY KEY, session_id TEXT, key TEXT, value TEXT, tags_json TEXT, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS secrets(name TEXT PRIMARY KEY, source TEXT, configured INTEGER, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY, applied_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_stage_runs_run ON stage_runs(run_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id, kind);
@@ -43,6 +52,32 @@ def _migrate_file_locks_schema(con):
     con.execute("DROP TABLE file_locks_old")
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_file_locks_claimed ON file_locks(run_id, path) WHERE status='claimed'")
 
+def _migration_v1(con):
+    _migrate_file_locks_schema(con)
+
+def _migration_v2(con):
+    # Version 2 introduces explicit schema_version tracking; the table itself is
+    # created by SCHEMA so this migration only records that tracking is active.
+    return None
+
+MIGRATIONS = {
+    1: _migration_v1,
+    2: _migration_v2,
+}
+
+def _apply_schema_migrations(con):
+    row = con.execute("SELECT COALESCE(MAX(version), 0) FROM schema_version").fetchone()
+    current = int(row[0] or 0) if row else 0
+    for version in range(current + 1, CURRENT_SCHEMA_VERSION + 1):
+        migration = MIGRATIONS.get(version)
+        if migration is None:
+            raise RuntimeError(f"missing schema migration {version}")
+        migration(con)
+        con.execute(
+            "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES(?, ?)",
+            (version, datetime.now(timezone.utc).isoformat()),
+        )
+
 class Database:
     def __init__(self, path: str, busy_timeout_ms=5000, retries=5, retry_base_ms=100):
         self.path=pathlib.Path(path).expanduser(); self.busy=busy_timeout_ms; self.retries=retries; self.retry=retry_base_ms/1000; self._lock=asyncio.Lock()
@@ -54,7 +89,7 @@ class Database:
     async def init(self):
         def tx(con):
             con.executescript(SCHEMA)
-            _migrate_file_locks_schema(con)
+            _apply_schema_migrations(con)
         await self.write(tx)
     async def init_project(self, project_root: str, relative_path: str = ".nexussy/state.db"):
         project_db = Database(str(pathlib.Path(project_root).expanduser() / relative_path), self.busy, self.retries, int(self.retry * 1000))

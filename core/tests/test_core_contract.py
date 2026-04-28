@@ -10,20 +10,20 @@ from nexussy.api import server
 from nexussy.api.server import app
 from nexussy.artifacts.store import safe_write
 from nexussy.config import load_config
-from nexussy.db import Database
-from nexussy.security import sanitize_relative_path, scrub_log
+from nexussy.db import CURRENT_SCHEMA_VERSION, Database
+from nexussy.security import sanitize_path, sanitize_relative_path, scrub_log
 from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
-from nexussy.providers import DISCOVERY, delete_secret
+from nexussy.providers import DISCOVERY, delete_secret, secret_summary, set_secret
 from nexussy.providers import ProviderResult
-from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
+from nexussy.swarm.gitops import _git, init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
-from nexussy.swarm.pi_rpc import spawn_pi_worker
+from nexussy.swarm.pi_rpc import PiRPCProcess, spawn_pi_worker
 from nexussy.pipeline.engine import Engine, complexity
 from nexussy.pipeline.engine import STAGES
-from nexussy.checkpoint import STAGE_ORDER
+from nexussy.checkpoint import STAGE_ORDER, save_checkpoint
 
 
 def test_schema_forbids_extra():
@@ -44,20 +44,38 @@ def test_security_helpers(tmp_path):
     with pytest.raises(ValueError):
         sanitize_relative_path("")
     with pytest.raises(ValueError):
+        sanitize_relative_path("/")
+    with pytest.raises(ValueError):
         sanitize_relative_path("../x")
+    with pytest.raises(ValueError):
+        sanitize_relative_path("\x00foo")
+    assert sanitize_relative_path("foo/bar") == "foo/bar"
     assert "[REDACTED]" in scrub_log("Authorization: Bearer abc.def.ghi password=secret")
+    assert "[REDACTED]" in scrub_log("Bearer provider-token-123")
     assert "[REDACTED]" in scrub_log("token=" + "a" * 40)
     assert "[REDACTED]" in scrub_log("secret=" + "b" * 64)
+    assert "[REDACTED]" in scrub_log("OPENAI_API_KEY=sk-secretsecretsecret")
+    assert "[REDACTED]" in scrub_log("ANTHROPIC_API_KEY=anthropic-secret-value")
     assert "[REDACTED]" in scrub_log("ghp_" + "A" * 36)
     assert "[REDACTED]" in scrub_log("ghs_" + "Z" * 36)
+    private_key = "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"
+    assert "[REDACTED]" in scrub_log(private_key)
     git_sha = "a" * 40
     short_hash = "a" * 39
     sha256 = "c" * 64
     upper_hex = "D" * 40
     assert short_hash in scrub_log("token=" + short_hash)
     assert git_sha in scrub_log("commit " + git_sha)
-    assert "[REDACTED]" in scrub_log("hash=" + sha256)
+    assert "commit_hash=" + git_sha in scrub_log("commit_hash=" + git_sha)
+    assert "sha=" + git_sha in scrub_log("sha=" + git_sha)
+    assert "base_commit=" + git_sha in scrub_log("base_commit=" + git_sha)
+    assert "hash_value=" + sha256 in scrub_log("hash_value=" + sha256)
+    assert "[REDACTED]" in scrub_log("api_key=" + git_sha)
     assert upper_hex in scrub_log("token=" + upper_hex)
+    root = tmp_path / "root"; root.mkdir(); outside = tmp_path / "outside"; outside.mkdir()
+    with pytest.raises(ValueError): sanitize_path(str(outside / "x"), [str(root)])
+    link = root / "link"; link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError): sanitize_path(str(link / "x"), [str(root)])
 
 
 def test_config_precedence(tmp_path, monkeypatch):
@@ -90,6 +108,15 @@ def test_complexity_uses_word_boundary_signals():
 
 def test_engine_stages_follow_checkpoint_stage_order():
     assert [stage.value for stage in STAGES] == STAGE_ORDER
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_hash_uses_content_when_provided(tmp_path):
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    first = await save_checkpoint(db, "run-1", StageName.design, ".nexussy/checkpoints/design-a.json", content="first content")
+    second = await save_checkpoint(db, "run-1", StageName.design, ".nexussy/checkpoints/design-b.json", content="second content")
+    assert first.sha256 != second.sha256
 
 
 def test_safe_write_anchor_validation(tmp_path):
@@ -156,11 +183,17 @@ def test_mcp_tools_and_start_pipeline(monkeypatch, tmp_path):
         tools = c.get("/mcp/tools")
         assert tools.status_code == 200, tools.text
         names = {tool["name"] for tool in tools.json()["tools"]}
-        assert {"nexussy_start_pipeline", "nexussy_get_status"} <= names
+        assert {"nexussy_start_pipeline", "nexussy_get_status", "nexussy_list_sessions", "nexussy_get_artifacts", "nexussy_interview_answer", "nexussy_pause", "nexussy_resume", "nexussy_cancel", "nexussy_inject", "nexussy_worker_spawn", "nexussy_worker_assign", "nexussy_list_workers"} <= names
         assert all("inputSchema" in tool for tool in tools.json()["tools"])
         started = c.post("/mcp/call", json={"name":"nexussy_start_pipeline","arguments":{"project_name":"MCP Demo","description":"small api","auto_approve_interview":True,"metadata":{"mock_provider":True}}})
         assert started.status_code == 200, started.text
         assert started.json()["run_id"]
+        spawned = c.post("/mcp/call", json={"name":"nexussy_worker_spawn","arguments":{"run_id":started.json()["run_id"],"role":"backend","task":"implement api"}})
+        assert spawned.status_code == 200, spawned.text
+        assert spawned.json()["status"] == "idle"
+        listed = c.post("/mcp/call", json={"name":"nexussy_list_workers","arguments":{"run_id":started.json()["run_id"]}})
+        assert listed.status_code == 200, listed.text
+        assert spawned.json()["worker_id"] in {worker["worker_id"] for worker in listed.json()}
 
 
 def test_route_validation_error_is_normalized(monkeypatch, tmp_path):
@@ -209,6 +242,20 @@ def test_config_put_persists_yaml(monkeypatch, tmp_path):
         assert r.status_code == 200, r.text
         assert "openrouter/openai/gpt-4o-mini" in cfg_path.read_text()
         assert load_config().providers.default_model == "openrouter/openai/gpt-4o-mini"
+
+
+def test_config_put_rejects_auth_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_CONFIG", str(tmp_path / "nexussy.yaml"))
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"auth":{"enabled":True}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.put("/config", json={"auth":{"enabled":False}})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["ok"] is False and body["error_code"] == "forbidden"
+        assert "auth.enabled" in body["details"]["forbidden_keys"]
 
 
 def test_validate_review_correction_loops_and_controls(monkeypatch, tmp_path):
@@ -406,7 +453,7 @@ async def test_provider_text_retries_per_stage_config(tmp_path, monkeypatch):
     engine = Engine(db, cfg)
     await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","design",datetime.now(timezone.utc).isoformat(),None,"{}")))
     calls = {"n": 0}
-    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+    async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("temporary provider failure")
@@ -555,6 +602,8 @@ def test_secrets_api_uses_keyring_without_echo(monkeypatch, tmp_path):
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["name"] == "OPENAI_API_KEY" and body["source"] == "keyring" and body["configured"] is True
+        assert os.environ.get("OPENAI_API_KEY") is None
+        assert secret_summary("OPENAI_API_KEY").source == "keyring"
         assert secret not in r.text
         listed = c.get("/secrets").json()
         assert any(x["name"] == "OPENAI_API_KEY" and x["source"] == "keyring" and x["configured"] for x in listed)
@@ -576,7 +625,7 @@ def test_delete_secret_reports_keyring_only_secret_existed(monkeypatch, tmp_path
     assert store == {}
 
 
-def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path):
+def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path, caplog):
     class BrokenKeyring:
         def get_password(self, service, name): raise RuntimeError("no keyring")
         def set_password(self, service, name, value): raise RuntimeError("no keyring")
@@ -594,8 +643,21 @@ def test_secrets_api_falls_back_to_env_file_and_validates(monkeypatch, tmp_path)
         r = c.put("/secrets/ANTHROPIC_API_KEY", json={"value":"sk-anthropic-secret"})
         assert r.status_code == 200, r.text
         assert r.json()["source"] == "file"
+        assert "keyring unavailable" in caplog.text
         assert "ANTHROPIC_API_KEY=sk-anthropic-secret" in (tmp_path / ".env").read_text()
         assert "anthropic" in server.configured_providers()
+
+
+def test_set_secret_failing_keyring_warns_and_uses_file(monkeypatch, tmp_path, caplog):
+    class BrokenKeyring:
+        def set_password(self, service, name, value): raise RuntimeError("no keyring")
+    monkeypatch.setitem(sys.modules, "keyring", BrokenKeyring())
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    env = tmp_path / ".env"
+    summary = set_secret("GROQ_API_KEY", "sk-groq-secret", env_path=env)
+    assert summary.source == "file"
+    assert "GROQ_API_KEY=sk-groq-secret" in env.read_text()
+    assert "keyring unavailable" in caplog.text
 
 
 def test_secrets_api_falls_back_when_keyring_hangs(monkeypatch, tmp_path):
@@ -624,7 +686,7 @@ def test_secret_updates_invalidate_provider_env_cache(monkeypatch, tmp_path):
         def set_password(self, service, name, value): raise RuntimeError("no keyring")
         def delete_password(self, service, name): raise RuntimeError("no keyring")
     seen=[]
-    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         seen.append((_env or {}).get("OPENAI_API_KEY"))
         if "Generate a JSON array" in prompt:
             return ProviderResult('[{"id":"q_name","question":"Name?"},{"id":"q_lang","question":"Language?"},{"id":"q_desc","question":"Description?"},{"id":"q_type","question":"Type?"}]', {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model})
@@ -666,6 +728,11 @@ async def test_file_lock_and_role(tmp_path):
     assert enforce_tool(WorkerRole.backend, ToolName.write_file)
     with pytest.raises(PermissionError):
         enforce_tool(WorkerRole.analyst, ToolName.write_file)
+    assert enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "./devplan.md")
+    with pytest.raises(PermissionError):
+        enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "sub/../devplan.md")
+    with pytest.raises(PermissionError):
+        enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "phase001/file.txt")
     assert await write_requires_lock(db, "run", "src/a.py", "backend-abcdef") == "src/a.py"
     with pytest.raises(PermissionError):
         await write_requires_lock(db, "run", "src/a.py", "frontend-abcdef")
@@ -683,14 +750,40 @@ async def test_file_lock_unique_constraint_only_applies_to_claimed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_claim_file_non_integrity_error_propagates():
+    class BrokenDb:
+        async def write(self, fn):
+            raise sqlite3.OperationalError("disk full")
+    with pytest.raises(sqlite3.OperationalError, match="disk full"):
+        await claim_file(BrokenDb(), "run", "src/a.py", "w1", timeout_s=1, retry_ms=1)
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_persistence_and_db_pragmas(tmp_path):
     db = Database(str(tmp_path / "state.db")); await db.init()
     con = sqlite3.connect(tmp_path / "state.db")
     assert con.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     required = {"sessions","runs","stage_runs","events","artifacts","checkpoints","workers","worker_tasks","blockers","file_locks","rate_limits","memory_entries"}
     assert required <= {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    versions = [row[0] for row in con.execute("SELECT version FROM schema_version ORDER BY version")]
+    assert versions[-1] == CURRENT_SCHEMA_VERSION
     await persist_rate_limit(db, "openai", "openai/x", datetime.now(timezone.utc)+timedelta(seconds=60), "quota")
     assert (await active_rate_limit(db, "openai", "openai/x"))["reason"] == "quota"
+
+
+@pytest.mark.asyncio
+async def test_complete_persists_litellm_429(monkeypatch, tmp_path):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    class RateLimitError(Exception):
+        status_code = 429
+        headers = {"retry-after": "30"}
+    async def acompletion(*args, **kwargs):
+        raise RateLimitError("rate limit 429")
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(acompletion=acompletion, RateLimitError=RateLimitError))
+    with pytest.raises(RateLimitError):
+        await complete("design", "prompt", "openai/gpt-5.5-fast", _env={"OPENAI_API_KEY":"sk-test"}, db=db)
+    rows = await db.read("SELECT provider, model, reason FROM rate_limits")
+    assert rows == [{"provider":"openai", "model":"openai/gpt-5.5-fast", "reason":"rate limit 429"}]
 
 
 @pytest.mark.asyncio
@@ -703,6 +796,20 @@ async def test_git_worktree_lifecycle(tmp_path):
     manifest = await extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
     assert [f.path for f in manifest.files] == ["a.txt"]
     await prune_worktrees(str(repo))
+
+
+@pytest.mark.asyncio
+async def test_git_changed_files_uses_new_path_for_rename(tmp_path):
+    repo = tmp_path / "repo"; base = await init_repo(str(repo))
+    (repo / "old.txt").write_text("old")
+    await _git(repo, "add", ".")
+    await _git(repo, "commit", "-m", "add old")
+    base = await _git(repo, "rev-parse", "HEAD")
+    (repo / "old.txt").rename(repo / "new.txt")
+    await _git(repo, "add", ".")
+    await _git(repo, "commit", "-m", "rename")
+    manifest = await extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
+    assert [(f.path, f.status) for f in manifest.files] == [("new.txt", "renamed")]
 
 
 @pytest.mark.asyncio
@@ -726,9 +833,9 @@ async def test_pi_missing_command_precise_error(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_bundled_pi_fallback_when_external_pi_missing(tmp_path, monkeypatch):
+async def test_bundled_pi_fallback_when_local_worker_command_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("NEXUSSY_DISABLE_BUNDLED_PI", raising=False)
-    cfg = load_config({"pi":{"command":"pi","args":[],"shutdown_timeout_s":0}})
+    cfg = load_config({"pi":{"command":"local-pi-worker","args":[],"shutdown_timeout_s":0}})
     rpc = await spawn_pi_worker(cfg, "run", "backend-abcdef", "backend", str(tmp_path), str(tmp_path))
     req_id = await rpc.request("Build API", "ctx")
     response = await rpc.wait_response(req_id, 5)
@@ -974,7 +1081,7 @@ async def test_provider_fallback_emits_retryable_pipeline_error(monkeypatch, tmp
     cfg = load_config({"projects_dir": str(tmp_path / "projects"), "providers":{"default_model":"openai/gpt-5.5-fast", "allow_fallback":True}})
     def available(model, allow_mock=False):
         return model == "openai/gpt-5.5-fast"
-    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None):
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         return ProviderResult("[]", {"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"fake","model":model})
     monkeypatch.setattr("nexussy.pipeline.engine.model_available", available)
     monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)
@@ -1054,3 +1161,34 @@ async def test_mcp_stdio_lists_tools():
     await call_stdio(Reader(), writer)
     response=json.loads(writer.data.decode().splitlines()[0])
     assert response["result"]["tools"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_stdio_error_codes_and_initialized_notification():
+    from nexussy.mcp import call_stdio
+    class Reader:
+        def __init__(self):
+            self.lines=[
+                b'{bad json\n',
+                b'{"jsonrpc":"2.0","id":2}\n',
+                b'{"jsonrpc":"2.0","id":3,"method":"missing/method"}\n',
+                b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n',
+                b'',
+            ]
+        async def readline(self): return self.lines.pop(0)
+    class Writer:
+        def __init__(self): self.data=b""
+        def write(self, b): self.data += b
+        async def drain(self): pass
+        def close(self): pass
+    writer=Writer()
+    await call_stdio(Reader(), writer)
+    responses=[json.loads(line) for line in writer.data.decode().splitlines()]
+    assert [r["error"]["code"] for r in responses] == [-32700, -32600, -32601]
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_request_without_stdin_raises_runtime_error():
+    proc = types.SimpleNamespace(stdin=None)
+    with pytest.raises(RuntimeError, match="stdin"):
+        await PiRPCProcess(proc).request("task")

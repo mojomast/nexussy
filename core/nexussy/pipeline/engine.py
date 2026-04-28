@@ -1,7 +1,7 @@
 from __future__ import annotations
-import asyncio, json, logging, os, re, pathlib, hashlib
+import asyncio, json, logging, os, re, pathlib, shutil, hashlib, subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 from nexussy.api.schemas import (
     ArtifactRef, ArtifactUpdatedPayload, ChangedFilesManifest, ComplexityLevel,
@@ -15,10 +15,10 @@ from nexussy.api.schemas import (
     ValidationReport, Worker, WorkerRole, WorkerStatus, WorkerTaskPayload,
     WorkerTaskStatus,
 )
-from nexussy.artifacts.store import safe_write, artifact_path, sha256_text
+from nexussy.artifacts.store import safe_write, artifact_path
 from nexussy.checkpoint import STAGE_ORDER, latest_checkpoint, resume_from_checkpoint, save_checkpoint
 from nexussy.providers import active_rate_limit, complete, effective_secret_env, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
-from nexussy.session import now_utc
+from nexussy.session import SessionStatus, now_utc, transition_session_status
 from nexussy.swarm.gitops import init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees, remove_worktree
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
@@ -52,7 +52,7 @@ def complexity(desc: str, existing: bool=False) -> ComplexityProfile:
 
 class Engine:
     def __init__(self, db, config):
-        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None
+        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None; self._run_usage:dict[str,TokenUsage]={}
 
     def invalidate_provider_cache(self):
         self.provider_env_cache=None
@@ -60,12 +60,12 @@ class Engine:
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
         def tx(con):
-            con.execute(
+            row=con.execute(
                 "INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) "
-                "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?)",
+                "VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?) "
+                "RETURNING sequence",
                 (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())
-            )
-            row=con.execute("SELECT sequence FROM events WHERE event_id=?",(env.event_id,)).fetchone()
+            ).fetchone()
             if row:
                 env.sequence=row["sequence"]
                 con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id))
@@ -98,7 +98,10 @@ class Engine:
         root=pathlib.Path(self.config.projects_dir).expanduser()/slug; main=root/"main"; main.mkdir(parents=True,exist_ok=True)
         await self.db.init_project(str(root), self.config.database.project_relative_path)
         if req.existing_repo_path and pathlib.Path(req.existing_repo_path).exists():
-            pass
+            src=pathlib.Path(req.existing_repo_path).expanduser().resolve()
+            result=subprocess.run(["git", "-C", str(src), "rev-parse", "--git-dir"], capture_output=True, text=True)
+            if result.returncode == 0:
+                shutil.copytree(src, main, dirs_exist_ok=True, symlinks=True)
         detail=SessionDetail(session=SessionSummary(session_id=sid,project_name=req.project_name,project_slug=slug,created_at=now,updated_at=now),project_root=str(root),main_worktree=str(main),artifacts=[],runs=[])
         await self.db.write(lambda con: con.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?)",(sid,slug,req.project_name,"created",now.isoformat(),now.isoformat(),detail.model_dump_json())))
         return detail
@@ -121,11 +124,15 @@ class Engine:
         if req.resume_run_id and await resume_from_checkpoint(self.db, req.resume_run_id, req.start_stage):
             checkpoint=await latest_checkpoint(self.db, req.resume_run_id)
             if checkpoint:
-                next_index=min(STAGE_ORDER.index(checkpoint.stage.value if hasattr(checkpoint.stage, 'value') else checkpoint.stage)+1, len(STAGES)-1)
+                stage_value=checkpoint.stage.value if hasattr(checkpoint.stage, 'value') else checkpoint.stage
+                next_index=STAGE_ORDER.index(stage_value)
+                if not (stage_value == StageName.interview.value and checkpoint.path.endswith("interview-questions.json")):
+                    next_index=min(next_index+1, len(STAGES)-1)
                 candidate=STAGES[next_index]
                 if STAGES.index(candidate) > STAGES.index(req.start_stage): start_stage=candidate
         effective_req=req.model_copy(update={"start_stage":start_stage})
         detail=await self.create_session(effective_req); rid=effective_req.resume_run_id or str(uuid4()); now=now_utc();
+        self._run_usage[rid]=TokenUsage()
         run=RunSummary(run_id=rid,session_id=detail.session.session_id,status=RunStatus.running,current_stage=effective_req.start_stage,started_at=now)
         await self.db.write(lambda con: (con.execute("INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?,?)",(rid,detail.session.session_id,"running",effective_req.start_stage.value,now.isoformat(),None,run.usage.model_dump_json())), con.execute("UPDATE sessions SET status=?, updated_at=?, detail_json=? WHERE session_id=?",("running",now.isoformat(),detail.model_dump_json(),detail.session.session_id))))
         for st in STAGES: await self.db.write(lambda con, st=st: con.execute("INSERT OR REPLACE INTO stage_runs VALUES(?,?,?,?,?,?,?)",(rid,st.value,"pending",0,None,None,None)))
@@ -172,26 +179,32 @@ class Engine:
                     raise RuntimeError("review max iterations exceeded")
                 fin=now_utc(); await self._update_stage_status(run.run_id, st, "passed", finished_at=fin)
                 await self.emit(SSEEventType.stage_status, detail.session.session_id, run.run_id, StageStatusSchema(stage=st,status=StageRunStatus.passed,attempt=1,finished_at=fin,output_artifacts=made))
-                ck=await save_checkpoint(self.db, run.run_id, st, f".nexussy/checkpoints/{st.value}.json", sha256_text(st.value))
+                ck=await save_checkpoint(self.db, run.run_id, st, f".nexussy/checkpoints/{st.value}.json", content=await self._checkpoint_content_for_stage(run.run_id, st, made))
                 await self.emit(SSEEventType.checkpoint_saved, detail.session.session_id, run.run_id, ck); prev=st; i += 1
                 if st == StageName.plan:
                     review_feedback_for_plan = ""
-            await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, current_stage=? WHERE run_id=?",("passed",now_utc().isoformat(),prev.value if prev else None,run.run_id)))
-            await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.passed,summary="pipeline completed",artifacts=artifacts,usage=TokenUsage()))
+            usage=self._run_usage.get(run.run_id, TokenUsage())
+            await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, current_stage=?, usage_json=? WHERE run_id=?",("passed",now_utc().isoformat(),prev.value if prev else None,usage.model_dump_json(),run.run_id)))
+            await transition_session_status(self.db, detail.session.session_id, SessionStatus.passed)
+            await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.passed,summary="pipeline completed",artifacts=artifacts,usage=usage))
         except asyncio.CancelledError:
             fut=self.interview_waiters.pop(detail.session.session_id, None)
             if fut and not fut.done():
                 fut.cancel()
             self.interview_questions.pop(detail.session.session_id, None)
-            await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=? WHERE run_id=?",("cancelled",now_utc().isoformat(),run.run_id)))
+            usage=self._run_usage.get(run.run_id, TokenUsage())
+            await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, usage_json=? WHERE run_id=?",("cancelled",now_utc().isoformat(),usage.model_dump_json(),run.run_id)))
+            await transition_session_status(self.db, detail.session.session_id, SessionStatus.cancelled)
             raise
         except Exception as e:
             er=ErrorResponse(error_code=ErrorCode.stage_failed,message=str(e),retryable=False)
             self.paused.pop(run.run_id, None)
             logger.exception("pipeline run %s failed at stage %s: %s", run.run_id, prev, e)
-            await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=? WHERE run_id=?",("failed",now_utc().isoformat(),run.run_id)))
+            usage=self._run_usage.get(run.run_id, TokenUsage())
+            await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, usage_json=? WHERE run_id=?",("failed",now_utc().isoformat(),usage.model_dump_json(),run.run_id)))
+            await transition_session_status(self.db, detail.session.session_id, SessionStatus.failed)
             await self.emit(SSEEventType.pipeline_error, detail.session.session_id, run.run_id, er)
-            await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.failed,summary="pipeline failed",artifacts=artifacts,usage=TokenUsage(),error=er))
+            await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.failed,summary="pipeline failed",artifacts=artifacts,usage=usage,error=er))
     async def _save_art(self, run_id, session_id, root, kind, text, phase=None):
         rel=artifact_path(kind, phase); meta=safe_write(root, rel, text); ref=ArtifactRef(kind=kind,path=rel,sha256=meta["sha256"],bytes=meta["bytes"],phase_number=phase)
         await self.emit(SSEEventType.artifact_updated, session_id, run_id, ArtifactUpdatedPayload(artifact=ref,action="created"))
@@ -226,18 +239,33 @@ class Engine:
             try:
                 if self.provider_env_cache is None:
                     self.provider_env_cache = effective_secret_env()
-                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s, _env=self.provider_env_cache)
+                result = await complete(st.value, prompt, model, allow_mock=allow_mock, timeout_s=self.config.providers.request_timeout_s, _env=self.provider_env_cache, db=self.db)
                 break
             except Exception as e:
                 last_error = e
                 if attempt + 1 >= max_retries:
+                    if getattr(e, "status_code", None) == 429 or "429" in str(e) or "rate limit" in str(e).lower():
+                        raise ProviderStartError(ErrorResponse(error_code=ErrorCode.rate_limited,message="provider rate limited",details={"provider":provider_for_model(model),"model":model,"reset_at":(now_utc()+timedelta(seconds=60)).isoformat()},retryable=True)) from e
                     raise
                 await asyncio.sleep((self.config.providers.retry_base_ms / 1000) * (2 ** attempt))
         else:
             raise last_error or RuntimeError("provider failed")
         usage = TokenUsage(**result.usage)
+        self._accumulate_usage(rid, usage)
         await self.emit(SSEEventType.cost_update, sid, rid, usage)
         return result.text
+
+    def _accumulate_usage(self, run_id: str, usage: TokenUsage) -> None:
+        total=self._run_usage.get(run_id, TokenUsage())
+        self._run_usage[run_id]=TokenUsage(
+            input_tokens=total.input_tokens + usage.input_tokens,
+            output_tokens=total.output_tokens + usage.output_tokens,
+            cache_read_tokens=total.cache_read_tokens + usage.cache_read_tokens,
+            cache_write_tokens=total.cache_write_tokens + usage.cache_write_tokens,
+            cost_usd=total.cost_usd + usage.cost_usd,
+            provider=usage.provider or total.provider,
+            model=usage.model or total.model,
+        )
 
     async def _update_stage_status(self, run_id: str, stage: StageName, status: str|StageRunStatus, *, attempt: int|None=None, started_at: datetime|None=None, finished_at: datetime|None=None, error: ErrorResponse|None=None):
         status_value=status.value if hasattr(status,"value") else status
@@ -248,6 +276,24 @@ class Engine:
     async def _latest_artifact_text(self, run_id: str, kind: str) -> str:
         rows=await self.db.read("SELECT content_text FROM artifacts WHERE run_id=? AND kind=? ORDER BY updated_at DESC LIMIT 1",(run_id,kind))
         return rows[0]["content_text"] if rows else ""
+
+    async def _checkpoint_content_for_stage(self, run_id: str, stage: StageName, made: list[ArtifactRef]) -> str | None:
+        primary={
+            StageName.interview:"interview",
+            StageName.design:"design_draft",
+            StageName.validate:"validated_design",
+            StageName.plan:"devplan",
+            StageName.review:"review_report",
+            StageName.develop:"develop_report",
+        }.get(stage)
+        if primary:
+            text=await self._latest_artifact_text(run_id, primary)
+            if text:
+                return text
+        if made:
+            refs=[{"kind":ref.kind,"path":ref.path,"sha256":ref.sha256,"bytes":ref.bytes,"phase_number":ref.phase_number} for ref in made]
+            return json.dumps(refs, sort_keys=True, separators=(",",":"))
+        return None
 
     async def _latest_report_passed(self, run_id: str, kind: str, default: bool) -> bool:
         text=await self._latest_artifact_text(run_id, kind)
@@ -396,20 +442,39 @@ class Engine:
         if fut and not fut.done(): fut.set_result(answered)
         self.paused.pop(rid,None)
         await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("running",rid)))
+        await transition_session_status(self.db, session_id, SessionStatus.running)
         await self.emit(SSEEventType.pause_state_changed,session_id,rid,PausePayload(paused=False,reason="interview answered"))
         current=current or await self._latest_interview_artifact(rid)
         return InterviewArtifact(project_name=current.project_name if current else "pending",project_slug=current.project_slug if current else "pending",description=current.description if current else "pending",questions=answered,requirements=[a.answer for a in answered])
 
     async def _artifacts_for_stage(self, st, req, detail, rid, cp, root, selected_models=None, allow_mock=False, review_feedback_for_plan: str=""):
-        sid=detail.session.session_id
-        if st==StageName.interview:
+        handler=self._STAGE_HANDLERS.get(st)
+        if handler:
+            return await handler(self, req, detail, rid, cp, root, selected_models or {}, allow_mock, review_feedback_for_plan=review_feedback_for_plan)
+        return []
+
+    async def _run_interview_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs):
+            sid=detail.session.session_id; st=StageName.interview
+            existing=await self._latest_interview_artifact(rid) if req.resume_run_id else None
+            if existing and existing.questions and not req.auto_approve_interview:
+                questions=existing.questions
+                self.interview_questions[sid]=questions
+                fut=asyncio.get_running_loop().create_future(); self.interview_waiters[sid]=fut; self.paused[rid]=True
+                await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("paused",rid)))
+                await transition_session_status(self.db, sid, SessionStatus.paused)
+                await self.emit(SSEEventType.pause_state_changed,sid,rid,PausePayload(paused=True,reason="waiting for interview answers"))
+                answered=await fut
+                self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
+                ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=answered,requirements=[qa.answer for qa in answered])
+                return [await self._save_art(rid,sid,root,"interview",ia.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"complexity_profile",cp.model_dump_json(indent=2))]
             question_prompt=("Generate a JSON array of 4-8 plain-language interview questions for a non-technical project owner. "
                              "Cover project name, primary languages, short description/requirements, project type, and optional frameworks, database, auth, deployment, and testing preferences. "
                              "Return only JSON objects with id and question fields.\n\n"
                              f"Project description: {req.description}")
             questions=self._parse_interview_questions(await self._provider_text(st, sid, rid, question_prompt, selected_models, allow_mock))
             self.interview_questions[sid]=questions
-            ck=await save_checkpoint(self.db, rid, StageName.interview, ".nexussy/checkpoints/interview-questions.json", sha256_text(json.dumps([q.model_dump(mode="json") for q in questions], sort_keys=True)))
+            question_content=json.dumps([q.model_dump(mode="json") for q in questions], sort_keys=True)
+            ck=await save_checkpoint(self.db, rid, StageName.interview, ".nexussy/checkpoints/interview-questions.json", content=question_content)
             await self.emit(SSEEventType.checkpoint_saved,sid,rid,ck)
             if req.auto_approve_interview:
                 answer_prompt=("Answer these interview questions as JSON using only the project description. "
@@ -422,6 +487,7 @@ class Engine:
                 await self._save_art(rid,sid,root,"interview",pending.model_dump_json(indent=2))
                 fut=asyncio.get_running_loop().create_future(); self.interview_waiters[sid]=fut; self.paused[rid]=True
                 await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("paused",rid)))
+                await transition_session_status(self.db, sid, SessionStatus.paused)
                 await self.emit(SSEEventType.pause_state_changed,sid,rid,PausePayload(paused=True,reason="waiting for interview answers"))
                 interview_cfg=getattr(self.config.stages, "interview", None)
                 timeout_s=getattr(interview_cfg, "answer_timeout_s", 3600) if interview_cfg else 3600
@@ -434,11 +500,15 @@ class Engine:
                 self.interview_waiters.pop(sid,None); self.interview_questions.pop(sid,None)
             ia=InterviewArtifact(project_name=req.project_name,project_slug=detail.session.project_slug,description=req.description,questions=answered,requirements=[qa.answer for qa in answered])
             return [await self._save_art(rid,sid,root,"interview",ia.model_dump_json(indent=2)), await self._save_art(rid,sid,root,"complexity_profile",cp.model_dump_json(indent=2))]
-        if st==StageName.design:
+
+    async def _run_design_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs):
+            sid=detail.session.session_id; st=StageName.design
             interview=self._interview_summary(await self._latest_interview_artifact(rid))
             txt=await self._provider_text(st, sid, rid, f"Create design with Goals, Architecture, Dependencies, Risks, Test Strategy for: {req.description}\n\n{interview}", selected_models, allow_mock)
             return [await self._save_art(rid,sid,root,"design_draft",txt if all(h in txt for h in ["Goals","Architecture","Dependencies","Risks","Test Strategy"]) else "# Goals\nDeliver requested project.\n# Architecture\nProvider-guided design.\n# Dependencies\nPython.\n# Risks\nUnknowns.\n# Test Strategy\nAutomated tests.\n")]
-        if st==StageName.validate:
+
+    async def _run_validate_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs):
+            sid=detail.session.session_id; st=StageName.validate
             design=await self._latest_artifact_text(rid,"design_draft")
             prompt=("Validate this design draft for completeness, internal consistency, missing dependencies, risks, and testability. "
                     "Return JSON with optional issues[] and optional corrected_design. If clean, return passed true and no issues.\n\n" + design)
@@ -448,8 +518,11 @@ class Engine:
             issue_passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
             report=ValidationReport(passed=self._provider_declared_passed(response, issue_passed) and issue_passed,max_iterations=self.config.stages.validate.max_iterations or 3,issues=issues,corrected=corrected.strip()!=design.strip())
             return [await self._save_art(rid,sid,root,"validated_design",corrected), await self._save_art(rid,sid,root,"validation_report",report.model_dump_json(indent=2))]
-        if st==StageName.plan:
+
+    async def _run_plan_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs):
+            sid=detail.session.session_id; st=StageName.plan
             interview=self._interview_summary(await self._latest_interview_artifact(rid))
+            review_feedback_for_plan=kwargs.get("review_feedback_for_plan", "")
             feedback = f"\n\nReview feedback to address in this plan retry:\n{review_feedback_for_plan}" if review_feedback_for_plan else ""
             plan_text=await self._provider_text(st, sid, rid, f"Create a devplan.md body with PROGRESS_LOG and NEXT_TASK_GROUP anchors from interview requirements.\n\n{interview}\n\nOriginal description: {req.description}{feedback}", selected_models, allow_mock)
             dev, warned=self._devplan_with_required_anchors(plan_text)
@@ -459,7 +532,9 @@ class Engine:
             refs=[await self._save_art(rid,sid,root,"devplan",dev), await self._save_art(rid,sid,root,"handoff",hand)]
             for i in range(1,cp.phase_count+1): refs.append(await self._save_art(rid,sid,root,"phase",f"# Phase {i:03d}\n<!-- PHASE_TASKS_START -->\n- [ ] Task {i}\n<!-- PHASE_TASKS_END -->\n<!-- PHASE_PROGRESS_START -->\n- pending\n<!-- PHASE_PROGRESS_END -->\n",i))
             return refs
-        if st==StageName.review:
+
+    async def _run_review_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs):
+            sid=detail.session.session_id; st=StageName.review
             if req.metadata.get("force_review_fail"):
                 return [await self._save_art(rid,sid,root,"review_report",ReviewReport(passed=False,max_iterations=self.config.stages.review.max_iterations or 2,feedback_for_plan_stage="Fix plan issues").model_dump_json(indent=2))]
             devplan=await self._latest_artifact_text(rid,"devplan"); handoff=await self._latest_artifact_text(rid,"handoff")
@@ -471,15 +546,13 @@ class Engine:
             issue_passed=not any(i.fix_required or i.severity in {"error","blocker"} for i in issues)
             passed=self._provider_declared_passed(response, issue_passed) and issue_passed
             return [await self._save_art(rid,sid,root,"review_report",ReviewReport(passed=passed,max_iterations=self.config.stages.review.max_iterations or 2,issues=issues,feedback_for_plan_stage=self._review_feedback(response,issues)).model_dump_json(indent=2))]
-        if st==StageName.develop:
-            return await self._develop_stage(req, detail, rid, root, selected_models or {}, allow_mock)
-        return []
 
-    async def _develop_stage(self, req, detail, rid, root, selected_models, allow_mock):
+    async def _run_develop_stage(self, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs):
         sid=detail.session.session_id; main=pathlib.Path(root); workers_root=main.parent/"workers"
         if allow_mock and not req.metadata.get("fake_pi_command"):
             orch_model=self.config.stages.develop.orchestrator_model or selected_models.get("develop") or self.config.providers.default_model
-            orch=Worker(worker_id="orchestrator-abcdef",run_id=rid,role=WorkerRole.orchestrator,status=WorkerStatus.finished,worktree_path=str(workers_root/"orchestrator-abcdef"),branch_name="worker/orchestrator-abcdef",model=orch_model)
+            orch_id=f"orchestrator-{uuid4().hex[:6]}"
+            orch=Worker(worker_id=orch_id,run_id=rid,role=WorkerRole.orchestrator,status=WorkerStatus.finished,worktree_path=str(workers_root/orch_id),branch_name=f"worker/{orch_id}",model=orch_model)
             await self._persist_worker(orch); await self.emit(SSEEventType.worker_spawned,sid,rid,orch)
             return [await self._save_art(rid,sid,root,"develop_report",DevelopReport(run_id=rid,passed=True,workers=[orch],tasks_total=1,tasks_passed=1).model_dump_json(indent=2)), await self._save_art(rid,sid,root,"merge_report",MergeReport(run_id=rid,base_commit="mock",merge_commit="mock",merged_workers=[orch.worker_id],passed=True).model_dump_json(indent=2)), await self._save_art(rid,sid,root,"changed_files",ChangedFilesManifest(run_id=rid,base_commit="mock",merge_commit="mock").model_dump_json(indent=2))]
         context=await self._spawn_workers(req, detail, rid, root, selected_models)
@@ -535,6 +608,7 @@ class Engine:
         if _depth >= 3:
             raise RuntimeError("worker RPC max resume depth exceeded")
         rpc=await spawn_pi_worker(cfg,rid,worker.worker_id,role.value,str(main),wt)
+        rpc.worker_id=worker.worker_id
         self.active_worker_rpcs.setdefault(rid,[]).append(rpc)
         req_id=await rpc.request(worker.task_title, "nexussy develop task")
         was_paused_on_timeout=False
@@ -553,7 +627,7 @@ class Engine:
             worker.status=WorkerStatus.paused; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
             await self._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.queued)
             await self.emit(SSEEventType.worker_task,sid,rid,WorkerTaskPayload(worker_id=worker.worker_id,task_id=worker.task_id,phase_number=idx,task_title=worker.task_title,status=WorkerTaskStatus.queued))
-            ck=await save_checkpoint(self.db, rid, StageName.develop, f".nexussy/checkpoints/develop-{worker.task_id}.json", sha256_text(worker.task_id or worker.worker_id))
+            ck=await save_checkpoint(self.db, rid, StageName.develop, f".nexussy/checkpoints/develop-{worker.task_id}.json", content=json.dumps({"worker_id": worker.worker_id, "task_id": worker.task_id, "status": "paused"}, sort_keys=True))
             await self.emit(SSEEventType.checkpoint_saved,sid,rid,ck)
             while self.paused.get(rid): await asyncio.sleep(.05)
             worker.status=WorkerStatus.running; await self._persist_worker(worker); await self.emit(SSEEventType.worker_status,sid,rid,worker)
@@ -583,6 +657,15 @@ class Engine:
     async def _persist_worker_task(self, run_id: str, worker_id: str, task_id: str, phase_number: int|None, title: str, status: WorkerTaskStatus):
         now=now_utc().isoformat(); status_value=status.value if hasattr(status,"value") else status
         await self.db.write(lambda con: con.execute("INSERT OR REPLACE INTO worker_tasks VALUES(?,?,?,?,?,?,COALESCE((SELECT created_at FROM worker_tasks WHERE task_id=?),?),?)",(task_id,run_id,worker_id,phase_number,title,status_value,task_id,now,now)))
+
+Engine._STAGE_HANDLERS = {
+    StageName.interview: Engine._run_interview_stage,
+    StageName.design: Engine._run_design_stage,
+    StageName.validate: Engine._run_validate_stage,
+    StageName.plan: Engine._run_plan_stage,
+    StageName.review: Engine._run_review_stage,
+    StageName.develop: Engine._run_develop_stage,
+}
 
 class ProviderStartError(Exception):
     def __init__(self, error: ErrorResponse):

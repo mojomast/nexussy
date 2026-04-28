@@ -74,7 +74,9 @@ async def extract_changed_files(repo: str, base_commit: str, dest: str, run_id: 
     files=[]
     for line in (await _git(main, "diff", "--name-status", base_commit, "HEAD")).splitlines():
         if not line: continue
-        status, path = line.split("\t", 1)[0], line.split("\t")[-1]
+        parts = line.split("\t")
+        status = parts[0]
+        path = parts[-1] if status.startswith("R") else parts[1]
         rel = sanitize_relative_path(path)
         cf_path = main / rel
         if cf_path.exists() and cf_path.is_file():

@@ -14,4 +14,4 @@ where = ["."]
 include = ["nexussy_web*"]
 
 [tool.setuptools.package-data]
-nexussy_web = ["templates/*.html"]
+nexussy_web = ["templates/*.html", "static/*.js", "static/*.css"]
