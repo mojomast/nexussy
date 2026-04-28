@@ -10,20 +10,20 @@ from nexussy.api import server
 from nexussy.api.server import app
 from nexussy.artifacts.store import safe_write
 from nexussy.config import load_config
-from nexussy.db import Database
+from nexussy.db import CURRENT_SCHEMA_VERSION, Database
 from nexussy.security import sanitize_path, sanitize_relative_path, scrub_log
 from nexussy.swarm.locks import claim_file
 from nexussy.swarm.roles import enforce_tool
 from nexussy.api.schemas import WorkerRole, ToolName
 from nexussy.providers import active_rate_limit, complete, persist_rate_limit, select_stage_model
-from nexussy.providers import DISCOVERY, delete_secret, set_secret
+from nexussy.providers import DISCOVERY, delete_secret, secret_summary, set_secret
 from nexussy.providers import ProviderResult
 from nexussy.swarm.gitops import _git, init_repo, create_worktree, commit_worker, merge_no_ff, extract_changed_files, prune_worktrees
 from nexussy.swarm.locks import write_requires_lock
-from nexussy.swarm.pi_rpc import spawn_pi_worker
+from nexussy.swarm.pi_rpc import PiRPCProcess, spawn_pi_worker
 from nexussy.pipeline.engine import Engine, complexity
 from nexussy.pipeline.engine import STAGES
-from nexussy.checkpoint import STAGE_ORDER
+from nexussy.checkpoint import STAGE_ORDER, save_checkpoint
 
 
 def test_schema_forbids_extra():
@@ -66,7 +66,11 @@ def test_security_helpers(tmp_path):
     upper_hex = "D" * 40
     assert short_hash in scrub_log("token=" + short_hash)
     assert git_sha in scrub_log("commit " + git_sha)
-    assert "[REDACTED]" in scrub_log("hash=" + sha256)
+    assert "commit_hash=" + git_sha in scrub_log("commit_hash=" + git_sha)
+    assert "sha=" + git_sha in scrub_log("sha=" + git_sha)
+    assert "base_commit=" + git_sha in scrub_log("base_commit=" + git_sha)
+    assert "hash_value=" + sha256 in scrub_log("hash_value=" + sha256)
+    assert "[REDACTED]" in scrub_log("api_key=" + git_sha)
     assert upper_hex in scrub_log("token=" + upper_hex)
     root = tmp_path / "root"; root.mkdir(); outside = tmp_path / "outside"; outside.mkdir()
     with pytest.raises(ValueError): sanitize_path(str(outside / "x"), [str(root)])
@@ -104,6 +108,15 @@ def test_complexity_uses_word_boundary_signals():
 
 def test_engine_stages_follow_checkpoint_stage_order():
     assert [stage.value for stage in STAGES] == STAGE_ORDER
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_hash_uses_content_when_provided(tmp_path):
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    first = await save_checkpoint(db, "run-1", StageName.design, ".nexussy/checkpoints/design-a.json", content="first content")
+    second = await save_checkpoint(db, "run-1", StageName.design, ".nexussy/checkpoints/design-b.json", content="second content")
+    assert first.sha256 != second.sha256
 
 
 def test_safe_write_anchor_validation(tmp_path):
@@ -170,7 +183,7 @@ def test_mcp_tools_and_start_pipeline(monkeypatch, tmp_path):
         tools = c.get("/mcp/tools")
         assert tools.status_code == 200, tools.text
         names = {tool["name"] for tool in tools.json()["tools"]}
-        assert {"nexussy_start_pipeline", "nexussy_get_status"} <= names
+        assert {"nexussy_start_pipeline", "nexussy_get_status", "nexussy_pause", "nexussy_resume", "nexussy_cancel", "nexussy_get_artifacts", "nexussy_list_sessions"} <= names
         assert all("inputSchema" in tool for tool in tools.json()["tools"])
         started = c.post("/mcp/call", json={"name":"nexussy_start_pipeline","arguments":{"project_name":"MCP Demo","description":"small api","auto_approve_interview":True,"metadata":{"mock_provider":True}}})
         assert started.status_code == 200, started.text
@@ -223,6 +236,20 @@ def test_config_put_persists_yaml(monkeypatch, tmp_path):
         assert r.status_code == 200, r.text
         assert "openrouter/openai/gpt-4o-mini" in cfg_path.read_text()
         assert load_config().providers.default_model == "openrouter/openai/gpt-4o-mini"
+
+
+def test_config_put_rejects_auth_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_CONFIG", str(tmp_path / "nexussy.yaml"))
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"auth":{"enabled":True}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.put("/config", json={"auth":{"enabled":False}})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["ok"] is False and body["error_code"] == "forbidden"
+        assert "auth.enabled" in body["details"]["forbidden_keys"]
 
 
 def test_validate_review_correction_loops_and_controls(monkeypatch, tmp_path):
@@ -569,6 +596,8 @@ def test_secrets_api_uses_keyring_without_echo(monkeypatch, tmp_path):
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["name"] == "OPENAI_API_KEY" and body["source"] == "keyring" and body["configured"] is True
+        assert os.environ.get("OPENAI_API_KEY") is None
+        assert secret_summary("OPENAI_API_KEY").source == "keyring"
         assert secret not in r.text
         listed = c.get("/secrets").json()
         assert any(x["name"] == "OPENAI_API_KEY" and x["source"] == "keyring" and x["configured"] for x in listed)
@@ -693,6 +722,11 @@ async def test_file_lock_and_role(tmp_path):
     assert enforce_tool(WorkerRole.backend, ToolName.write_file)
     with pytest.raises(PermissionError):
         enforce_tool(WorkerRole.analyst, ToolName.write_file)
+    assert enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "./devplan.md")
+    with pytest.raises(PermissionError):
+        enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "sub/../devplan.md")
+    with pytest.raises(PermissionError):
+        enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "phase001/file.txt")
     assert await write_requires_lock(db, "run", "src/a.py", "backend-abcdef") == "src/a.py"
     with pytest.raises(PermissionError):
         await write_requires_lock(db, "run", "src/a.py", "frontend-abcdef")
@@ -725,6 +759,8 @@ async def test_rate_limit_persistence_and_db_pragmas(tmp_path):
     assert con.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     required = {"sessions","runs","stage_runs","events","artifacts","checkpoints","workers","worker_tasks","blockers","file_locks","rate_limits","memory_entries"}
     assert required <= {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    versions = [row[0] for row in con.execute("SELECT version FROM schema_version ORDER BY version")]
+    assert versions[-1] == CURRENT_SCHEMA_VERSION
     await persist_rate_limit(db, "openai", "openai/x", datetime.now(timezone.utc)+timedelta(seconds=60), "quota")
     assert (await active_rate_limit(db, "openai", "openai/x"))["reason"] == "quota"
 
@@ -1119,3 +1155,34 @@ async def test_mcp_stdio_lists_tools():
     await call_stdio(Reader(), writer)
     response=json.loads(writer.data.decode().splitlines()[0])
     assert response["result"]["tools"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_stdio_error_codes_and_initialized_notification():
+    from nexussy.mcp import call_stdio
+    class Reader:
+        def __init__(self):
+            self.lines=[
+                b'{bad json\n',
+                b'{"jsonrpc":"2.0","id":2}\n',
+                b'{"jsonrpc":"2.0","id":3,"method":"missing/method"}\n',
+                b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n',
+                b'',
+            ]
+        async def readline(self): return self.lines.pop(0)
+    class Writer:
+        def __init__(self): self.data=b""
+        def write(self, b): self.data += b
+        async def drain(self): pass
+        def close(self): pass
+    writer=Writer()
+    await call_stdio(Reader(), writer)
+    responses=[json.loads(line) for line in writer.data.decode().splitlines()]
+    assert [r["error"]["code"] for r in responses] == [-32700, -32600, -32601]
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_request_without_stdin_raises_runtime_error():
+    proc = types.SimpleNamespace(stdin=None)
+    with pytest.raises(RuntimeError, match="stdin"):
+        await PiRPCProcess(proc).request("task")

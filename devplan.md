@@ -32,6 +32,9 @@
 - README rewrite pass replaced the operational/reference-heavy README with a clearer product and operator guide covering purpose, pipeline lifecycle, architecture, install/launcher flows, TUI/web/MCP usage, providers, Pi workers, artifacts, security, configuration, and verification status. Checks passed: `python3 -m pytest -q core/tests` and `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`.
 - Sequential repair pass closed 11 core review issues: file-lock claimed uniqueness, provider cache invalidation, atomic event payload sequencing, keyring-only secret deletion reporting, lazy CORS config, regex complexity signals, worker pause timeout capture, explicit worker merge results, empty relative path rejection, shared stage order, and GLM/ZAI alias documentation. Checks passed: `python3 -m pytest tests/ -v` under `core/` (67 passed) and an isolated core server `/pipeline/start` mock-provider smoke; requested `python -m pytest tests/ -v` could not run because `python` is unavailable.
 - Code review fix run closed A1-A11 and D1-D3: keyring fallback warnings, provider 429 persistence, lock exception narrowing, rename diff parsing, event sequence `RETURNING`, unique mock worker IDs, Pi RPC runtime/event handling, numeric config coercion, stage handler refactor, and security regression tests. Checks passed: `python3 -m pytest -q core/tests` (71 passed); requested `python -m pytest -q core/tests` could not run because `python` is unavailable.
+- Medium severity core review fixes complete: keyring writes no longer leak secrets into `os.environ`, SQLite schema version tracking records current migrations, MCP exposes pause/resume/cancel/artifact/session tools with JSON-RPC error codes, and Pi RPC runtime behavior has regression coverage. Checks passed: `python3 -m pytest -q core/tests` (74 passed).
+- Low severity core review fixes complete: checkpoint hashes now reflect provided artifact/question content, config reuses the shared env-file reader, and secret scrubbing preserves non-secret git/hash fields while continuing to redact API keys, `sk-` tokens, and PEM blocks. Checks passed: `python3 -m pytest -q core/tests` (75 passed).
+- Full H/M/L code review mission complete: H1-H3, M1-M4, and L1-L3 are fixed with AGENTS/CHANGELOG/status updates. Final verification passed with `python3 -m pytest tests/ -v` under `core/`; the requested `python -m pytest tests/ -v` command could not run because `python` is unavailable in this environment.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -52,6 +55,9 @@
 - [✅] I3: README rewritten into a clearer current-state product/operator guide; core tests and root shell syntax checks pass.
 - [✅] J1: Sequential core repair issues 1-11 completed as separate commits with targeted tests; full core tests and isolated mock pipeline smoke pass.
 - [✅] J2: Code review fix run A1-A11 and D1-D3 completed with core reliability, provider, async, config, git diff, refactor, and security-test fixes; `python3 -m pytest -q core/tests` passes.
+- [✅] K1: Medium severity core review fixes M1-M4 completed for providers, DB migrations, MCP tools/stdio errors, and Pi RPC regression coverage.
+- [✅] K2: Low severity core review fixes L1-L3 completed for content-aware checkpoints, shared env-file parsing, and narrowed secret scrubbing.
+- [✅] K3: High/medium/low code review mission H1-H3, M1-M4, L1-L3 completed with docs/status updates and final core verification.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

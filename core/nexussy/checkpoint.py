@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from nexussy.api.schemas import CheckpointPayload, StageName
+from nexussy.artifacts.store import sha256_text
 from nexussy.session import now_utc
 
 
@@ -16,9 +17,11 @@ def _stage_value(stage: StageName | str) -> str:
     return value
 
 
-async def save_checkpoint(db, run_id: str, stage: StageName | str, path: str, sha256: str) -> CheckpointPayload:
+async def save_checkpoint(db, run_id: str, stage: StageName | str, path: str, sha256: str | None = None, content: str | None = None) -> CheckpointPayload:
     """Persist a checkpoint row and return its contract payload."""
-    payload = CheckpointPayload(checkpoint_id=str(uuid4()), stage=_stage_value(stage), path=path, sha256=sha256, created_at=now_utc())
+    stage_value = _stage_value(stage)
+    checksum = sha256_text(content) if content is not None else (sha256 or sha256_text(stage_value))
+    payload = CheckpointPayload(checkpoint_id=str(uuid4()), stage=stage_value, path=path, sha256=checksum, created_at=now_utc())
     await db.write(lambda con: con.execute(
         "INSERT INTO checkpoints VALUES(?,?,?,?,?,?)",
         (payload.checkpoint_id, run_id, payload.stage, payload.path, payload.sha256, payload.created_at.isoformat()),

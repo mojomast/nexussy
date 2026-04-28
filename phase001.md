@@ -38,4 +38,5 @@
 - README rewrite pass refreshed the root README into a concise product/operator guide covering the pipeline, architecture, setup, operations, UI surfaces, provider/Pi behavior, artifacts, security, configuration, and verification status; core tests and root shell syntax checks pass.
 - Sequential repair pass closed 11 core review issues with separate commits and regression tests; full core tests passed with `python3` and an isolated mock-provider server smoke passed.
 - Code review fix run closed A1-A11 plus root docs/status updates: provider keyring fallback, 429 persistence, lock/git/Pi/config/event/develop fixes, stage handler refactor, and added security regression coverage; `python3 -m pytest -q core/tests` passes.
+- H/M/L code review mission closed H1-H3, M1-M4, and L1-L3 with config mutation restrictions, orchestrator path normalization, stage dispatch refactor, secret/env hardening, DB schema versioning, MCP expansion, Pi RPC event waiting, content-aware checkpoints, shared env parsing, narrowed scrubbing, and docs/status updates; final core verification passed with `python3`.
 <!-- PHASE_PROGRESS_END -->

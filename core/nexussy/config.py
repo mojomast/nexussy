@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os, pathlib, yaml
 from .api.schemas import NexussyConfig
+from nexussy.providers import read_env_file as _env_file
 
 ENV_MAP = {
  "NEXUSSY_HOME": ("home_dir",), "NEXUSSY_PROJECTS_DIR": ("projects_dir",), "NEXUSSY_CORE_HOST": ("core","host"),
@@ -33,15 +34,6 @@ def _set(d, path, val):
             except ValueError:
                 pass
     cur[path[-1]]=val
-
-def _env_file(path: pathlib.Path) -> dict[str,str]:
-    vals={}
-    if path.exists():
-        for line in path.read_text().splitlines():
-            line=line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k,v=line.split("=",1); vals[k.strip()]=v.strip().strip('"').strip("'")
-    return vals
 
 def load_config(overrides: dict | None = None) -> NexussyConfig:
     base = NexussyConfig().model_dump(mode="json")

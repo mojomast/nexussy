@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restricted `PUT /config` to safe mutable keys and rejected auth, database, home, project, and non-whitelisted config changes.
+- Normalized orchestrator file paths before role allowlist checks and tightened phase path matching.
+- Stopped keyring-backed secret writes from copying secret values into `os.environ`.
+- Added SQLite schema version tracking and migration recording.
+- Expanded MCP tools for pause, resume, cancel, artifacts, and sessions; fixed JSON-RPC parse, invalid request, unknown method, and execution error codes.
+- Ensured Pi RPC waits for responses with `asyncio.Event` and raises `RuntimeError` when worker stdin is closed.
+- Made checkpoints hash supplied content when available.
+- Reused the provider env-file parser from config loading.
+- Tightened secret scrubbing to avoid non-secret git/hash false positives while retaining API key, `sk-`, and PEM redaction.
+
+### Refactored
+
+- Split pipeline stage artifact generation into per-stage `Engine` handler methods behind a thin dispatcher.
+
 ### Fixed - 2026-04-28
 
 - `providers.py`: keyring sentinel fallback now warns and stores to file when keyring writes fail or time out.

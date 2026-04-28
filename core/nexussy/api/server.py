@@ -89,6 +89,60 @@ def retry_after_header(error: ErrorResponse) -> dict[str, str]:
         return {"Retry-After": str(int(dt.timestamp()))}
     except (TypeError, ValueError, OverflowError):
         return {}
+
+def _merge_config_patch(base: dict, patch: dict) -> dict:
+    out = dict(base)
+    for key, value in patch.items():
+        out[key] = _merge_config_patch(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+def _leaf_paths(data: dict, prefix: tuple[str, ...] = ()):
+    for key, value in data.items():
+        path = prefix + (str(key),)
+        if isinstance(value, dict):
+            yield from _leaf_paths(value, path)
+        else:
+            yield path
+
+def _changed_paths(old, new, prefix: tuple[str, ...] = ()):
+    if isinstance(old, dict) and isinstance(new, dict):
+        for key in set(old) | set(new):
+            yield from _changed_paths(old.get(key), new.get(key), prefix + (str(key),))
+    elif old != new:
+        yield prefix
+
+def _unknown_config_paths(data, shape, prefix: tuple[str, ...] = ()):
+    if not isinstance(data, dict) or not isinstance(shape, dict):
+        return
+    for key, value in data.items():
+        path = prefix + (str(key),)
+        if key not in shape:
+            yield path
+        elif isinstance(value, dict):
+            yield from _unknown_config_paths(value, shape[key], path)
+
+def _is_safe_config_path(path: tuple[str, ...]) -> bool:
+    if path == ("logging", "level") or path == ("providers", "default_model"):
+        return True
+    if len(path) >= 2 and path[0] in {"sse", "swarm"}:
+        return True
+    if len(path) == 3 and path[0] == "stages" and path[2] in {"model", "max_iterations", "max_retries"}:
+        return True
+    return False
+
+def _full_config_payload(data: dict) -> bool:
+    return set(data) >= set(NexussyConfig().model_dump(mode="json"))
+
+def _forbidden_config_paths(data: dict, current_cfg: NexussyConfig, next_cfg: NexussyConfig) -> list[str]:
+    old = current_cfg.model_dump(mode="json")
+    new = next_cfg.model_dump(mode="json")
+    forbidden = {"auth", "database", "home_dir", "projects_dir"}
+    paths = set(_changed_paths(old, new))
+    # Partial protected-key patches are rejected even if they happen to match the
+    # current value; a full GET/PUT round-trip may include unchanged protected keys.
+    if not _full_config_payload(data):
+        paths.update(path for path in _leaf_paths(data) if path and path[0] in forbidden)
+    return sorted(".".join(path) for path in paths if path and not _is_safe_config_path(path))
 async def body(request, cls):
     try: return cls.model_validate(await request.json())
     except json.JSONDecodeError as e: raise ValueError([{"loc":["body"],"msg":"invalid JSON","type":"json_invalid","ctx":{"error":str(e)}}])
@@ -384,7 +438,17 @@ async def get_config(request): return await endpoint(request, lambda r: asyncio.
 async def put_config(request):
     async def inner(r):
         global config
-        next_config=NexussyConfig.model_validate(await r.json())
+        data=await r.json()
+        if not isinstance(data, dict):
+            raise ValueError([{"loc":["body"],"msg":"config must be an object","type":"value_error"}])
+        base=config.model_dump(mode="json")
+        unknown=sorted(".".join(path) for path in _unknown_config_paths(data, base))
+        if unknown:
+            return err(ErrorCode.forbidden,"config key is not mutable",403,{"forbidden_keys":unknown})
+        next_config=NexussyConfig.model_validate(_merge_config_patch(base, data))
+        forbidden=_forbidden_config_paths(data, config, next_config)
+        if forbidden:
+            return err(ErrorCode.forbidden,"config key is not mutable",403,{"forbidden_keys":forbidden})
         cfg_path=pathlib.Path(os.environ.get("NEXUSSY_CONFIG", str(pathlib.Path(next_config.home_dir).expanduser()/"nexussy.yaml"))).expanduser()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         tmp=cfg_path.with_suffix(cfg_path.suffix+".tmp")

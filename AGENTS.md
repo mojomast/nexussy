@@ -78,6 +78,19 @@ Develop-stage workers spawn and run in parallel, then merge serially to keep git
 
 Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loops. Manual interview waits time out according to `stages.interview.answer_timeout_s`; timeout cleanup clears paused state before the run is marked failed.
 
+## Code Review Fixes (2026-04-28)
+
+- H1: `PUT /config` now rejects auth, database, home, project, and non-whitelisted config mutations; status complete.
+- H2: orchestrator write paths are normalized before allowlist checks, and phase paths require a real `phase` path segment; status complete.
+- H3: pipeline stage artifact generation now dispatches through per-stage `Engine` handler methods; status complete.
+- M1: keyring-backed `set_secret()` no longer copies secret values into `os.environ`; status complete.
+- M2: SQLite initialization now records `schema_version` rows and defines sequential migration handling; status complete.
+- M3: MCP exposes pause, resume, cancel, artifact, and session tools and returns JSON-RPC parse/invalid/unknown/internal error codes; status complete.
+- M4: Pi RPC response waiting uses `asyncio.Event`, and closed stdin raises `RuntimeError`; status complete.
+- L1: checkpoints can hash supplied artifact content instead of only stage names; status complete.
+- L2: config env-file parsing reuses the provider `read_env_file()` implementation; status complete.
+- L3: log scrubbing avoids non-secret git/hash false positives while preserving API key, `sk-`, and PEM redaction; status complete.
+
 # DO NOT
 
 - Do not make cross-boundary edits.
