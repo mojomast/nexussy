@@ -103,6 +103,8 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     env.setdefault("PI_DEFAULT_MODEL", default_model)
     if command == "pi":
         _write_pi_settings(pathlib.Path(worktree), default_model)
+        # Override any user-supplied args: the pi CLI requires exactly ["--mode", "rpc"]
+        # in RPC mode. config.pi.args is intentionally ignored for the "pi" command.
         args = ["--mode", "rpc"]
     elif command in {"nexussy-pi", "local-pi-worker"}:
         env.setdefault("PI_DEFAULT_MODEL", default_model)
