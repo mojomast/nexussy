@@ -2,17 +2,17 @@
 
 `SPEC_COVERAGE.md` was re-audited after the core review-gap and TUI handoff work. The matrix now distinguishes deterministic route/helper coverage from full contract semantics.
 
-Current coverage summary: core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, plan task validation, TUI default-renderer contract, and the full live provider-plus-installed-Pi develop path have current evidence. Remaining partial rows are limited to install side-effect checks.
+Current coverage summary: all SPEC rows are covered. Core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, plan task validation, TUI default-renderer contract, full Ubuntu install idempotency, and live multi-agent swarm workload control all have current evidence.
 
 ## Execution Model
 
 Close this file through the circular loop in `CIRCULAR_DEVELOPMENT.md`. Work proceeds in cycles, not by cherry-picking rows: core runtime semantics, core contracts/providers/MCP, TUI closure, web evidence, ops evidence, then live external checks. Each cycle delegates only to the owning subagent, adds tests for new behavior, reruns the area suite, updates this file and `SPEC_COVERAGE.md`, then advances to the next cycle.
 
-Current active cycle: none. Local/team hardening is complete, including sandboxed executor docs, deployment profiles, audit logging, `OPERATIONS.md`, rotate-key, and R-080 live provider-plus-Pi evidence.
+Current active cycle: none — all spec rows covered. Local/team hardening is complete, including sandboxed executor docs, deployment profiles, audit logging, `OPERATIONS.md`, rotate-key, R-080 live provider-plus-Pi evidence, R-063/R-069 install idempotency evidence, and R-075 live swarm evidence.
 
 ## Highest-Priority Partial Rows
 
-- R-063/R-069: Installer basics, dry-run, config/env idempotency, `--systemd-user` preservation, launcher status/doctor/start-tui/update wiring, and shell syntax pass, but full noninteractive install twice remains unrun to avoid package/service side effects in this environment.
+- None. R-063/R-069 are closed by `scripts/evidence/install_idempotency_run1.txt` and `scripts/evidence/install_idempotency_run2.txt`; R-075 is closed by `scripts/evidence/swarm_proof_run.json`.
 
 ## Implemented But Untested Rows
 

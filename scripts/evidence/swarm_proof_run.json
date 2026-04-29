@@ -1,0 +1,354 @@
+{
+  "artifacts_response": {
+    "artifacts": [
+      {
+        "bytes": 423,
+        "kind": "changed_files",
+        "path": ".nexussy/artifacts/changed_files.json",
+        "phase_number": null,
+        "sha256": "62901d095b073565f06a4b7fc46c01802afbc4f0f440fc54249e300a8c4bc575",
+        "updated_at": "2026-04-29T03:45:50.501035Z"
+      },
+      {
+        "bytes": 247,
+        "kind": "complexity_profile",
+        "path": ".nexussy/artifacts/complexity_profile.json",
+        "phase_number": null,
+        "sha256": "d47703374948e09df6fc51edae427e9c6a6eb5bd88b5d1d080cacdea8a7f83e7",
+        "updated_at": "2026-04-29T03:45:32.626942Z"
+      },
+      {
+        "bytes": 5768,
+        "kind": "design_draft",
+        "path": ".nexussy/artifacts/design_draft.md",
+        "phase_number": null,
+        "sha256": "06f698b9a20b036d2f792947b61b03278a42a3c51e871f4841051cb8184ae4a9",
+        "updated_at": "2026-04-29T03:45:37.953422Z"
+      },
+      {
+        "bytes": 2700,
+        "kind": "develop_report",
+        "path": ".nexussy/artifacts/develop_report.json",
+        "phase_number": null,
+        "sha256": "429c5e5416f8b455e4482dffc372aaba4688040691480807caa0753cad7c3f21",
+        "updated_at": "2026-04-29T03:45:50.493227Z"
+      },
+      {
+        "bytes": 321,
+        "kind": "devplan",
+        "path": "devplan.md",
+        "phase_number": null,
+        "sha256": "262e37c8ba3767dad731a73ecb3fb92918a58c5885c2db74c89b5b2baca0862e",
+        "updated_at": "2026-04-29T03:45:40.684986Z"
+      },
+      {
+        "bytes": 493,
+        "kind": "handoff",
+        "path": "handoff.md",
+        "phase_number": null,
+        "sha256": "a58d5db770b57c08fe460a36603414095863dbe092080ca525f70c0f55800f83",
+        "updated_at": "2026-04-29T03:45:40.688799Z"
+      },
+      {
+        "bytes": 1193,
+        "kind": "interview",
+        "path": ".nexussy/artifacts/interview.json",
+        "phase_number": null,
+        "sha256": "6065866fb7ea002e710cbb27ae3f6518e78162f1da5925965440e2e3c98f831e",
+        "updated_at": "2026-04-29T03:45:32.622024Z"
+      },
+      {
+        "bytes": 332,
+        "kind": "merge_report",
+        "path": ".nexussy/artifacts/merge_report.json",
+        "phase_number": null,
+        "sha256": "ef3fa366d8e2284b62016e66ff4fa46ea9373b9a9c754fc56ea51906ec3da6b4",
+        "updated_at": "2026-04-29T03:45:50.497286Z"
+      },
+      {
+        "bytes": 145,
+        "kind": "phase",
+        "path": "phase001.md",
+        "phase_number": 1,
+        "sha256": "13861f17080f88b78c0c0b1861f293021c83ce40175effc596fe1bd212c9f7a9",
+        "updated_at": "2026-04-29T03:45:40.693197Z"
+      },
+      {
+        "bytes": 145,
+        "kind": "phase",
+        "path": "phase002.md",
+        "phase_number": 2,
+        "sha256": "e81283ff4f7c1126e0ac878f752a58d08da3a14f3bb2bb8cbc470f702fa7053c",
+        "updated_at": "2026-04-29T03:45:40.697559Z"
+      },
+      {
+        "bytes": 157,
+        "kind": "review_report",
+        "path": ".nexussy/artifacts/review_report.json",
+        "phase_number": null,
+        "sha256": "98c95367d6f7c7dc0588dea1fcbf2950d561269037055fa7222b252e845827d6",
+        "updated_at": "2026-04-29T03:45:43.639363Z"
+      },
+      {
+        "bytes": 5768,
+        "kind": "validated_design",
+        "path": ".nexussy/artifacts/validated_design.md",
+        "phase_number": null,
+        "sha256": "06f698b9a20b036d2f792947b61b03278a42a3c51e871f4841051cb8184ae4a9",
+        "updated_at": "2026-04-29T03:45:38.574147Z"
+      },
+      {
+        "bytes": 146,
+        "kind": "validation_report",
+        "path": ".nexussy/artifacts/validation_report.json",
+        "phase_number": null,
+        "sha256": "97519a1c141b1eba61abce25a43057c9aee3aa7d34beae485c32c0969b573432",
+        "updated_at": "2026-04-29T03:45:38.579957Z"
+      }
+    ],
+    "ok": true,
+    "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+    "session_id": "60c35c22-192e-4870-bb86-b4212fb8bb6f"
+  },
+  "develop_report_content": {
+    "artifact": {
+      "bytes": 2700,
+      "kind": "develop_report",
+      "path": ".nexussy/artifacts/develop_report.json",
+      "phase_number": null,
+      "sha256": "429c5e5416f8b455e4482dffc372aaba4688040691480807caa0753cad7c3f21",
+      "updated_at": "2026-04-29T03:45:50.493227Z"
+    },
+    "content_text": "{\n  \"run_id\": \"78ce9650-ce12-4b08-8757-db3d0753952e\",\n  \"passed\": true,\n  \"workers\": [\n    {\n      \"worker_id\": \"orchestrator-76b59e\",\n      \"run_id\": \"78ce9650-ce12-4b08-8757-db3d0753952e\",\n      \"role\": \"orchestrator\",\n      \"status\": \"finished\",\n      \"task_id\": \"task-b3a9ee\",\n      \"task_title\": \"Orchestrate develop run\",\n      \"worktree_path\": \"/home/mojo/nexussy-projects/swarm-proof-7cd543/main\",\n      \"branch_name\": \"main\",\n      \"pid\": null,\n      \"model\": \"openrouter/google/gemini-2.5-flash-lite\",\n      \"usage\": {\n        \"input_tokens\": 0,\n        \"output_tokens\": 0,\n        \"cache_read_tokens\": 0,\n        \"cache_write_tokens\": 0,\n        \"total_tokens\": 0,\n        \"cost_usd\": 0.0,\n        \"provider\": null,\n        \"model\": null\n      },\n      \"created_at\": \"2026-04-29T03:45:43.682226Z\",\n      \"updated_at\": \"2026-04-29T03:45:43.682228Z\",\n      \"last_error\": null\n    },\n    {\n      \"worker_id\": \"backend-1059d7\",\n      \"run_id\": \"78ce9650-ce12-4b08-8757-db3d0753952e\",\n      \"role\": \"backend\",\n      \"status\": \"finished\",\n      \"task_id\": \"task-5ef053\",\n      \"task_title\": \"Develop task 1\",\n      \"worktree_path\": \"/home/mojo/nexussy-projects/swarm-proof-7cd543/workers/backend-1059d7\",\n      \"branch_name\": \"worker/backend-1059d7\",\n      \"pid\": null,\n      \"model\": \"openrouter/google/gemini-2.5-flash-lite\",\n      \"usage\": {\n        \"input_tokens\": 0,\n        \"output_tokens\": 0,\n        \"cache_read_tokens\": 0,\n        \"cache_write_tokens\": 0,\n        \"total_tokens\": 0,\n        \"cost_usd\": 0.0,\n        \"provider\": null,\n        \"model\": null\n      },\n      \"created_at\": \"2026-04-29T03:45:43.702522Z\",\n      \"updated_at\": \"2026-04-29T03:45:43.702526Z\",\n      \"last_error\": null\n    },\n    {\n      \"worker_id\": \"frontend-0f6e0c\",\n      \"run_id\": \"78ce9650-ce12-4b08-8757-db3d0753952e\",\n      \"role\": \"frontend\",\n      \"status\": \"finished\",\n      \"task_id\": \"task-45d380\",\n      \"task_title\": \"Develop task 2\",\n      \"worktree_path\": \"/home/mojo/nexussy-projects/swarm-proof-7cd543/workers/frontend-0f6e0c\",\n      \"branch_name\": \"worker/frontend-0f6e0c\",\n      \"pid\": null,\n      \"model\": \"openrouter/google/gemini-2.5-flash-lite\",\n      \"usage\": {\n        \"input_tokens\": 0,\n        \"output_tokens\": 0,\n        \"cache_read_tokens\": 0,\n        \"cache_write_tokens\": 0,\n        \"total_tokens\": 0,\n        \"cost_usd\": 0.0,\n        \"provider\": null,\n        \"model\": null\n      },\n      \"created_at\": \"2026-04-29T03:45:43.727850Z\",\n      \"updated_at\": \"2026-04-29T03:45:43.727856Z\",\n      \"last_error\": null\n    }\n  ],\n  \"tasks_total\": 3,\n  \"tasks_passed\": 3,\n  \"tasks_failed\": 0,\n  \"tests_command\": null,\n  \"tests_passed\": null,\n  \"created_at\": \"2026-04-29T03:45:50.492575Z\"\n}",
+    "content_type": "application/json",
+    "ok": true
+  },
+  "done_event": {
+    "contract_version": "1.0",
+    "event_id": "41bd26f8-0668-4af8-a9d5-c98db7bffda8",
+    "payload": {
+      "artifacts": [
+        {
+          "bytes": 1193,
+          "kind": "interview",
+          "path": ".nexussy/artifacts/interview.json",
+          "phase_number": null,
+          "sha256": "6065866fb7ea002e710cbb27ae3f6518e78162f1da5925965440e2e3c98f831e",
+          "updated_at": "2026-04-29T03:45:32.622024Z"
+        },
+        {
+          "bytes": 247,
+          "kind": "complexity_profile",
+          "path": ".nexussy/artifacts/complexity_profile.json",
+          "phase_number": null,
+          "sha256": "d47703374948e09df6fc51edae427e9c6a6eb5bd88b5d1d080cacdea8a7f83e7",
+          "updated_at": "2026-04-29T03:45:32.626942Z"
+        },
+        {
+          "bytes": 5768,
+          "kind": "design_draft",
+          "path": ".nexussy/artifacts/design_draft.md",
+          "phase_number": null,
+          "sha256": "06f698b9a20b036d2f792947b61b03278a42a3c51e871f4841051cb8184ae4a9",
+          "updated_at": "2026-04-29T03:45:37.953422Z"
+        },
+        {
+          "bytes": 5768,
+          "kind": "validated_design",
+          "path": ".nexussy/artifacts/validated_design.md",
+          "phase_number": null,
+          "sha256": "06f698b9a20b036d2f792947b61b03278a42a3c51e871f4841051cb8184ae4a9",
+          "updated_at": "2026-04-29T03:45:38.574147Z"
+        },
+        {
+          "bytes": 146,
+          "kind": "validation_report",
+          "path": ".nexussy/artifacts/validation_report.json",
+          "phase_number": null,
+          "sha256": "97519a1c141b1eba61abce25a43057c9aee3aa7d34beae485c32c0969b573432",
+          "updated_at": "2026-04-29T03:45:38.579957Z"
+        },
+        {
+          "bytes": 321,
+          "kind": "devplan",
+          "path": "devplan.md",
+          "phase_number": null,
+          "sha256": "262e37c8ba3767dad731a73ecb3fb92918a58c5885c2db74c89b5b2baca0862e",
+          "updated_at": "2026-04-29T03:45:40.684986Z"
+        },
+        {
+          "bytes": 493,
+          "kind": "handoff",
+          "path": "handoff.md",
+          "phase_number": null,
+          "sha256": "a58d5db770b57c08fe460a36603414095863dbe092080ca525f70c0f55800f83",
+          "updated_at": "2026-04-29T03:45:40.688799Z"
+        },
+        {
+          "bytes": 145,
+          "kind": "phase",
+          "path": "phase001.md",
+          "phase_number": 1,
+          "sha256": "13861f17080f88b78c0c0b1861f293021c83ce40175effc596fe1bd212c9f7a9",
+          "updated_at": "2026-04-29T03:45:40.693197Z"
+        },
+        {
+          "bytes": 145,
+          "kind": "phase",
+          "path": "phase002.md",
+          "phase_number": 2,
+          "sha256": "e81283ff4f7c1126e0ac878f752a58d08da3a14f3bb2bb8cbc470f702fa7053c",
+          "updated_at": "2026-04-29T03:45:40.697559Z"
+        },
+        {
+          "bytes": 157,
+          "kind": "review_report",
+          "path": ".nexussy/artifacts/review_report.json",
+          "phase_number": null,
+          "sha256": "98c95367d6f7c7dc0588dea1fcbf2950d561269037055fa7222b252e845827d6",
+          "updated_at": "2026-04-29T03:45:43.639363Z"
+        },
+        {
+          "bytes": 2700,
+          "kind": "develop_report",
+          "path": ".nexussy/artifacts/develop_report.json",
+          "phase_number": null,
+          "sha256": "429c5e5416f8b455e4482dffc372aaba4688040691480807caa0753cad7c3f21",
+          "updated_at": "2026-04-29T03:45:50.493227Z"
+        },
+        {
+          "bytes": 332,
+          "kind": "merge_report",
+          "path": ".nexussy/artifacts/merge_report.json",
+          "phase_number": null,
+          "sha256": "ef3fa366d8e2284b62016e66ff4fa46ea9373b9a9c754fc56ea51906ec3da6b4",
+          "updated_at": "2026-04-29T03:45:50.497286Z"
+        },
+        {
+          "bytes": 423,
+          "kind": "changed_files",
+          "path": ".nexussy/artifacts/changed_files.json",
+          "phase_number": null,
+          "sha256": "62901d095b073565f06a4b7fc46c01802afbc4f0f440fc54249e300a8c4bc575",
+          "updated_at": "2026-04-29T03:45:50.501035Z"
+        }
+      ],
+      "error": null,
+      "final_status": "passed",
+      "summary": "pipeline completed",
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.0014384,
+        "input_tokens": 2212,
+        "model": "openrouter/google/gemini-2.5-flash-lite",
+        "output_tokens": 3043,
+        "provider": "openrouter",
+        "total_tokens": 5255
+      }
+    },
+    "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+    "sequence": 72,
+    "session_id": "60c35c22-192e-4870-bb86-b4212fb8bb6f",
+    "source": "core",
+    "ts": "2026-04-29T03:45:50.515152Z",
+    "type": "done"
+  },
+  "pause_response": {
+    "message": "paused",
+    "ok": true,
+    "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+    "status": "paused"
+  },
+  "resume_response": {
+    "message": "resumed",
+    "ok": true,
+    "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+    "status": "running"
+  },
+  "start_response": {
+    "ok": true,
+    "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+    "session_id": "60c35c22-192e-4870-bb86-b4212fb8bb6f",
+    "status": "running",
+    "status_url": "/pipeline/status?run_id=78ce9650-ce12-4b08-8757-db3d0753952e",
+    "stream_url": "/pipeline/runs/78ce9650-ce12-4b08-8757-db3d0753952e/stream"
+  },
+  "workers_response": [
+    {
+      "branch_name": "worker/backend-1059d7",
+      "created_at": "2026-04-29T03:45:43.702522Z",
+      "last_error": null,
+      "model": "openrouter/google/gemini-2.5-flash-lite",
+      "pid": null,
+      "role": "backend",
+      "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+      "status": "finished",
+      "task_id": "task-5ef053",
+      "task_title": "Develop task 1",
+      "updated_at": "2026-04-29T03:45:43.702526Z",
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.0,
+        "input_tokens": 0,
+        "model": null,
+        "output_tokens": 0,
+        "provider": null,
+        "total_tokens": 0
+      },
+      "worker_id": "backend-1059d7",
+      "worktree_path": "/home/mojo/nexussy-projects/swarm-proof-7cd543/workers/backend-1059d7"
+    },
+    {
+      "branch_name": "worker/frontend-0f6e0c",
+      "created_at": "2026-04-29T03:45:43.727850Z",
+      "last_error": null,
+      "model": "openrouter/google/gemini-2.5-flash-lite",
+      "pid": null,
+      "role": "frontend",
+      "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+      "status": "finished",
+      "task_id": "task-45d380",
+      "task_title": "Develop task 2",
+      "updated_at": "2026-04-29T03:45:43.727856Z",
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.0,
+        "input_tokens": 0,
+        "model": null,
+        "output_tokens": 0,
+        "provider": null,
+        "total_tokens": 0
+      },
+      "worker_id": "frontend-0f6e0c",
+      "worktree_path": "/home/mojo/nexussy-projects/swarm-proof-7cd543/workers/frontend-0f6e0c"
+    },
+    {
+      "branch_name": "main",
+      "created_at": "2026-04-29T03:45:43.682226Z",
+      "last_error": null,
+      "model": "openrouter/google/gemini-2.5-flash-lite",
+      "pid": null,
+      "role": "orchestrator",
+      "run_id": "78ce9650-ce12-4b08-8757-db3d0753952e",
+      "status": "finished",
+      "task_id": "task-b3a9ee",
+      "task_title": "Orchestrate develop run",
+      "updated_at": "2026-04-29T03:45:43.682228Z",
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.0,
+        "input_tokens": 0,
+        "model": null,
+        "output_tokens": 0,
+        "provider": null,
+        "total_tokens": 0
+      },
+      "worker_id": "orchestrator-76b59e",
+      "worktree_path": "/home/mojo/nexussy-projects/swarm-proof-7cd543/main"
+    }
+  ]
+}

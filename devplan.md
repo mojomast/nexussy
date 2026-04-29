@@ -45,6 +45,7 @@
 - Review-response pass complete: fixed dashboard multi-question interview submission, expanded CI into core/TUI/web/ops jobs using `python3`, split pipeline helpers/stages so `engine.py` is 299 lines, and added `scripts/smoke_integration.sh` plus operations docs. Full verification passed after every item.
 - Smoke hardening pass complete: smoke SSE parsing, changed-file field usage, Pi command path/args handling, engine spawn dependency injection, and stale remaining-spec text were fixed with parser harness coverage and full verification.
 - Production hardening pass complete: smoke and spawn fixes were reverified, secret set/delete provider-cache invalidation has regression coverage, R-040 plan tasks now repair missing owner/acceptance/tests, and R-058/R-067 now officially use OpenTUI by default with Pi TUI opt-in. Full verification passed across core, TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
+- Full SPEC coverage pass complete: R-063/R-069 are closed with two real Ubuntu 22.04 `./install.sh --non-interactive` runs and health evidence; R-075 is closed with a live backend/frontend swarm run using a configured provider, real Pi command, pause/resume, passed done event, and develop/merge/changed-files artifacts. Final verification passed across core (92 tests), TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -78,6 +79,7 @@
 - [✅] O1: Review-response architecture fixes complete for web multi-answer interviews, CI matrix, pipeline stage extraction, and live smoke evidence.
 - [✅] P1: Smoke hardening fixes complete for parser correctness, Pi command handling, spawn test isolation, and stale status docs.
 - [✅] Q1: Production hardening fixes complete for provider cache invalidation coverage, plan task contract repair, OpenTUI default contract alignment, docs, and traceability artifacts.
+- [✅] R1: Full SPEC coverage evidence complete for Ubuntu install idempotency and live multi-agent swarm workload control.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

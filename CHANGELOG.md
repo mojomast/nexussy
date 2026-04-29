@@ -20,6 +20,7 @@
 - [production-hardening] fix: plan artifacts repair missing task owner, acceptance criteria, and tests to close R-040.
 - [production-hardening] fix: TUI no-run mode now defaults to OpenTUI, with Pi TUI available through `NEXUSSY_TUI_RENDERER=pi-tui`.
 - [production-hardening] docs: SPEC, README, OPERATIONS, coverage, and triage artifacts now reflect the OpenTUI default and remaining install-side-effect evidence only.
+- [2026-04-29] feat: full spec coverage achieved - install idempotency and live swarm proof (R-063, R-069, R-075).
 - [local-team-hardening] Documented the supported `pi.command` / `NEXUSSY_PI_COMMAND` sandboxed executor pattern for trusted LAN/VPN use, clarified that bundled `nexussy-pi` is local-dev only and not a security boundary, and added a launcher doctor warning when bundled Pi is selected with a non-localhost bind.
 - [local-team-hardening] Added `NEXUSSY_PROFILE=dev|trusted-lan`; `trusted-lan` enables API-key auth, rejects wildcard CORS, requires an explicit Pi command, warns on bundled `nexussy-pi`, and moves default service logs under `~/.nexussy/logs/`.
 - [local-team-hardening] Added local append-only `~/.nexussy/audit.log` entries for pipeline lifecycle, config changes, secret add/delete, worker spawn, and auth failures, plus `./nexussy.sh logs --audit`.

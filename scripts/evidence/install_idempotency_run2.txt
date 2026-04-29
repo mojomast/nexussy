@@ -1,0 +1,131 @@
+# Evidence: Ubuntu 22.04 Docker container, second ./install.sh --non-interactive run
+[nexussy] Using Python: python3.11
+[nexussy] Using Bun: 1.3.13
+[nexussy] WARN: Optional shellcheck not found; install shellcheck for script linting.
+[nexussy] Using install Python: /tmp/nexussy-home/venv/bin/python
+[nexussy] Keeping existing config: /tmp/nexussy-home/nexussy.yaml
+[nexussy] Keeping existing env file: /tmp/nexussy-home/.env
+[nexussy] Installing core package
+Obtaining file:///repo/core
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: starlette<1.0,>=0.37 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-core==0.1.0) (0.52.1)
+Requirement already satisfied: uvicorn>=0.29 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-core==0.1.0) (0.46.0)
+Requirement already satisfied: pydantic>=2.7 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-core==0.1.0) (2.12.5)
+Requirement already satisfied: PyYAML>=6 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-core==0.1.0) (6.0.3)
+Requirement already satisfied: litellm>=1.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-core==0.1.0) (1.83.14)
+Requirement already satisfied: anyio<5,>=3.6.2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from starlette<1.0,>=0.37->nexussy-core==0.1.0) (4.13.0)
+Requirement already satisfied: typing-extensions>=4.10.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from starlette<1.0,>=0.37->nexussy-core==0.1.0) (4.15.0)
+Requirement already satisfied: idna>=2.8 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from anyio<5,>=3.6.2->starlette<1.0,>=0.37->nexussy-core==0.1.0) (3.13)
+Requirement already satisfied: fastuuid==0.14.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (0.14.0)
+Requirement already satisfied: httpx==0.28.1 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (0.28.1)
+Requirement already satisfied: openai==2.24.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (2.24.0)
+Requirement already satisfied: python-dotenv==1.2.2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (1.2.2)
+Requirement already satisfied: tiktoken==0.12.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (0.12.0)
+Requirement already satisfied: importlib-metadata==8.5.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (8.5.0)
+Requirement already satisfied: tokenizers==0.22.2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (0.22.2)
+Requirement already satisfied: click==8.1.8 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (8.1.8)
+Requirement already satisfied: jinja2==3.1.6 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (3.1.6)
+Requirement already satisfied: aiohttp==3.13.4 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (3.13.4)
+Requirement already satisfied: jsonschema==4.23.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from litellm>=1.0->nexussy-core==0.1.0) (4.23.0)
+Requirement already satisfied: aiohappyeyeballs>=2.5.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (2.6.1)
+Requirement already satisfied: aiosignal>=1.4.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (1.4.0)
+Requirement already satisfied: attrs>=17.3.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (26.1.0)
+Requirement already satisfied: frozenlist>=1.1.1 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (1.8.0)
+Requirement already satisfied: multidict<7.0,>=4.5 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (6.7.1)
+Requirement already satisfied: propcache>=0.2.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (0.4.1)
+Requirement already satisfied: yarl<2.0,>=1.17.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from aiohttp==3.13.4->litellm>=1.0->nexussy-core==0.1.0) (1.23.0)
+Requirement already satisfied: certifi in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from httpx==0.28.1->litellm>=1.0->nexussy-core==0.1.0) (2026.4.22)
+Requirement already satisfied: httpcore==1.* in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from httpx==0.28.1->litellm>=1.0->nexussy-core==0.1.0) (1.0.9)
+Requirement already satisfied: zipp>=3.20 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from importlib-metadata==8.5.0->litellm>=1.0->nexussy-core==0.1.0) (3.23.1)
+Requirement already satisfied: MarkupSafe>=2.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from jinja2==3.1.6->litellm>=1.0->nexussy-core==0.1.0) (3.0.3)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from jsonschema==4.23.0->litellm>=1.0->nexussy-core==0.1.0) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from jsonschema==4.23.0->litellm>=1.0->nexussy-core==0.1.0) (0.37.0)
+Requirement already satisfied: rpds-py>=0.7.1 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from jsonschema==4.23.0->litellm>=1.0->nexussy-core==0.1.0) (0.30.0)
+Requirement already satisfied: distro<2,>=1.7.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from openai==2.24.0->litellm>=1.0->nexussy-core==0.1.0) (1.9.0)
+Requirement already satisfied: jiter<1,>=0.10.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from openai==2.24.0->litellm>=1.0->nexussy-core==0.1.0) (0.14.0)
+Requirement already satisfied: sniffio in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from openai==2.24.0->litellm>=1.0->nexussy-core==0.1.0) (1.3.1)
+Requirement already satisfied: tqdm>4 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from openai==2.24.0->litellm>=1.0->nexussy-core==0.1.0) (4.67.3)
+Requirement already satisfied: annotated-types>=0.6.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from pydantic>=2.7->nexussy-core==0.1.0) (0.7.0)
+Requirement already satisfied: pydantic-core==2.41.5 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from pydantic>=2.7->nexussy-core==0.1.0) (2.41.5)
+Requirement already satisfied: typing-inspection>=0.4.2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from pydantic>=2.7->nexussy-core==0.1.0) (0.4.2)
+Requirement already satisfied: regex>=2022.1.18 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from tiktoken==0.12.0->litellm>=1.0->nexussy-core==0.1.0) (2026.4.4)
+Requirement already satisfied: requests>=2.26.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from tiktoken==0.12.0->litellm>=1.0->nexussy-core==0.1.0) (2.33.1)
+Requirement already satisfied: huggingface-hub<2.0,>=0.16.4 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (1.12.0)
+Requirement already satisfied: h11>=0.16 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from httpcore==1.*->httpx==0.28.1->litellm>=1.0->nexussy-core==0.1.0) (0.16.0)
+Requirement already satisfied: filelock>=3.10.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (3.29.0)
+Requirement already satisfied: fsspec>=2023.5.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (2026.3.0)
+Requirement already satisfied: hf-xet<2.0.0,>=1.4.3 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (1.4.3)
+Requirement already satisfied: packaging>=20.9 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (26.2)
+Requirement already satisfied: typer in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (0.23.1)
+Requirement already satisfied: charset_normalizer<4,>=2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from requests>=2.26.0->tiktoken==0.12.0->litellm>=1.0->nexussy-core==0.1.0) (3.4.7)
+Requirement already satisfied: urllib3<3,>=1.26 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from requests>=2.26.0->tiktoken==0.12.0->litellm>=1.0->nexussy-core==0.1.0) (2.6.3)
+Requirement already satisfied: shellingham>=1.3.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from typer->huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (1.5.4)
+Requirement already satisfied: rich>=10.11.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from typer->huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (15.0.0)
+Requirement already satisfied: annotated-doc>=0.0.2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from typer->huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (0.0.4)
+Requirement already satisfied: markdown-it-py>=2.2.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from rich>=10.11.0->typer->huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from rich>=10.11.0->typer->huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (2.20.0)
+Requirement already satisfied: mdurl~=0.1 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from markdown-it-py>=2.2.0->rich>=10.11.0->typer->huggingface-hub<2.0,>=0.16.4->tokenizers==0.22.2->litellm>=1.0->nexussy-core==0.1.0) (0.1.2)
+Building wheels for collected packages: nexussy-core
+  Building editable for nexussy-core (pyproject.toml): started
+  Building editable for nexussy-core (pyproject.toml): finished with status 'done'
+  Created wheel for nexussy-core: filename=nexussy_core-0.1.0-0.editable-py3-none-any.whl size=3111 sha256=a4d11df2a01fae95d2179d52027446b4f21c2de5cbb566b6da3ef5fa69ba745f
+  Stored in directory: /tmp/pip-ephem-wheel-cache-6me0_i7u/wheels/f8/f8/5a/889b55282cabdc504330dc783ddffc721c87ce35fa133c222a
+Successfully built nexussy-core
+Installing collected packages: nexussy-core
+  Attempting uninstall: nexussy-core
+    Found existing installation: nexussy-core 0.1.0
+    Uninstalling nexussy-core-0.1.0:
+      Successfully uninstalled nexussy-core-0.1.0
+Successfully installed nexussy-core-0.1.0
+[nexussy] Installing TUI dependencies
+bun install v1.3.13 (bf2e2cec)
+
+Checked 278 installs across 269 packages (no changes) [5.00ms]
+[nexussy] Installing web package
+Obtaining file:///repo/web
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: starlette<1.0,>=0.37 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-web==0.1.0) (0.52.1)
+Requirement already satisfied: uvicorn>=0.29 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-web==0.1.0) (0.46.0)
+Requirement already satisfied: httpx>=0.27 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from nexussy-web==0.1.0) (0.28.1)
+Requirement already satisfied: anyio<5,>=3.6.2 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from starlette<1.0,>=0.37->nexussy-web==0.1.0) (4.13.0)
+Requirement already satisfied: typing-extensions>=4.10.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from starlette<1.0,>=0.37->nexussy-web==0.1.0) (4.15.0)
+Requirement already satisfied: idna>=2.8 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from anyio<5,>=3.6.2->starlette<1.0,>=0.37->nexussy-web==0.1.0) (3.13)
+Requirement already satisfied: certifi in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from httpx>=0.27->nexussy-web==0.1.0) (2026.4.22)
+Requirement already satisfied: httpcore==1.* in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from httpx>=0.27->nexussy-web==0.1.0) (1.0.9)
+Requirement already satisfied: h11>=0.16 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from httpcore==1.*->httpx>=0.27->nexussy-web==0.1.0) (0.16.0)
+Requirement already satisfied: click>=7.0 in /tmp/nexussy-home/venv/lib/python3.11/site-packages (from uvicorn>=0.29->nexussy-web==0.1.0) (8.1.8)
+Building wheels for collected packages: nexussy-web
+  Building editable for nexussy-web (pyproject.toml): started
+  Building editable for nexussy-web (pyproject.toml): finished with status 'done'
+  Created wheel for nexussy-web: filename=nexussy_web-0.1.0-0.editable-py3-none-any.whl size=2794 sha256=b02dadbfd3fa88b5053dedb6e2a24b804b74e3680e2e921a07e3d9d769752f40
+  Stored in directory: /tmp/pip-ephem-wheel-cache-udbnt9ec/wheels/42/03/96/158bf5425043d4572516f1bae4e784d1be38fc551fde289e4e
+Successfully built nexussy-web
+Installing collected packages: nexussy-web
+  Attempting uninstall: nexussy-web
+    Found existing installation: nexussy-web 0.1.0
+    Uninstalling nexussy-web-0.1.0:
+      Successfully uninstalled nexussy-web-0.1.0
+Successfully installed nexussy-web-0.1.0
+[nexussy] Running temporary core health check
+[nexussy] Temporary core health check passed
+[nexussy] Install complete. Start nexussy with: ./nexussy.sh start
+# Post-run assertions
+config_present=true
+env_present=true
+systemd_units_created=false
+shell_rc_nexussy_entries=0
+{"ok":true,"status":"ok","version":"0.1.0","contract_version":"1.0","db_ok":true,"providers_configured":[],"pi_available":false}

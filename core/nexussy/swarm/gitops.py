@@ -43,6 +43,8 @@ async def create_worktree(repo: str, worker_root: str, worker_id: str, base_comm
 
 async def commit_worker(worktree: str, message: str = "worker changes") -> str:
     wt = Path(worktree); await _git(wt, "add", ".")
+    if not await _git(wt, "status", "--porcelain"):
+        return await _git(wt, "rev-parse", "HEAD")
     try:
         await _git(wt, "commit", "-m", message)
     except subprocess.CalledProcessError as e:

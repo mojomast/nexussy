@@ -47,4 +47,5 @@
 - Review-response pass fixed the web dashboard multi-answer interview flow, expanded CI to core/TUI/web/ops, split pipeline stages out of `engine.py`, and added a repeatable live smoke script; required checks passed after every item.
 - Smoke hardening pass fixed smoke parser/schema/PI command issues, removed global spawn mutation, and cleared stale remaining-spec status text; parser harness and full checks pass.
 - Production hardening pass added provider-cache invalidation coverage for secret delete, plan task owner/acceptance/tests repair for R-040, and OpenTUI-default/Pi-TUI-opt-in contract alignment for R-058/R-067; core, TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run pass.
+- Full SPEC coverage pass added evidence for Ubuntu install idempotency and live two-worker swarm workload control; R-063, R-069, and R-075 are now tested with artifacts under `scripts/evidence/`, and final core/TUI/web/ops/shell verification passes.
 <!-- PHASE_PROGRESS_END -->

@@ -132,3 +132,20 @@ NEXUSSY_TUI_RENDERER=pi-tui ./nexussy.sh start-tui
 ```
 
 Use the default OpenTUI path for normal local operation. Use `pi-tui` only when validating Pi TUI compatibility or investigating renderer-specific behavior.
+
+## Install Idempotency Evidence
+
+Full non-interactive install idempotency was verified in an isolated `ubuntu:22.04` Docker container with Python 3.11 from deadsnakes and Bun 1.x installed as prerequisites.
+
+Evidence files:
+
+- `scripts/evidence/install_idempotency_run1.txt`
+- `scripts/evidence/install_idempotency_run2.txt`
+
+Confirmed behavior:
+
+- Both `./install.sh --non-interactive` runs exited 0.
+- The second run reused the existing virtual environment, config, and env file without conflict.
+- No duplicate shell rc entries were added by nexussy (`shell_rc_nexussy_entries=0`).
+- The default non-systemd install path created no user units (`systemd_units_created=false`).
+- A core health check returned `ok=true`, `db_ok=true`, and `contract_version="1.0"` after both runs.

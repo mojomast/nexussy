@@ -907,6 +907,13 @@ async def test_git_worktree_lifecycle(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_commit_worker_allows_no_change_worktree(tmp_path):
+    repo = tmp_path / "repo"; await init_repo(str(repo))
+    wt, _ = await create_worktree(str(repo), str(tmp_path / "workers"), "w-noop")
+    assert await commit_worker(wt, "noop") == await _git(Path(wt), "rev-parse", "HEAD")
+
+
+@pytest.mark.asyncio
 async def test_git_changed_files_uses_new_path_for_rename(tmp_path):
     repo = tmp_path / "repo"; base = await init_repo(str(repo))
     (repo / "old.txt").write_text("old")
