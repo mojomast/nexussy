@@ -13,6 +13,9 @@
 - [smoke-hardening] fix: `PI_COMMAND` space/args handling hardened in script and core.
 - [smoke-hardening] fix: engine compat wrapper no longer mutates `spawn_pi_worker` globally.
 - [smoke-hardening] docs: `FULL_SPEC_REMAINING.md` stale status text cleared.
+- [post-review-hardening] fix: `_command_parts()` resolves executable paths before spawning Pi workers.
+- [post-review-hardening] fix: develop stage handler forwards injected `spawn_fn` test doubles.
+- [post-review-hardening] docs: clarified why `pi` command args are overridden with `--mode rpc`.
 - [local-team-hardening] Documented the supported `pi.command` / `NEXUSSY_PI_COMMAND` sandboxed executor pattern for trusted LAN/VPN use, clarified that bundled `nexussy-pi` is local-dev only and not a security boundary, and added a launcher doctor warning when bundled Pi is selected with a non-localhost bind.
 - [local-team-hardening] Added `NEXUSSY_PROFILE=dev|trusted-lan`; `trusted-lan` enables API-key auth, rejects wildcard CORS, requires an explicit Pi command, warns on bundled `nexussy-pi`, and moves default service logs under `~/.nexussy/logs/`.
 - [local-team-hardening] Added local append-only `~/.nexussy/audit.log` entries for pipeline lifecycle, config changes, secret add/delete, worker spawn, and auth failures, plus `./nexussy.sh logs --audit`.
