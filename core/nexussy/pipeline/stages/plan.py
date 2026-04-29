@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from nexussy.api.schemas import ArtifactRef, ErrorCode, ErrorResponse, SSEEventType, StageName
-from nexussy.pipeline.helpers import devplan_with_anchors, interview_summary
+from nexussy.pipeline.helpers import devplan_with_anchors, devplan_with_task_contract, interview_summary
 
 
 async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs) -> list[ArtifactRef]:
@@ -12,8 +12,11 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
     feedback = f"\n\nReview feedback to address in this plan retry:\n{review_feedback_for_plan}" if review_feedback_for_plan else ""
     plan_text = await engine._provider_text(st, sid, rid, f"Create a devplan.md body with PROGRESS_LOG and NEXT_TASK_GROUP anchors from interview requirements.\n\n{interview}\n\nOriginal description: {req.description}{feedback}", selected_models, allow_mock)
     devplan, warned = devplan_with_anchors(plan_text)
+    devplan, contract_warned, contract_issues = devplan_with_task_contract(devplan)
     if warned:
         await engine.emit(SSEEventType.pipeline_error, sid, rid, ErrorResponse(error_code=ErrorCode.validation_error, message="plan output required anchor repair", details={"stage": "plan"}, retryable=True))
+    if contract_warned:
+        await engine.emit(SSEEventType.pipeline_error, sid, rid, ErrorResponse(error_code=ErrorCode.validation_error, message="plan output required task contract repair", details={"stage": "plan", "issues": contract_issues}, retryable=True))
     handoff = """# Handoff
 <!-- QUICK_STATUS_START -->
 Pipeline plan generated.

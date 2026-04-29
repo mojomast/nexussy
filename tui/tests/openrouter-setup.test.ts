@@ -101,8 +101,8 @@ test("explicit new helper can start a pipeline run", async () => {
   expect(calls[0]).toEqual({ project_name:"build a tiny api with tests", description:"build a tiny api with tests please", auto_approve_interview:true });
 });
 
-test("SPEC Pi TUI is default and OpenTUI requires explicit opt-in", () => {
-  expect(shouldUseOpenTuiRenderer({})).toBe(false);
+test("OpenTUI is default and Pi TUI requires explicit opt-in", () => {
+  expect(shouldUseOpenTuiRenderer({})).toBe(true);
   expect(shouldUseOpenTuiRenderer({ NEXUSSY_TUI_RENDERER:"pi-tui" })).toBe(false);
   expect(shouldUseOpenTuiRenderer({ NEXUSSY_TUI_RENDERER:"opentui" })).toBe(true);
 });

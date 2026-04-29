@@ -49,7 +49,7 @@ The result is a traceable run with durable artifacts, resumable checkpoints, and
 
 ```text
 tui/ nexussy-tui
-  TypeScript + Bun + OpenTUI/Pi-compatible control surface
+  TypeScript + Bun + OpenTUI default, Pi TUI opt-in control surface
   Uses only core HTTP and SSE APIs
 
 core/ nexussy-core
@@ -66,6 +66,8 @@ Default local ports:
 - Core: `http://127.0.0.1:7771`
 - Web dashboard: `http://127.0.0.1:7772`
 - TUI: terminal process only, no port
+
+The TUI uses the OpenTUI renderer by default. Set `NEXUSSY_TUI_RENDERER=pi-tui` when launching `nexussy-tui` or `./nexussy.sh start-tui` to use the Pi TUI compatibility renderer.
 
 ## Repository Layout
 

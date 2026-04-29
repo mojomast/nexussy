@@ -122,3 +122,13 @@ NEXUSSY_SMOKE_PROJECT_DIR=/path/to/git/repo NEXUSSY_PI_COMMAND=/path/to/pi ./scr
 Expected pass output includes a small table with `run_id`, `session_id`, stage timing rows, changed-file count, total `cost_usd`, and the final line `SMOKE PASS`.
 
 `SMOKE FAIL: ...` means the script stopped at the named prerequisite, pipeline, or artifact assertion. Fix the reported prerequisite or inspect the printed `run_id` in the dashboard/API before rerunning.
+
+## TUI Renderer
+
+The terminal UI uses OpenTUI by default for interactive no-run mode. To run the Pi TUI compatibility renderer instead, set:
+
+```bash
+NEXUSSY_TUI_RENDERER=pi-tui ./nexussy.sh start-tui
+```
+
+Use the default OpenTUI path for normal local operation. Use `pi-tui` only when validating Pi TUI compatibility or investigating renderer-specific behavior.

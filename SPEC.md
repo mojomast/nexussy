@@ -94,7 +94,7 @@ Subagent B and Subagent C MUST build against mock HTTP/SSE fixtures derived from
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │ tui/ nexussy-tui                                                 │
-│ TypeScript + Bun + @mariozechner/pi-tui                          │
+│ TypeScript + Bun + OpenTUI default, Pi TUI opt-in                 │
 │ Consumes core HTTP and SSE only                                  │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ HTTP + SSE
@@ -1359,7 +1359,7 @@ A MUST implement:
 
 ## 18. TUI Contract
 
-B MUST implement a TypeScript/Bun TUI using `@mariozechner/pi-tui`, `@mariozechner/pi-ai`, and `@mariozechner/pi-agent-core` package APIs available through npm.
+B MUST implement a TypeScript/Bun TUI using OpenTUI as the default renderer. The previous Pi TUI renderer remains available with `NEXUSSY_TUI_RENDERER=pi-tui`, and B MUST keep the `@mariozechner/pi-tui`, `@mariozechner/pi-ai`, and `@mariozechner/pi-agent-core` package probes/compatibility paths available through npm.
 
 B MUST communicate with A exclusively through `tui/src/client.ts`.
 

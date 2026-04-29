@@ -540,10 +540,11 @@ async def test_provider_text_retries_per_stage_config(tmp_path, monkeypatch):
 def test_plan_devplan_content_matches_mock_provider_output(monkeypatch, tmp_path):
     monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
     monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
-    expected = "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- provider plan\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: provider task.\n<!-- NEXT_TASK_GROUP_END -->\n"
+    provider_plan = "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- provider plan\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: provider task.\n<!-- NEXT_TASK_GROUP_END -->\n"
+    expected = "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- provider plan\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: provider task. Acceptance: implementation satisfies the requested behavior. Tests: run relevant project tests.\n<!-- NEXT_TASK_GROUP_END -->\n"
     async def fake_provider(self, st, sid, rid, prompt, selected_models, allow_mock):
         if st == StageName.plan:
-            return f"```markdown\n{expected}```"
+            return f"```markdown\n{provider_plan}```"
         if st == StageName.design:
             return "# Goals\nBuild it.\n# Architecture\nSimple.\n# Dependencies\nPython.\n# Risks\nLow.\n# Test Strategy\nPytest.\n"
         if st == StageName.validate:
@@ -559,6 +560,32 @@ def test_plan_devplan_content_matches_mock_provider_output(monkeypatch, tmp_path
         assert ev[-1]["payload"]["final_status"] == "passed"
         content = c.get("/pipeline/artifacts/devplan", params={"session_id":r["session_id"]}).json()["content_text"]
         assert content == expected
+
+
+def test_plan_task_contract_repairs_owner_acceptance_and_tests(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    async def fake_provider(self, st, sid, rid, prompt, selected_models, allow_mock):
+        if st == StageName.plan:
+            return "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- provider plan\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] build feature\n<!-- NEXT_TASK_GROUP_END -->\n"
+        if st == StageName.design:
+            return "# Goals\nBuild it.\n# Architecture\nSimple.\n# Dependencies\nPython.\n# Risks\nLow.\n# Test Strategy\nPytest.\n"
+        if st == StageName.validate:
+            return '{"passed": true, "issues": []}'
+        return "[]"
+    monkeypatch.setattr(Engine, "_provider_text", fake_provider)
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Plan Contract","description":"small api","auto_approve_interview":True,"stop_after_stage":"plan","metadata":{"mock_provider":True}}).json()
+        ev = _wait_done(c, r["run_id"])
+        assert ev[-1]["payload"]["final_status"] == "passed"
+        content = c.get("/pipeline/artifacts/devplan", params={"session_id":r["session_id"]}).json()["content_text"]
+        assert "- [ ] A: build feature" in content
+        assert "Acceptance:" in content
+        assert "Tests:" in content
+        assert any(e["type"] == "pipeline_error" and "task contract repair" in e["payload"]["message"] for e in ev)
 
 
 def test_provider_mock_is_explicit(tmp_path, monkeypatch):
@@ -783,8 +810,12 @@ def test_secret_updates_invalidate_provider_env_cache(monkeypatch, tmp_path):
         assert c.put("/secrets/OPENAI_API_KEY", json={"value":"sk-new"}).status_code == 200
         second = c.post("/pipeline/start", json={"project_name":"Cache Two","description":"small api","auto_approve_interview":True,"stop_after_stage":"interview","metadata":{"mock_provider":True}}).json()
         _wait_done(c, second["run_id"])
+        assert c.delete("/secrets/OPENAI_API_KEY").status_code == 200
+        third = c.post("/pipeline/start", json={"project_name":"Cache Three","description":"small api","auto_approve_interview":True,"stop_after_stage":"interview","metadata":{"mock_provider":True}}).json()
+        _wait_done(c, third["run_id"])
     assert "sk-old" in seen
-    assert seen[-1] == "sk-new"
+    assert "sk-new" in seen
+    assert seen[-1] is None
 
 
 @pytest.mark.asyncio

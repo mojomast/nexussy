@@ -2,7 +2,7 @@
 
 `SPEC_COVERAGE.md` was re-audited after the core review-gap and TUI handoff work. The matrix now distinguishes deterministic route/helper coverage from full contract semantics.
 
-Current coverage summary: core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, and the full live provider-plus-installed-Pi develop path have current evidence. Remaining partial rows are limited to SPEC/default-renderer decisions and install side-effect checks.
+Current coverage summary: core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, plan task validation, TUI default-renderer contract, and the full live provider-plus-installed-Pi develop path have current evidence. Remaining partial rows are limited to install side-effect checks.
 
 ## Execution Model
 
@@ -12,8 +12,6 @@ Current active cycle: none. Local/team hardening is complete, including sandboxe
 
 ## Highest-Priority Partial Rows
 
-- R-040: Provider plan output, anchor repair, and review feedback injection are tested, but plan task owner/acceptance/tests validation remains incomplete.
-- R-058/R-067: TUI tests pass with active composer commands and handoff/panel coverage, but SPEC/runtime alignment is incomplete. Cycle 3 kept OpenTUI as the default runtime and Pi TUI as opt-in; a SPEC/docs decision is needed to make that official or restore Pi TUI as default.
 - R-063/R-069: Installer basics, dry-run, config/env idempotency, `--systemd-user` preservation, launcher status/doctor/start-tui/update wiring, and shell syntax pass, but full noninteractive install twice remains unrun to avoid package/service side effects in this environment.
 
 ## Implemented But Untested Rows

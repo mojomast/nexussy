@@ -173,7 +173,7 @@ export function useIsolatedSetupCore(client:CoreClient): void {
 }
 
 export function shouldUseOpenTuiRenderer(env:{ NEXUSSY_TUI_RENDERER?: string }=process.env as any): boolean {
-  return env.NEXUSSY_TUI_RENDERER === "opentui";
+  return env.NEXUSSY_TUI_RENDERER !== "pi-tui";
 }
 
 export async function ensureCoreForSetup(client:CoreClient, output:NodeJS.WriteStream=process.stdout, start=startCoreProcess): Promise<CoreProcess|undefined> {

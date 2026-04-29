@@ -16,6 +16,10 @@
 - [post-review-hardening] fix: `_command_parts()` resolves executable paths before spawning Pi workers.
 - [post-review-hardening] fix: develop stage handler forwards injected `spawn_fn` test doubles.
 - [post-review-hardening] docs: clarified why `pi` command args are overridden with `--mode rpc`.
+- [production-hardening] test: secret delete now has provider-cache invalidation coverage alongside secret update coverage.
+- [production-hardening] fix: plan artifacts repair missing task owner, acceptance criteria, and tests to close R-040.
+- [production-hardening] fix: TUI no-run mode now defaults to OpenTUI, with Pi TUI available through `NEXUSSY_TUI_RENDERER=pi-tui`.
+- [production-hardening] docs: SPEC, README, OPERATIONS, coverage, and triage artifacts now reflect the OpenTUI default and remaining install-side-effect evidence only.
 - [local-team-hardening] Documented the supported `pi.command` / `NEXUSSY_PI_COMMAND` sandboxed executor pattern for trusted LAN/VPN use, clarified that bundled `nexussy-pi` is local-dev only and not a security boundary, and added a launcher doctor warning when bundled Pi is selected with a non-localhost bind.
 - [local-team-hardening] Added `NEXUSSY_PROFILE=dev|trusted-lan`; `trusted-lan` enables API-key auth, rejects wildcard CORS, requires an explicit Pi command, warns on bundled `nexussy-pi`, and moves default service logs under `~/.nexussy/logs/`.
 - [local-team-hardening] Added local append-only `~/.nexussy/audit.log` entries for pipeline lifecycle, config changes, secret add/delete, worker spawn, and auth failures, plus `./nexussy.sh logs --audit`.

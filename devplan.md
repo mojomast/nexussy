@@ -44,6 +44,7 @@
 - Local/team hardening complete: sandboxed executor docs and doctor warning, `dev`/`trusted-lan` profiles, local audit log, operations backup/restore docs, API key rotation plus auth-failure rate limiting, and full live configured-provider plus installed-Pi develop smoke were added without SaaS/multi-tenant features. Final checks passed across core, TUI, web, shell syntax, ops tests, and installer dry-run.
 - Review-response pass complete: fixed dashboard multi-question interview submission, expanded CI into core/TUI/web/ops jobs using `python3`, split pipeline helpers/stages so `engine.py` is 299 lines, and added `scripts/smoke_integration.sh` plus operations docs. Full verification passed after every item.
 - Smoke hardening pass complete: smoke SSE parsing, changed-file field usage, Pi command path/args handling, engine spawn dependency injection, and stale remaining-spec text were fixed with parser harness coverage and full verification.
+- Production hardening pass complete: smoke and spawn fixes were reverified, secret set/delete provider-cache invalidation has regression coverage, R-040 plan tasks now repair missing owner/acceptance/tests, and R-058/R-067 now officially use OpenTUI by default with Pi TUI opt-in. Full verification passed across core, TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -76,6 +77,7 @@
 - [✅] N1: Local/team hardening raised local/trusted-LAN readiness with executor docs, profiles, audit logging, operations docs, rotate-key/auth rate limits, and R-080 live provider-plus-Pi evidence.
 - [✅] O1: Review-response architecture fixes complete for web multi-answer interviews, CI matrix, pipeline stage extraction, and live smoke evidence.
 - [✅] P1: Smoke hardening fixes complete for parser correctness, Pi command handling, spawn test isolation, and stale status docs.
+- [✅] Q1: Production hardening fixes complete for provider cache invalidation coverage, plan task contract repair, OpenTUI default contract alignment, docs, and traceability artifacts.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

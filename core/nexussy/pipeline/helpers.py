@@ -167,8 +167,43 @@ def devplan_with_anchors(text: str) -> tuple[str, bool]:
         if "<!-- PROGRESS_LOG_START -->" not in body:
             body = "# DevPlan\n\n<!-- PROGRESS_LOG_START -->\n- Created by nexussy.\n<!-- PROGRESS_LOG_END -->\n\n" + body.lstrip()
         return body.rstrip() + "\n", True
-    fallback = "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- Created by nexussy.\n- Warning: provider plan output lacked a task list with NEXT_TASK_GROUP anchors.\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: implement requested work. Acceptance: tests pass.\n<!-- NEXT_TASK_GROUP_END -->\n"
+    fallback = "# DevPlan\n<!-- PROGRESS_LOG_START -->\n- Created by nexussy.\n- Warning: provider plan output lacked a task list with NEXT_TASK_GROUP anchors.\n<!-- PROGRESS_LOG_END -->\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] A: implement requested work. Acceptance: tests pass. Tests: run relevant project tests.\n<!-- NEXT_TASK_GROUP_END -->\n"
     return fallback, True
+
+
+def devplan_with_task_contract(text: str) -> tuple[str, bool, list[str]]:
+    start = "<!-- NEXT_TASK_GROUP_START -->"
+    end = "<!-- NEXT_TASK_GROUP_END -->"
+    if start not in text or end not in text or text.index(start) > text.index(end):
+        return text, True, ["missing NEXT_TASK_GROUP anchors"]
+    before, rest = text.split(start, 1)
+    tasks, after = rest.split(end, 1)
+    issues: list[str] = []
+    fixed: list[str] = []
+    task_re = re.compile(r"^(\s*- \[ \]\s*)(.*)$")
+    task_count = 0
+    for line in tasks.splitlines():
+        match = task_re.match(line)
+        if not match:
+            fixed.append(line)
+            continue
+        task_count += 1
+        prefix, body = match.groups()
+        body = body.strip()
+        if not re.match(r"(?:[A-D]|core|tui|web|ops|docs|backend|frontend|qa|orchestrator)\s*:", body, re.I):
+            body = "A: " + body
+            issues.append("task missing owner")
+        if "acceptance" not in body.lower():
+            body += " Acceptance: implementation satisfies the requested behavior."
+            issues.append("task missing acceptance criteria")
+        if "test" not in body.lower():
+            body += " Tests: run relevant project tests."
+            issues.append("task missing tests")
+        fixed.append(prefix + body)
+    if task_count == 0:
+        fixed.append("- [ ] A: implement requested work. Acceptance: tests pass. Tests: run relevant project tests.")
+        issues.append("missing tasks")
+    return before + start + "\n" + "\n".join(fixed).strip() + "\n" + end + after, bool(issues), sorted(set(issues))
 
 
 def parse_interview_questions(text: str) -> list[InterviewQuestionAnswer]:
