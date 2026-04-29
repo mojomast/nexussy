@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, json, os, pathlib, signal, sys
+import asyncio, json, os, pathlib, shlex, signal, sys
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -96,8 +96,9 @@ class PiRPCProcess:
 
 async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, project_root: str, worktree: str, core_base_url: str = "http://127.0.0.1:7771") -> PiRPCProcess:
     env = os.environ.copy() | {"NEXUSSY_RUN_ID":run_id,"NEXUSSY_WORKER_ID":worker_id,"NEXUSSY_WORKER_ROLE":role,"NEXUSSY_PROJECT_ROOT":project_root,"NEXUSSY_WORKTREE":worktree,"NEXUSSY_CORE_BASE_URL":core_base_url}
-    command = config.pi.command
-    args = list(config.pi.args)
+    command_parts = _command_parts(config.pi.command)
+    command = command_parts[0]
+    args = command_parts[1:] + list(config.pi.args)
     default_model = getattr(config.providers, "default_model", None) or getattr(config.stages.develop, "model", "openai/gpt-5.5-fast")
     env.setdefault("PI_DEFAULT_MODEL", default_model)
     if command == "pi":
@@ -119,6 +120,12 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     rpc = PiRPCProcess(proc, worker_id=worker_id, protocol="pi" if command == "pi" else "jsonrpc")
     rpc._tasks = [asyncio.create_task(_drain(rpc, proc.stdout, "stdout", worker_id, config.pi.max_stdout_line_bytes)), asyncio.create_task(_drain(rpc, proc.stderr, "stderr", worker_id, config.pi.max_stdout_line_bytes))]
     return rpc
+
+def _command_parts(raw: str) -> list[str]:
+    path = pathlib.Path(raw).expanduser()
+    if path.exists():
+        return [str(path)]
+    return shlex.split(raw)
 
 def _write_pi_settings(worktree: pathlib.Path, default_model: str) -> None:
     settings = worktree / ".pi" / "agent" / "settings.json"

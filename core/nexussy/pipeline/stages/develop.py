@@ -58,10 +58,10 @@ async def spawn_workers(engine, req, detail, rid, root, selected_models):
     workers_root = main.parent / "workers"
     base = await init_repo(str(main))
     await engine.emit(SSEEventType.git_event, sid, rid, GitEventPayload(action=GitEventAction.repo_initialized, commit_sha=base, message="repo initialized"))
-    pi_cmd = req.metadata.get("fake_pi_command") or os.environ.get("NEXUSSY_PI_COMMAND") or engine.config.pi.command
+    pi_cmd = req.metadata.get("fake_pi_command") or req.metadata.get("pi_command") or os.environ.get("NEXUSSY_PI_COMMAND") or engine.config.pi.command
     cfg = engine.config.model_copy(deep=True)
     cfg.pi.command = pi_cmd
-    cfg.pi.args = req.metadata.get("fake_pi_args") or cfg.pi.args
+    cfg.pi.args = req.metadata.get("fake_pi_args") or req.metadata.get("pi_args") or cfg.pi.args
     requested_roles = req.metadata.get("worker_roles") or ["backend", "frontend"]
     roles = []
     for raw in requested_roles:

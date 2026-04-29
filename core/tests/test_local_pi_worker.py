@@ -114,3 +114,28 @@ async def test_real_pi_command_writes_settings_and_uses_rpc_mode(tmp_path, monke
     assert (tmp_path / "model.txt").read_text() == "openai/test-model"
     settings = (tmp_path / ".pi" / "agent" / "settings.json").read_text()
     assert "openai/test-model" in settings
+
+
+@pytest.mark.asyncio
+async def test_pi_command_path_with_spaces_uses_exec_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUSSY_DISABLE_BUNDLED_PI", "1")
+    bin_dir = tmp_path / "bin with spaces"
+    bin_dir.mkdir()
+    child = bin_dir / "pi worker"
+    child.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "pathlib.Path('argv.txt').write_text(' '.join(sys.argv[1:]))\n"
+        "line=sys.stdin.readline()\n"
+        "msg=json.loads(line)\n"
+        "print(json.dumps({'id':msg['id'],'type':'response','success':True}), flush=True)\n"
+    )
+    child.chmod(0o755)
+    cfg = load_config({"pi": {"command": str(child), "args": ["--flag"], "shutdown_timeout_s": 0}})
+
+    rpc = await spawn_pi_worker(cfg, "run", "worker", "backend", str(tmp_path), str(tmp_path))
+    req_id = await rpc.request("task")
+    assert (await rpc.wait_response(req_id, 5))["success"] is True
+    await rpc.stop(timeout_s=.1)
+
+    assert (tmp_path / "argv.txt").read_text() == "--flag"
