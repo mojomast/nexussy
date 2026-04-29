@@ -249,7 +249,9 @@ Local development modes:
 
 ## Pi Worker Execution
 
-The develop stage uses the Pi-compatible JSON-RPC subprocess adapter for workers. Fresh installs default to the bundled `nexussy-pi` shim (`pi.command: "nexussy-pi"`, `pi.args: []`), so no separate npm install is required for local operation. Set `NEXUSSY_PI_COMMAND=pi` or `pi.command: "pi"` when you want the installed Pi CLI instead of the bundled shim.
+The develop stage uses the Pi-compatible JSON-RPC subprocess adapter for workers. Fresh installs default to the bundled `nexussy-pi` shim (`pi.command: "nexussy-pi"`, `pi.args: []`), so no separate npm install is required for local workstation operation.
+
+`nexussy-pi` is a convenience worker for local development. It strips the child environment and applies local time/output caps, but it is not a security boundary for untrusted code. For a small trusted team on a LAN or private VPN, set `NEXUSSY_PI_COMMAND` or `pi.command` to an operator-managed sandboxed executor. That executor can wrap the installed Pi CLI, a container runner, a VM/jail, or another local policy layer that your team trusts.
 
 Worker behavior:
 
@@ -265,7 +267,15 @@ Using the real Pi CLI:
 |---|---|
 | Install Pi | `npm install -g @mariozechner/pi-coding-agent` |
 | Select Pi CLI | Add `NEXUSSY_PI_COMMAND=pi` to `~/.nexussy/.env`, or set `pi.command: "pi"` in `~/.nexussy/nexussy.yaml` |
-| Runtime mode | Core launches the real CLI as `pi --rpc-mode` and writes `.pi/agent/settings.json` in the worker worktree |
+| Runtime mode | Core launches the real CLI as `pi --mode rpc` and writes `.pi/agent/settings.json` in the worker worktree |
+
+Using a sandbox wrapper for trusted LAN/VPN use:
+
+```bash
+NEXUSSY_PI_COMMAND=/usr/local/bin/nexussy-worker-sandbox
+```
+
+The wrapper must speak the same newline-delimited JSON-RPC contract as Pi RPC mode. `./nexussy.sh doctor` warns when the bundled `nexussy-pi` worker is selected while core or web is bound to a non-localhost address.
 
 Set provider keys through `/secrets`, the TUI setup flow, or environment variables. Core passes configured provider environment into the worker subprocess without hardcoding keys.
 
@@ -334,9 +344,34 @@ core:
 ```
 
 - The installer-generated default is `core.cors_allow_origins: ["http://127.0.0.1:7772"]` for the local web dashboard.
-- Set `NEXUSSY_ENV=production` for production mode.
-- In production, wildcard CORS is rejected unless `NEXUSSY_ALLOW_WILDCARD_CORS=1` is explicitly set.
-- Deployment automation should write allowed origins to `core.cors_allow_origins` in `nexussy.yaml` before startup.
+- For trusted LAN/VPN use, write the exact dashboard origins to `core.cors_allow_origins` before startup.
+- Wildcard CORS is rejected by the `trusted-lan` deployment profile.
+
+Deployment profiles:
+
+| Profile | Use | Behavior |
+|---|---|---|
+| `dev` | Single-developer workstation | Current defaults: localhost bind, auth optional, bundled `nexussy-pi` allowed, permissive local development behavior. |
+| `trusted-lan` | Small trusted team on LAN/VPN | Enables API-key auth, rejects wildcard CORS, requires an explicit `pi.command` or `NEXUSSY_PI_COMMAND`, warns if that command is bundled `nexussy-pi`, and writes service logs under `~/.nexussy/logs/` when defaults are still `/tmp`. |
+
+Set the profile in `~/.nexussy/.env`:
+
+```bash
+NEXUSSY_PROFILE=trusted-lan
+NEXUSSY_API_KEY=<shared-team-key>
+NEXUSSY_PI_COMMAND=/usr/local/bin/nexussy-worker-sandbox
+NEXUSSY_CORS_ALLOW_ORIGINS=http://127.0.0.1:7772,http://team-dashboard.local:7772
+```
+
+There is no cloud or SaaS profile. `trusted-lan` is for operator-owned machines on a private network.
+
+Rotate the local API key with:
+
+```bash
+./nexussy.sh rotate-key
+```
+
+The command updates `~/.nexussy/.env`, prints the new key once, and does not write the key to service logs. Failed API-key attempts are recorded in `~/.nexussy/audit.log` and temporarily rate-limited in SQLite.
 
 Other safeguards:
 
@@ -365,6 +400,7 @@ Common environment overrides:
 - `NEXUSSY_HOME`
 - `NEXUSSY_CONFIG`
 - `NEXUSSY_ENV_FILE`
+- `NEXUSSY_PROFILE`
 - `NEXUSSY_PROJECTS_DIR`
 - `NEXUSSY_CORE_HOST`
 - `NEXUSSY_CORE_PORT`
@@ -374,8 +410,6 @@ Common environment overrides:
 - `NEXUSSY_AUTH_ENABLED`
 - `NEXUSSY_DEFAULT_MODEL`
 - `NEXUSSY_PI_COMMAND`
-- `NEXUSSY_ENV`
-- `NEXUSSY_ALLOW_WILDCARD_CORS`
 
 ## Verification
 
@@ -392,6 +426,8 @@ bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh
 ```
 
 Current traceability status is tracked in `SPEC_COVERAGE.md` and `FULL_SPEC_REMAINING.md`. At the time of this README update, no rows are blocked on missing external tooling. The main remaining partial evidence item is a single full production-provider plus live-Pi develop run because that can spend provider tokens and modify a throwaway worktree.
+
+For backup, restore, schema migration, and audit-log operations, see `OPERATIONS.md`.
 
 ## Development Notes
 

@@ -17,6 +17,7 @@ from nexussy.api.schemas import (
     WorkerTaskStatus,
 )
 from nexussy.artifacts.store import safe_write, artifact_path
+from nexussy.audit import write_audit
 from nexussy.checkpoint import STAGE_ORDER, latest_checkpoint, resume_from_checkpoint, save_checkpoint
 from nexussy.providers import active_rate_limit, complete, effective_secret_env, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
 from nexussy.session import SessionStatus, now_utc, transition_session_status
@@ -233,6 +234,7 @@ class Engine:
             usage=self._run_usage.get(run.run_id, TokenUsage())
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, current_stage=?, usage_json=? WHERE run_id=?",("passed",now_utc().isoformat(),prev.value if prev else None,usage.model_dump_json(),run.run_id)))
             await transition_session_status(self.db, detail.session.session_id, SessionStatus.passed)
+            write_audit(self.config.home_dir, "pipeline_stop", run_id=run.run_id, session_id=detail.session.session_id, status="passed")
             await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.passed,summary="pipeline completed",artifacts=artifacts,usage=usage))
         except asyncio.CancelledError:
             fut=self.interview_waiters.pop(detail.session.session_id, None)
@@ -242,6 +244,7 @@ class Engine:
             usage=self._run_usage.get(run.run_id, TokenUsage())
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, usage_json=? WHERE run_id=?",("cancelled",now_utc().isoformat(),usage.model_dump_json(),run.run_id)))
             await transition_session_status(self.db, detail.session.session_id, SessionStatus.cancelled)
+            write_audit(self.config.home_dir, "pipeline_cancel", run_id=run.run_id, session_id=detail.session.session_id, status="cancelled")
             raise
         except Exception as e:
             er=ErrorResponse(error_code=ErrorCode.stage_failed,message=str(e),retryable=False)
@@ -250,6 +253,7 @@ class Engine:
             usage=self._run_usage.get(run.run_id, TokenUsage())
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, usage_json=? WHERE run_id=?",("failed",now_utc().isoformat(),usage.model_dump_json(),run.run_id)))
             await transition_session_status(self.db, detail.session.session_id, SessionStatus.failed)
+            write_audit(self.config.home_dir, "pipeline_stop", run_id=run.run_id, session_id=detail.session.session_id, status="failed")
             await self.emit(SSEEventType.pipeline_error, detail.session.session_id, run.run_id, er)
             await self.emit(SSEEventType.done, detail.session.session_id, run.run_id, DonePayload(final_status=RunStatus.failed,summary="pipeline failed",artifacts=artifacts,usage=usage,error=er))
     async def _save_art(self, run_id, session_id, root, kind, text, phase=None):

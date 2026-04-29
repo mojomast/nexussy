@@ -80,8 +80,9 @@ Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loop
 
 # CURRENT CORE CAPABILITIES
 
-- Bundled worker command: `nexussy-pi`, backed by `nexussy.swarm.local_pi_worker`, speaks Pi-compatible newline-delimited JSON-RPC over stdio.
-- Real Pi command: set `NEXUSSY_PI_COMMAND=pi`; core writes `.pi/agent/settings.json` and launches `pi --rpc-mode`.
+- Deployment profiles: `NEXUSSY_PROFILE=dev` preserves local workstation defaults; `NEXUSSY_PROFILE=trusted-lan` enables API-key auth, rejects wildcard CORS, requires explicit `pi.command`/`NEXUSSY_PI_COMMAND`, warns on bundled `nexussy-pi`, and prefers `~/.nexussy/logs/` file logging.
+- Bundled worker command: `nexussy-pi`, backed by `nexussy.swarm.local_pi_worker`, speaks Pi-compatible newline-delimited JSON-RPC over stdio for local workstation development.
+- Real or sandboxed Pi command: set `NEXUSSY_PI_COMMAND` or `pi.command` to an operator-managed executor; core writes `.pi/agent/settings.json` and launches real Pi as `pi --mode rpc` through the Pi RPC adapter.
 - MCP tools: `nexussy_start_pipeline`, `nexussy_get_status`, `nexussy_list_sessions`, `nexussy_get_artifacts`, `nexussy_interview_answer`, `nexussy_pause`, `nexussy_resume`, `nexussy_cancel`, `nexussy_inject`, `nexussy_worker_spawn`, `nexussy_worker_assign`, and `nexussy_list_workers`.
 - Worker control APIs: `/swarm/workers/{worker_id}/inject`, `/swarm/workers/{worker_id}/stop`, `/swarm/workers/{worker_id}/stream`, `/swarm/spawn`, and `/swarm/assign` are wired to DB state and SSE/RPC where applicable.
 - Core static dashboard: `/ui` serves zero-build HTML/JS/CSS for session polling, run status, SSE logs, and interview answers.
@@ -97,8 +98,11 @@ The bundled `local_pi_worker` bash tool uses a stripped environment:
 | Output cap | 64KB combined stdout+stderr |
 | Working dir | Always `cwd=worktree` |
 
-**This worker is for local development only.** For multi-tenant production,
-set `pi.command` in `nexussy.yaml` (or `NEXUSSY_PI_COMMAND`) to a sandboxed executor.
+**This worker is for local development only.** It is not a security boundary.
+For small trusted-team LAN/VPN use, set `pi.command` in `nexussy.yaml` (or
+`NEXUSSY_PI_COMMAND`) to a sandboxed executor managed by the operator. The
+sandbox wrapper can launch real Pi, a container, a VM/jail, or another local
+policy layer as long as it speaks the Pi-compatible JSON-RPC contract.
 The prior regex denylist (`_DANGEROUS_BASH`) was removed - it was bypassable
 and created false security confidence.
 

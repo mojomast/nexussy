@@ -99,17 +99,24 @@ mkdir -p "$RUN_HOME/run" "$RUN_HOME/logs" || exit 1
   printf '999999\n' > "$WEB_PID"
   cleanup_stale_pid "$WEB_PID"
   printf 'core log line\n' > "$CORE_LOG"
+  printf 'audit log line\n' > "$NEXUSSY_HOME/audit.log"
   show_logs --no-follow core >"$OUT_DIR/logs.out" 2>&1
+  show_logs --no-follow --audit >"$OUT_DIR/audit-logs.out" 2>&1
   export NEXUSSY_PI_COMMAND="nexussy-missing-pi-command-$$"
   unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY FIREWORKS_API_KEY XAI_API_KEY GLM_API_KEY ZAI_API_KEY REQUESTY_API_KEY AETHER_API_KEY OLLAMA_BASE_URL
   python_cmd() { return 1; }
   doctor >"$OUT_DIR/doctor.out" 2>&1 || true
+  unset NEXUSSY_PI_COMMAND
+  CORE_HOST=0.0.0.0
+  doctor >"$OUT_DIR/doctor-lan-bundled.out" 2>&1 || true
   kill "$SLEEP_PID" >/dev/null 2>&1 || true
 )
 start_text=$(tr '\n' ' ' < "$OUT_DIR/start-core.out" 2>/dev/null || true)
 status_text=$(tr '\n' ' ' < "$OUT_DIR/status.out" 2>/dev/null || true)
 logs_text=$(tr '\n' ' ' < "$OUT_DIR/logs.out" 2>/dev/null || true)
+audit_logs_text=$(tr '\n' ' ' < "$OUT_DIR/audit-logs.out" 2>/dev/null || true)
 doctor_text=$(tr '\n' ' ' < "$OUT_DIR/doctor.out" 2>/dev/null || true)
+doctor_lan_text=$(tr '\n' ' ' < "$OUT_DIR/doctor-lan-bundled.out" 2>/dev/null || true)
 sleep_pid=$(tr -d '\n' < "$OUT_DIR/sleep-pid" 2>/dev/null || true)
 assert_contains "$start_text" "core already running" "duplicate core start does not spawn"
 assert_contains "$status_text" "config: $RUN_HOME/nexussy.yaml" "status reports config path"
@@ -118,10 +125,12 @@ assert_contains "$status_text" "web:   127.0.0.1 port=7772 pid=$sleep_pid health
 assert_contains "$status_text" "tui:   pid=- state=stopped" "status reports tui pid state"
 assert_no_file "$RUN_HOME/run/web.pid" "stale PID cleanup removes dead PID"
 assert_contains "$logs_text" "core log line" "logs --no-follow prints log contents"
+assert_contains "$audit_logs_text" "audit log line" "logs --audit prints audit log contents"
 assert_contains "$doctor_text" "nexussy doctor" "doctor prints diagnostics header"
 assert_contains "$doctor_text" "pi command: missing (install Pi CLI or set NEXUSSY_PI_COMMAND)" "doctor reports missing Pi command remediation"
 assert_contains "$doctor_text" "provider keys" "doctor reports provider key readiness"
 assert_contains "$doctor_text" "mock mode only" "doctor explains missing provider key behavior"
+assert_contains "$doctor_lan_text" "bundled nexussy-pi is local-dev only" "doctor warns bundled Pi on non-localhost bind"
 
 # Health-wait failures must clean up the process that was just started and its
 # PID file, rather than leaving an orphaned service around a stale PID.
@@ -189,6 +198,19 @@ assert_contains "$tool_text" "git:$ROOT_DIR:pull" "update runs git pull from rep
 assert_contains "$tool_text" "python:$ROOT_DIR:-m pip install -e core/" "update reinstalls core"
 assert_contains "$tool_text" "python:$ROOT_DIR:-m pip install -e web/" "update reinstalls web"
 assert_contains "$tool_text" "bun:$ROOT_DIR/tui:install" "update runs bun install from tui directory"
+
+ROTATE_HOME="$TMP_ROOT/rotate-home"
+mkdir -p "$ROTATE_HOME" || exit 1
+(
+  export NEXUSSY_SH_TEST_MODE=1 NEXUSSY_HOME="$ROTATE_HOME" NEXUSSY_CONFIG="$ROTATE_HOME/nexussy.yaml" NEXUSSY_ENV_FILE="$ROTATE_HOME/.env"
+  # shellcheck source=nexussy.sh
+  . "$ROOT_DIR/nexussy.sh"
+  rotate_key >"$OUT_DIR/rotate-key.out" 2>&1
+)
+rotate_text=$(tr '\n' ' ' < "$OUT_DIR/rotate-key.out" 2>/dev/null || true)
+rotate_env=$(tr '\n' ' ' < "$ROTATE_HOME/.env" 2>/dev/null || true)
+assert_contains "$rotate_text" "New API key (shown once): nx_" "rotate-key prints new key once"
+assert_contains "$rotate_env" "NEXUSSY_API_KEY=nx_" "rotate-key writes env file key"
 
 # Refuse ambiguous systemd units for unsupported paths instead of writing
 # unescaped WorkingDirectory/Environment/ExecStart values.

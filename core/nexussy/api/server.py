@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio, json, logging, multiprocessing, os, pathlib, shutil, yaml
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, StreamingResponse
@@ -11,6 +11,7 @@ from pydantic import ValidationError
 import uvicorn
 
 from nexussy import __version__
+from nexussy.audit import write_audit
 from nexussy.api.schemas import (
     ArtifactContentResponse, ArtifactManifestResponse, ArtifactRef,
     AssistantReplyRequest, AssistantReplyResponse, Blocker, BlockerCreateRequest,
@@ -29,7 +30,7 @@ from nexussy.db import Database
 from nexussy.mcp import call_tool, list_tools
 from nexussy.pipeline.engine import Engine
 from nexussy.pipeline.engine import ProviderStartError
-from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, provider_error_for_model, provider_for_model, secret_names, secret_summary, set_secret
+from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, persist_rate_limit, provider_error_for_model, provider_for_model, read_env_file, secret_names, secret_summary, set_secret
 from nexussy.security import sanitize_path
 from nexussy.session import now_utc
 
@@ -189,8 +190,17 @@ async def auth(request):
     if request.url.path == "/health": return None
     if config is None or db is None or engine is None:
         await ensure_db()
-    if config.auth.enabled and request.headers.get(config.auth.header_name) != os.environ.get(config.auth.api_key_env):
-        return err(ErrorCode.unauthorized,"unauthorized",401)
+    if config.auth.enabled:
+        env_path = pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", "~/.nexussy/.env")).expanduser()
+        expected = os.environ.get(config.auth.api_key_env) or read_env_file(env_path).get(config.auth.api_key_env)
+        if not expected or request.headers.get(config.auth.header_name) != expected:
+            client = request.client.host if request.client else "unknown"
+            limited = await active_rate_limit(db, "auth", client)
+            write_audit(config.home_dir, "auth_failure", ip=client, path=request.url.path)
+            if limited:
+                return err(ErrorCode.rate_limited,"auth temporarily rate limited",429,{"reset_at":limited["reset_at"]})
+            await persist_rate_limit(db, "auth", client, now_utc()+timedelta(seconds=60), "failed auth")
+            return err(ErrorCode.unauthorized,"unauthorized",401)
 
 async def endpoint(request, func):
     a=await auth(request)
@@ -240,7 +250,11 @@ async def sessions_delete(request):
     return await endpoint(request, inner)
 
 async def pipeline_start(request):
-    async def inner(r): return JSONResponse(dump(await engine.start(await body(r,PipelineStartRequest))))
+    async def inner(r):
+        req=await body(r,PipelineStartRequest)
+        result=await engine.start(req)
+        write_audit(config.home_dir, "pipeline_start", run_id=result.run_id, session_id=result.session_id, project=req.project_name)
+        return JSONResponse(dump(result))
     return await endpoint(request, inner)
 
 async def mcp_tools(request):
@@ -346,6 +360,7 @@ async def control_cancel(request):
         if t: t.cancel()
         await engine.emit(SSEEventType.pause_state_changed,rows[0]["session_id"],rid,PausePayload(paused=False,reason=data.get("reason","cancelled")))
         await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?",("cancelled",rid)))
+        write_audit(config.home_dir, "pipeline_cancel", run_id=rid, session_id=rows[0]["session_id"], reason=data.get("reason","cancelled"))
         return JSONResponse(dump(ControlResponse(run_id=rid,status=RunStatus.cancelled,message=data.get("reason","cancelled"))))
     return await endpoint(request, inner)
 async def inject(request):
@@ -479,11 +494,13 @@ async def spawn(request):
         req=await body(r,WorkerSpawnRequest)
         if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (req.run_id,)):
             raise KeyError("run")
-        wid=f"{req.role.value}-{uuid4().hex[:8]}"; wt=str(pathlib.Path(config.projects_dir).expanduser()/"workers"/wid)
+        role_value=req.role.value if hasattr(req.role, "value") else req.role
+        wid=f"{role_value}-{uuid4().hex[:8]}"; wt=str(pathlib.Path(config.projects_dir).expanduser()/"workers"/wid)
         w=Worker(worker_id=wid,run_id=req.run_id,role=req.role,status=WorkerStatus.idle,task_title=req.task,worktree_path=wt,branch_name=f"worker/{wid}",model=req.model or config.providers.default_model)
         await db.write(lambda con: con.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(w.worker_id,w.run_id,w.role,w.status,w.task_id,w.worktree_path,w.branch_name,w.pid,w.usage.model_dump_json(),None,w.model_dump_json())))
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(req.run_id,));
         if rows: await engine.emit(SSEEventType.worker_spawned,rows[0]["session_id"],req.run_id,w)
+        write_audit(config.home_dir, "worker_spawn", run_id=req.run_id, worker_id=w.worker_id, role=w.role.value if hasattr(w.role, "value") else w.role)
         return JSONResponse(dump(w))
     return await endpoint(request, inner)
 async def assign(request):
@@ -557,6 +574,7 @@ async def put_config(request):
         tmp.write_text(yaml.safe_dump(next_config.model_dump(mode="json"), sort_keys=False))
         tmp.replace(cfg_path)
         config=next_config
+        write_audit(config.home_dir, "config_change", path=cfg_path)
         return JSONResponse(dump(config))
     return await endpoint(request, inner)
 async def secrets(request):
@@ -572,6 +590,7 @@ async def put_secret(request):
         env_path=pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", str(pathlib.Path(config.home_dir).expanduser()/".env"))).expanduser()
         result=set_secret(name, data["value"], env_path=env_path, service=config.security.keyring_service)
         engine.invalidate_provider_cache()
+        write_audit(config.home_dir, "secret_add", name=name, source=result.source)
         return JSONResponse(dump(result))
     return await endpoint(request, inner)
 async def del_secret(request):
@@ -581,6 +600,7 @@ async def del_secret(request):
         if not delete_secret(name, env_path=env_path, service=config.security.keyring_service):
             raise KeyError(name)
         engine.invalidate_provider_cache()
+        write_audit(config.home_dir, "secret_delete", name=name)
         return JSONResponse(dump(ControlResponse(run_id=name,status=RunStatus.cancelled,message="secret deleted")))
     return await endpoint(request, inner)
 async def memory_list(request):

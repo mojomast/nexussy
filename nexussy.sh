@@ -85,6 +85,13 @@ port_open() {
   ( : > "/dev/tcp/$host/$port" ) >/dev/null 2>&1
 }
 
+is_local_bind() {
+  case "$1" in
+    127.*|localhost|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 health_url() { printf 'http://%s:%s/%s\n' "$1" "$2" "$3"; }
 
 curl_ok() { curl -fsS "$1" >/dev/null 2>&1; }
@@ -191,11 +198,12 @@ show_logs() {
   follow=1
   lines=80
   if [ "${1:-}" = "--no-follow" ]; then follow=0; shift; fi
+  if [ "${1:-}" = "--audit" ]; then log_file="$NEXUSSY_HOME/audit.log"; prepare_log "$log_file" || return 1; if [ "$follow" -eq 1 ]; then tail -f "$log_file"; else tail -n "$lines" "$log_file"; fi; return 0; fi
   case "${1:-}" in
     core) log_file=$CORE_LOG ;;
     web) log_file=$WEB_LOG ;;
     tui) log_file=$TUI_LOG ;;
-    *) printf '%s\n' "Usage: ./nexussy.sh logs [--no-follow] core|web|tui" >&2; return 2 ;;
+    *) printf '%s\n' "Usage: ./nexussy.sh logs [--no-follow] core|web|tui|--audit" >&2; return 2 ;;
   esac
   prepare_log "$log_file" || return 1
   if [ "$follow" -eq 1 ]; then tail -f "$log_file"; else tail -n "$lines" "$log_file"; fi
@@ -209,6 +217,34 @@ update() {
   (cd "$ROOT_DIR" && "$PYTHON" -m pip install -e core/) || return 1
   (cd "$ROOT_DIR" && "$PYTHON" -m pip install -e web/) || return 1
   (cd "$ROOT_DIR/tui" && bun install) || return 1
+}
+
+generate_api_key() {
+  PYTHON=$(python_cmd) || { warn "Python 3.11+ not found"; return 1; }
+  "$PYTHON" - <<'PY'
+import secrets
+print("nx_" + secrets.token_urlsafe(32))
+PY
+}
+
+rotate_key() {
+  ensure_dirs
+  key=$(generate_api_key) || return 1
+  tmp="$NEXUSSY_ENV_FILE.tmp.$$"
+  found=0
+  if [ -f "$NEXUSSY_ENV_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        NEXUSSY_API_KEY=*) printf 'NEXUSSY_API_KEY=%s\n' "$key" >> "$tmp"; found=1 ;;
+        *) printf '%s\n' "$line" >> "$tmp" ;;
+      esac
+    done < "$NEXUSSY_ENV_FILE"
+  fi
+  if [ "$found" -eq 0 ]; then printf 'NEXUSSY_API_KEY=%s\n' "$key" >> "$tmp"; fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$NEXUSSY_ENV_FILE"
+  printf 'Updated %s\n' "$NEXUSSY_ENV_FILE"
+  printf 'New API key (shown once): %s\n' "$key"
 }
 
 doctor() {
@@ -240,6 +276,9 @@ PY
   else
     printf 'pi command: missing (install Pi CLI or set NEXUSSY_PI_COMMAND)\n'
   fi
+  if [ "$pi_cmd" = "nexussy-pi" ] && { ! is_local_bind "$CORE_HOST" || ! is_local_bind "$WEB_HOST"; }; then
+    printf 'pi command: warning bundled nexussy-pi is local-dev only; set NEXUSSY_PI_COMMAND or pi.command to a sandboxed executor for LAN/VPN binds\n'
+  fi
   keys="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY TOGETHER_API_KEY FIREWORKS_API_KEY XAI_API_KEY GLM_API_KEY ZAI_API_KEY REQUESTY_API_KEY AETHER_API_KEY OLLAMA_BASE_URL"
   configured=0
   for k in $keys; do
@@ -257,7 +296,7 @@ PY
 
 usage() {
   cat <<'USAGE'
-Usage: ./nexussy.sh start|start-tui|stop|status|logs [--no-follow] core|web|tui|update|doctor
+Usage: ./nexussy.sh start|start-tui|stop|status|logs [--no-follow] core|web|tui|--audit|update|rotate-key|doctor
 USAGE
 }
 
@@ -274,6 +313,7 @@ case "$cmd" in
   status) status ;;
   logs) shift; show_logs "$@" ;;
   update) update ;;
+  rotate-key) rotate_key ;;
   doctor) doctor ;;
   -h|--help|help|'') usage ;;
   *) printf '%s\n' "Unknown command: $cmd" >&2; usage >&2; exit 2 ;;

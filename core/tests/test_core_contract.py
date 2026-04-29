@@ -86,6 +86,29 @@ def test_config_precedence(tmp_path, monkeypatch):
     assert load_config().core.port == 3333
 
 
+def test_deployment_profiles(tmp_path, monkeypatch):
+    cfg = tmp_path / "nexussy.yaml"; env = tmp_path / ".env"
+    cfg.write_text("core:\n  cors_allow_origins: ['http://lan-dashboard.local']\npi:\n  command: 'sandbox-pi'\n")
+    env.write_text("NEXUSSY_API_KEY=team-key\nNEXUSSY_PROFILE=trusted-lan\n")
+    monkeypatch.setenv("NEXUSSY_CONFIG", str(cfg)); monkeypatch.setenv("NEXUSSY_ENV_FILE", str(env))
+    loaded = load_config()
+    assert loaded.auth.enabled is True
+    assert loaded.pi.command == "sandbox-pi"
+    assert loaded.logging.core_log_file == str(Path(loaded.home_dir) / "logs" / "core.log")
+
+    cfg.write_text("core:\n  cors_allow_origins: ['*']\npi:\n  command: 'sandbox-pi'\n")
+    with pytest.raises(ValueError, match="wildcard CORS"):
+        load_config()
+
+    cfg.write_text("core:\n  cors_allow_origins: ['http://lan-dashboard.local']\n")
+    with pytest.raises(ValueError, match="explicit pi.command"):
+        load_config()
+
+    cfg.write_text("core:\n  cors_allow_origins: ['http://lan-dashboard.local']\npi:\n  command: 'nexussy-pi'\n")
+    with pytest.warns(RuntimeWarning, match="bundled nexussy-pi"):
+        assert load_config().pi.command == "nexussy-pi"
+
+
 def test_provider_model_precedence_and_worker_override(monkeypatch):
     monkeypatch.setenv("NEXUSSY_DESIGN_MODEL", "anthropic/claude-test")
     cfg = load_config({"providers":{"default_model":"openai/default"}})
@@ -247,15 +270,66 @@ def test_config_put_persists_yaml(monkeypatch, tmp_path):
 def test_config_put_rejects_auth_changes(monkeypatch, tmp_path):
     monkeypatch.setenv("NEXUSSY_CONFIG", str(tmp_path / "nexussy.yaml"))
     monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_API_KEY", "test-key")
     server.config = load_config({"auth":{"enabled":True}})
     server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
     server.engine = Engine(server.db, server.config)
     with TestClient(app) as c:
-        r = c.put("/config", json={"auth":{"enabled":False}})
+        r = c.put("/config", json={"auth":{"enabled":False}}, headers={"X-API-Key":"test-key"})
         assert r.status_code == 403
         body = r.json()
         assert body["ok"] is False and body["error_code"] == "forbidden"
         assert "auth.enabled" in body["details"]["forbidden_keys"]
+
+
+def test_auth_reads_api_key_from_env_file(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("NEXUSSY_API_KEY=file-key\n")
+    monkeypatch.setenv("NEXUSSY_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(env))
+    monkeypatch.delenv("NEXUSSY_API_KEY", raising=False)
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    server.config = load_config({"auth":{"enabled":True}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        assert c.get("/config").status_code == 401
+        limited = c.get("/config")
+        assert limited.status_code == 429
+        assert limited.json()["error_code"] == "rate_limited"
+        assert c.get("/config", headers={"X-API-Key":"file-key"}).status_code == 200
+    rows = asyncio.run(server.db.read("SELECT * FROM rate_limits WHERE provider='auth'"))
+    assert rows and rows[0]["reason"] == "failed auth"
+    audit_text = (tmp_path / "home" / "audit.log").read_text()
+    assert "auth_failure" in audit_text and "path=/config" in audit_text
+
+
+def test_audit_log_records_operator_actions(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_CONFIG", str(tmp_path / "nexussy.yaml"))
+    monkeypatch.setenv("NEXUSSY_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.setenv("NEXUSSY_HOME", str(tmp_path / "home"))
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        started = c.post("/pipeline/start", json={"project_name":"Audit Demo","description":"small cli","auto_approve_interview":True,"metadata":{"mock_provider":True}})
+        assert started.status_code == 200, started.text
+        run_id = started.json()["run_id"]
+        for _ in range(100):
+            ev = c.get("/events", params={"run_id": run_id}).json()
+            if ev and ev[-1]["type"] == "done": break
+            import time; time.sleep(.05)
+        assert c.post("/swarm/spawn", json={"run_id":run_id,"role":"backend","task":"audit task"}).status_code == 200
+        cfg = c.get("/config").json(); cfg["providers"]["default_model"] = "openrouter/openai/gpt-4o-mini"
+        assert c.put("/config", json=cfg).status_code == 200
+        assert c.put("/secrets/OPENAI_API_KEY", json={"value":"super-secret-value"}).status_code == 200
+        assert c.delete("/secrets/OPENAI_API_KEY").status_code == 200
+        assert c.post("/pipeline/cancel", json={"run_id":run_id,"reason":"audit test"}).status_code == 200
+    audit_text = (tmp_path / "home" / "audit.log").read_text()
+    for action in ("pipeline_start", "pipeline_stop", "worker_spawn", "config_change", "secret_add", "secret_delete", "pipeline_cancel"):
+        assert action in audit_text
+    assert "super-secret-value" not in audit_text
 
 
 def test_validate_review_correction_loops_and_controls(monkeypatch, tmp_path):

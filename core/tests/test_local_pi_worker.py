@@ -99,7 +99,7 @@ async def test_real_pi_command_writes_settings_and_uses_rpc_mode(tmp_path, monke
         "pathlib.Path('model.txt').write_text(os.environ.get('PI_DEFAULT_MODEL',''))\n"
         "line=sys.stdin.readline()\n"
         "msg=json.loads(line)\n"
-        "print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{'status':'ok'}}), flush=True)\n"
+        "print(json.dumps({'id':msg['id'],'type':'response','command':msg.get('type'),'success':True}), flush=True)\n"
     )
     child.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
@@ -107,10 +107,10 @@ async def test_real_pi_command_writes_settings_and_uses_rpc_mode(tmp_path, monke
 
     rpc = await spawn_pi_worker(cfg, "run", "worker", "backend", str(tmp_path), str(tmp_path))
     req_id = await rpc.request("task")
-    assert (await rpc.wait_response(req_id, 5))["result"]["status"] == "ok"
+    assert (await rpc.wait_response(req_id, 5))["success"] is True
     await rpc.stop(timeout_s=.1)
 
-    assert (tmp_path / "argv.txt").read_text() == "--rpc-mode"
+    assert (tmp_path / "argv.txt").read_text() == "--mode rpc"
     assert (tmp_path / "model.txt").read_text() == "openai/test-model"
     settings = (tmp_path / ".pi" / "agent" / "settings.json").read_text()
     assert "openai/test-model" in settings

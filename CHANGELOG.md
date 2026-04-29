@@ -2,6 +2,15 @@
 
 ## [Unreleased] — gap-sprint-2
 
+### Local-Team Hardening
+
+- [local-team-hardening] Documented the supported `pi.command` / `NEXUSSY_PI_COMMAND` sandboxed executor pattern for trusted LAN/VPN use, clarified that bundled `nexussy-pi` is local-dev only and not a security boundary, and added a launcher doctor warning when bundled Pi is selected with a non-localhost bind.
+- [local-team-hardening] Added `NEXUSSY_PROFILE=dev|trusted-lan`; `trusted-lan` enables API-key auth, rejects wildcard CORS, requires an explicit Pi command, warns on bundled `nexussy-pi`, and moves default service logs under `~/.nexussy/logs/`.
+- [local-team-hardening] Added local append-only `~/.nexussy/audit.log` entries for pipeline lifecycle, config changes, secret add/delete, worker spawn, and auth failures, plus `./nexussy.sh logs --audit`.
+- [local-team-hardening] Added `OPERATIONS.md` with SQLite snapshot/restore, schema-version, migration, backup-frequency, and audit-log guidance for solo and trusted-team operators.
+- [local-team-hardening] Added `./nexussy.sh rotate-key` for local API-key rotation and wired failed API-key attempts into the existing SQLite `rate_limits` table.
+- [local-team-hardening] Updated the real Pi adapter for Pi 0.70.6 `--mode rpc` / `prompt` frames and closed R-080 with a full live configured-provider plus installed-Pi develop pipeline smoke.
+
 ### Fixed
 
 - **Worker sandbox**: replaced bypassable bash denylist with stripped-env subprocess + 64KB output cap

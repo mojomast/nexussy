@@ -41,6 +41,7 @@
 - Root ops/docs review fixes complete: launcher startup failures now terminate just-started core/web processes and clear PID files, foreground TUI runs have minimal PID/lifecycle-log management, Pi/CORS docs match actual config/env keys, systemd user units reject unsupported unescaped paths, and ops tests keep temporary outputs under their private temp root. Checks passed: `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run`.
 - Web-owned review fixes complete: dashboard interview submissions now use `{answers:{question_id:answer}}`, core auth keys are injected by the proxy for fetch/SSE when missing, SPEC status/session response shapes are consumed, required tabs and graph proxy loading are present, swarm/file locks hydrate on status refresh, and stale root-level web assets are neutralized. Checks passed: `python3 -m pytest -q web/tests` (50 passed).
 - Full codebase review fix pass complete: core SSE/tool payloads, worker streams, existing-repo import validation, rate-limit handling, CORS/secret schema drift, 404 semantics, and MCP controls were tightened; TUI restored Pi TUI as default, removed non-contract handoff endpoints, made `/stage` view-only, and hydrates status/workers/artifacts; web and ops fixes are recorded above. Coordinator checks passed: `python3 -m pytest -q core/tests` (86 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck`, `python3 -m pytest -q web/tests` (50 passed), shell syntax, ops tests, installer dry-run, core startup smoke, and alternate-port web startup smoke.
+- Local/team hardening complete: sandboxed executor docs and doctor warning, `dev`/`trusted-lan` profiles, local audit log, operations backup/restore docs, API key rotation plus auth-failure rate limiting, and full live configured-provider plus installed-Pi develop smoke were added without SaaS/multi-tenant features. Final checks passed across core, TUI, web, shell syntax, ops tests, and installer dry-run.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -70,6 +71,7 @@
 - [✅] C: web-owned review fixes for interview answer schema, auth-aware proxying, SPEC status/session shapes, required tabs/graph, swarm hydration, tests, and stale asset neutralization.
 - [✅] M1: Root ops/docs-owned review findings fixed for launcher cleanup, TUI PID/log handling, Pi/CORS docs, systemd path safety, and ops test temp-file safety.
 - [✅] M2: Full codebase review findings fixed across core, TUI, web, and ops/docs with passing coordinator verification.
+- [✅] N1: Local/team hardening raised local/trusted-LAN readiness with executor docs, profiles, audit logging, operations docs, rotate-key/auth rate limits, and R-080 live provider-plus-Pi evidence.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

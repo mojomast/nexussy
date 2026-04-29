@@ -181,6 +181,7 @@ write_env_if_absent() {
   tmp="$NEXUSSY_ENV_FILE.tmp.$$"
   cat > "$tmp" <<'ENV'
 # nexussy local environment. Leave placeholders empty until configured.
+NEXUSSY_PROFILE=dev
 NEXUSSY_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=

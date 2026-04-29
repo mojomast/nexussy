@@ -18,6 +18,7 @@ class PiFrame:
 class PiRPCProcess:
     process: asyncio.subprocess.Process
     worker_id: str | None = None
+    protocol: str = "jsonrpc"
     frames: deque[PiFrame] = field(default_factory=lambda: deque(maxlen=MAX_FRAMES))
     _tasks: list[asyncio.Task] = field(default_factory=list)
     cancelled: bool = False
@@ -26,7 +27,11 @@ class PiRPCProcess:
 
     async def request(self, task: str, context: str = "") -> str:
         rid = os.urandom(4).hex()
-        msg = {"jsonrpc":"2.0","id":rid,"method":"agent.run","params":{"task":task,"context":context}}
+        if self.protocol == "pi":
+            prompt = task if not context else f"{task}\n\nContext:\n{context}"
+            msg = {"id":rid,"type":"prompt","prompt":prompt}
+        else:
+            msg = {"jsonrpc":"2.0","id":rid,"method":"agent.run","params":{"task":task,"context":context}}
         if self.process.stdin is None:
             raise RuntimeError("PiRPCProcess stdin is not available")
         self.process.stdin.write((json.dumps(msg)+"\n").encode())
@@ -36,7 +41,7 @@ class PiRPCProcess:
     async def inject(self, message: str) -> None:
         if self.process.stdin is None:
             raise RuntimeError("PiRPCProcess stdin is not available")
-        msg = {"jsonrpc":"2.0","method":"agent.inject","params":{"message":message}}
+        msg = {"id":os.urandom(4).hex(),"type":"prompt","prompt":message} if self.protocol == "pi" else {"jsonrpc":"2.0","method":"agent.inject","params":{"message":message}}
         self.process.stdin.write((json.dumps(msg)+"\n").encode())
         await self.process.stdin.drain()
 
@@ -62,7 +67,8 @@ class PiRPCProcess:
         self.cancelled = True
         try:
             if self.process.stdin:
-                self.process.stdin.write(b'{"jsonrpc":"2.0","method":"agent.cancel","params":{}}\n')
+                payload = {"type":"cancel"} if self.protocol == "pi" else {"jsonrpc":"2.0","method":"agent.cancel","params":{}}
+                self.process.stdin.write((json.dumps(payload)+"\n").encode())
                 await self.process.stdin.drain()
         except Exception:
             pass
@@ -96,7 +102,7 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     env.setdefault("PI_DEFAULT_MODEL", default_model)
     if command == "pi":
         _write_pi_settings(pathlib.Path(worktree), default_model)
-        args = ["--rpc-mode"]
+        args = ["--mode", "rpc"]
     elif command in {"nexussy-pi", "local-pi-worker"}:
         env.setdefault("PI_DEFAULT_MODEL", default_model)
     try:
@@ -110,7 +116,7 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
             proc = await asyncio.create_subprocess_exec(command, *args, cwd=worktree, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         else:
             raise RuntimeError(f"missing Pi CLI: {config.pi.command}") from e
-    rpc = PiRPCProcess(proc, worker_id=worker_id)
+    rpc = PiRPCProcess(proc, worker_id=worker_id, protocol="pi" if command == "pi" else "jsonrpc")
     rpc._tasks = [asyncio.create_task(_drain(rpc, proc.stdout, "stdout", worker_id, config.pi.max_stdout_line_bytes)), asyncio.create_task(_drain(rpc, proc.stderr, "stderr", worker_id, config.pi.max_stdout_line_bytes))]
     return rpc
 
