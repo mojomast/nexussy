@@ -8,7 +8,7 @@ Current coverage summary: core Pi worker, MCP tools, web UI, session lifecycle, 
 
 Close this file through the circular loop in `CIRCULAR_DEVELOPMENT.md`. Work proceeds in cycles, not by cherry-picking rows: core runtime semantics, core contracts/providers/MCP, TUI closure, web evidence, ops evidence, then live external checks. Each cycle delegates only to the owning subagent, adds tests for new behavior, reruns the area suite, updates this file and `SPEC_COVERAGE.md`, then advances to the next cycle.
 
-Current active cycle: local/team hardening pass in progress; R-080 live provider-plus-Pi evidence is now closed.
+Current active cycle: none. Local/team hardening is complete, including sandboxed executor docs, deployment profiles, audit logging, `OPERATIONS.md`, rotate-key, and R-080 live provider-plus-Pi evidence.
 
 ## Highest-Priority Partial Rows
 

@@ -23,7 +23,7 @@
 - `scripts/smoke_integration.sh` lines 63 and 85 assert/read `changed_files`, but `ChangedFilesManifest` defines the changed-file array as `files` in `core/nexussy/api/schemas.py` lines 206-207. The smoke script will report no changed files even when the artifact is valid.
 - `scripts/smoke_integration.sh` line 27 runs `$NEXUSSY_PI_COMMAND --version` unquoted. This is fragile for paths with spaces and for command strings with intended arguments; it can also split unexpectedly before the script reaches the pipeline.
 - `core/nexussy/pipeline/engine.py` line 298 mutates the imported `develop.spawn_pi_worker` global before delegating to `develop.run_worker_rpc()`. This preserves an existing monkeypatch path for tests, but it is a shared module mutation and is risky under concurrent calls.
-- `FULL_SPEC_REMAINING.md` line 11 still says the local/team hardening pass is “in progress” even though the current handoff and changelog mark it complete. The status text is stale and can mislead future triage.
+- Resolved: `FULL_SPEC_REMAINING.md` no longer says the local/team hardening pass is in progress; it now records that there is no active cycle and that hardening work is complete.
 
 ## Recommended next action
 
