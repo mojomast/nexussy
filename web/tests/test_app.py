@@ -120,6 +120,15 @@ async def worker_stream(_: Request) -> StreamingResponse:
     return StreamingResponse(iter(frames), media_type="text/event-stream; charset=utf-8")
 
 
+async def interview_answer(request: Request) -> JSONResponse:
+    payload = await request.json()
+    answers = payload.get("answers") if isinstance(payload, dict) else None
+    required = {"q-1", "q-2"}
+    if not isinstance(answers, dict) or set(answers) != required or any(not str(answers[q]).strip() for q in required):
+        return JSONResponse({"detail": "missing interview answers"}, status_code=422)
+    return JSONResponse({"ok": True})
+
+
 @pytest.fixture()
 def client() -> TestClient:
     core = Starlette(
@@ -129,6 +138,7 @@ def client() -> TestClient:
             Route("/secrets", secrets),
             Route("/echo", echo, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
             Route("/pipeline/runs/{run_id:str}/stream", stream),
+            Route("/pipeline/{session_id:str}/interview/answer", interview_answer, methods=["POST"]),
             Route("/swarm/workers/{worker_id:str}/stream", worker_stream),
             Route("/{path:path}", route_probe, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         ]
@@ -142,7 +152,7 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     html = response.text
-    for section in ["session-list", "stages", "stream-log", "interview-form", "artifact-viewer"]:
+    for section in ["session-list", "stages", "stream-log", "interview-form", "interview-fields", "artifact-viewer"]:
         assert f'id="{section}"' in html
     for tab in ["chat", "pipeline", "sessions", "graph", "artifacts", "swarm", "devplan", "config", "secrets"]:
         assert f'id="{tab}"' in html
@@ -160,7 +170,7 @@ def test_all_required_tabs_include_static_render_targets_and_api_routes(client: 
     html = client.get("/").text
     expected = {
         "chat": ["chat-log"],
-        "pipeline": ["stages", "transitions", "interview-question-id"],
+        "pipeline": ["stages", "transitions", "interview-fields"],
         "sessions": ["session-list", "prev-sessions", "next-sessions"],
         "graph": ["graph-viewer", "/api/graph"],
         "artifacts": ["artifact-viewer", "review-report"],
@@ -205,6 +215,23 @@ def test_zero_build_static_assets_are_served(client: TestClient) -> None:
     assert style.status_code == 200
     assert style.headers["content-type"].startswith("text/css")
     assert "color-scheme:dark" in style.text
+
+
+def test_interview_answer_full_map_succeeds(client: TestClient) -> None:
+    response = client.post(
+        "/api/pipeline/session-1/interview/answer",
+        json={"answers": {"q-1": "Use Python", "q-2": "Add tests"}},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_interview_answer_partial_map_returns_422(client: TestClient) -> None:
+    response = client.post(
+        "/api/pipeline/session-1/interview/answer",
+        json={"answers": {"q-1": "Use Python"}},
+    )
+    assert response.status_code == 422
 
 
 def test_api_proxy_preserves_method_body_query_auth_status_and_content_type(client: TestClient) -> None:
@@ -252,7 +279,7 @@ def test_api_proxy_does_not_override_client_api_key() -> None:
         ("GET", "/api/sessions/018f0000-0000-4000-8000-000000000001", ""),
         ("DELETE", "/api/sessions/018f0000-0000-4000-8000-000000000001?delete_files=true", ""),
         ("POST", "/api/pipeline/start", '{"session_id":"s"}'),
-        ("POST", "/api/pipeline/018f0000-0000-4000-8000-000000000001/interview/answer", '{"answer":"yes"}'),
+        ("POST", "/api/pipeline/018f0000-0000-4000-8000-000000000001/interview/answer", '{"answers":{"q-1":"yes","q-2":"also yes"}}'),
         ("GET", "/api/pipeline/status?run_id=run-1", ""),
         ("POST", "/api/pipeline/inject", '{"run_id":"run-1","message":"hi"}'),
         ("POST", "/api/pipeline/pause", '{"run_id":"run-1","reason":"user"}'),
@@ -486,7 +513,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           prepend(child) { this.children.unshift(child); this.innerHTML = child.innerHTML + this.innerHTML; }
         }
 
-        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-question','interview-question-id','interview-answer','chat-log'];
+        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-fields','chat-log'];
         const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
         elements['artifact-kind'].value = 'devplan';
         const document = {
@@ -514,7 +541,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           if (url.startsWith('/api/sessions')) return jsonResponse({ sessions: [{ session_id: 'session-1', project_name: 'Demo', status: 'running', last_run_id: 'run-1' }] });
           if (url === '/api/secrets') return jsonResponse([{ name: 'OPENAI_API_KEY', configured: false, source: 'env' }]);
           if (url.startsWith('/api/secrets/')) return jsonResponse({ ok: true });
-          if (url.startsWith('/api/pipeline/status')) return jsonResponse({ status: { run: { status: 'paused', current_stage: 'interview', run_id: 'run-1', session_id: 'session-1' }, stages: [{ stage: 'interview', status: 'running' }], pause_state: { paused: true, questions: [{ id: 'q-1', question: 'What should we build?' }] }, workers: [{ worker_id: 'worker-status', status: 'running' }], file_locks: [{ path: 'web/app.js', worker_id: 'worker-status' }] } });
+          if (url.startsWith('/api/pipeline/status')) return jsonResponse({ status: { run: { status: 'paused', current_stage: 'interview', run_id: 'run-1', session_id: 'session-1' }, stages: [{ stage: 'interview', status: 'running' }], pause_state: { paused: true, questions: [{ question_id: 'q-1', question: 'What should we build?' }, { question_id: 'q-2', question: 'What should we avoid?' }] }, workers: [{ worker_id: 'worker-status', status: 'running' }], file_locks: [{ path: 'web/app.js', worker_id: 'worker-status' }] } });
           if (url.startsWith('/api/swarm/workers')) return jsonResponse({ workers: [{ worker_id: 'worker-2', role: 'developer', status: 'idle' }] });
           if (url.startsWith('/api/swarm/file-locks')) return jsonResponse({ file_locks: [{ path: 'web/test.js', worker_id: 'worker-2' }] });
           if (url.startsWith('/api/graph')) return jsonResponse({ nodes: [], edges: [] });
@@ -553,14 +580,17 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           assert(elements['worker-grid'].children.length === 1, 'worker update did not render');
           assert(elements['worker-grid'].children[0].innerHTML.includes('worker-1'), 'worker id missing');
 
-          EventSource.last.emit('pause_state_changed', { type: 'pause_state_changed', payload: { paused: true, session_id: 'session-1', run_id: 'run-1', question: 'What should we build?' } });
-          assert(elements['interview-question'].textContent.includes('What should we build?'), 'interview question not shown');
-          assert(elements['interview-question-id'].textContent.length > 0, 'interview question id not shown');
-          elements['interview-answer'].value = 'A dashboard';
+          EventSource.last.emit('pause_state_changed', { type: 'pause_state_changed', payload: { paused: true, session_id: 'session-1', run_id: 'run-1', questions: [{ question_id: 'q-1', question: 'What should we build?' }, { question_id: 'q-2', question: 'What should we avoid?' }] } });
+          assert(elements['interview-fields'].children.length === 4, 'all interview fields not shown');
+          const textareas = elements['interview-fields'].children.filter(child => child.name);
+          assert(textareas.length === 2, 'interview textareas not shown');
+          textareas[0].value = 'A dashboard';
+          textareas[1].value = 'Scope creep';
           await elements['interview-form'].onsubmit(event);
           assert(fetchCalls.some(c => c.url === '/api/pipeline/session-1/interview/answer' && c.options.method === 'POST'), 'interview answer POST not called');
           const answerCall = fetchCalls.find(c => c.url === '/api/pipeline/session-1/interview/answer' && c.options.method === 'POST');
-          assert(JSON.parse(answerCall.options.body).answers, 'interview answer did not use core answers schema');
+          const answerBody = JSON.parse(answerCall.options.body);
+          assert(answerBody.answers['q-1'] === 'A dashboard' && answerBody.answers['q-2'] === 'Scope creep', 'interview answer did not include all answers');
 
           await context.refreshPipelineStatus();
           assert(elements['pipeline-summary'].textContent.includes('paused interview'), 'status.run shape did not render');

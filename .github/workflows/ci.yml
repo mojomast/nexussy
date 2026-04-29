@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,17 +19,73 @@ jobs:
           cache: pip
 
       - name: Install core with dev deps
-        run: pip install -e "core/[dev]"
+        run: python3 -m pip install -e "core/[dev]"
 
-      - name: Lint with ruff
-        run: cd core && python -m ruff check nexussy/
+      - name: Lint core with ruff
+        run: python3 -m ruff check core/nexussy/
 
-      - name: Run tests
-        run: cd core && python -m pytest tests/ -x -q --tb=short
+      - name: Run core tests
+        run: python3 -m pytest -q core/tests
+
+  tui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TUI dependencies
+        working-directory: tui
+        run: bun install
+
+      - name: Run TUI tests
+        working-directory: tui
+        run: bun test
+
+      - name: Typecheck TUI
+        working-directory: tui
+        run: bun run typecheck
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install web dependencies
+        run: python3 -m pip install -e web/ pytest
+
+      - name: Run web tests
+        run: python3 -m pytest -q web/tests
+
+  ops:
+    runs-on: ubuntu-latest
+    env:
+      NEXUSSY_CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh scripts/smoke_integration.sh
+
+      - name: Run ops tests
+        continue-on-error: false
+        run: ./ops_tests.sh
+
+      - name: Run installer dry-run
+        run: ./install.sh --non-interactive --dry-run
 
   docker-build:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [core, tui, web, ops]
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image

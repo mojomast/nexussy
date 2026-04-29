@@ -101,3 +101,24 @@ View local audit entries with:
 ```
 
 The audit log is plain text and local-only. It records operator-relevant actions without secret values.
+
+## Live Integration Smoke
+
+Run the live smoke after a fresh install, provider-key changes, Pi CLI upgrades, or changes to develop-stage worker behavior.
+
+Required environment:
+
+```bash
+NEXUSSY_SMOKE_PROJECT_DIR=/path/to/git/repo
+NEXUSSY_PI_COMMAND=/path/to/pi
+```
+
+Start nexussy first, then run:
+
+```bash
+NEXUSSY_SMOKE_PROJECT_DIR=/path/to/git/repo NEXUSSY_PI_COMMAND=/path/to/pi ./scripts/smoke_integration.sh
+```
+
+Expected pass output includes a small table with `run_id`, `session_id`, stage timing rows, changed-file count, total `cost_usd`, and the final line `SMOKE PASS`.
+
+`SMOKE FAIL: ...` means the script stopped at the named prerequisite, pipeline, or artifact assertion. Fix the reported prerequisite or inspect the printed `run_id` in the dashboard/API before rerunning.

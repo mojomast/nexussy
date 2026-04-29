@@ -4,7 +4,7 @@ let source = null;
 let sessionOffset = 0;
 let activeRunId = localStorage.getItem('nexussy.runId') || '';
 let activeSessionId = localStorage.getItem('nexussy.sessionId') || '';
-let activeInterviewQuestionId = localStorage.getItem('nexussy.interviewQuestionId') || '';
+let interviewQuestions = [];
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -157,24 +157,35 @@ function questionCandidates(payload = {}) {
   return [];
 }
 
-function stableQuestionId(payload = {}) {
-  const base = payload.run_id || payload.session_id || activeRunId || activeSessionId || 'unknown';
-  return `interview:${base}:question-1`;
-}
-
 function showInterview(payload = {}) {
   const paused = payload.paused === true || payload.status === 'paused';
-  $('#interview-form').classList.toggle('hidden', !paused);
-  if (!paused) return;
+  const form = $('#interview-form');
+  const fields = $('#interview-fields');
+  form.classList.toggle('hidden', !paused);
+  if (!paused) {
+    interviewQuestions = [];
+    fields.innerHTML = '';
+    return;
+  }
   if (payload.session_id) selectSession(payload.session_id, payload.run_id || activeRunId);
-  const questions = questionCandidates(payload);
-  const first = questions[0] || payload;
-  const questionId = first.question_id || first.id || payload.question_id || activeInterviewQuestionId || stableQuestionId(payload);
-  activeInterviewQuestionId = questionId;
-  localStorage.setItem('nexussy.interviewQuestionId', questionId);
-  const text = first.question || first.prompt || payload.question || payload.prompt || payload.reason || 'Run is paused for interview input.';
-  $('#interview-question-id').textContent = questionId;
-  $('#interview-question').textContent = text;
+  interviewQuestions = questionCandidates(payload).map((question, index) => ({
+    ...question,
+    question_id: question.question_id || question.id || `question-${index + 1}`,
+    question: question.question || question.prompt || payload.reason || 'Run is paused for interview input.',
+    answerElement: null,
+  }));
+  fields.innerHTML = '';
+  interviewQuestions.forEach((question) => {
+    const label = document.createElement('label');
+    label.textContent = question.question;
+    const textarea = document.createElement('textarea');
+    textarea.name = question.question_id;
+    textarea.rows = 3;
+    textarea.placeholder = 'Answer this interview question';
+    question.answerElement = textarea;
+    fields.append(label);
+    fields.append(textarea);
+  });
 }
 
 function handleEvent(ev) {
@@ -266,7 +277,24 @@ async function loadSecrets() { const rows = await api('/secrets'); $('#secret-li
 $('#load-secrets').onclick = loadSecrets;
 $('#set-secret').onclick = async () => { await api('/secrets/' + encodeURIComponent($('#secret-name').value), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: $('#secret-value').value }) }); await loadSecrets(); };
 $('#delete-secret').onclick = async () => { await api('/secrets/' + encodeURIComponent($('#secret-name').value), { method: 'DELETE' }); await loadSecrets(); };
-$('#interview-form').onsubmit = async (event) => { event.preventDefault(); const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const questionId = activeInterviewQuestionId || stableQuestionId({ session_id: sid, run_id: activeRunId }); await api('/pipeline/' + encodeURIComponent(sid) + '/interview/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answers: { [questionId]: $('#interview-answer').value } }) }); $('#interview-answer').value = ''; $('#interview-form').classList.add('hidden'); };
+$('#interview-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const sid = activeSessionId || prompt('session_id?');
+  if (!sid) return;
+  const answers = {};
+  for (const question of interviewQuestions) {
+    const answer = (question.answerElement?.value || '').trim();
+    if (!answer) {
+      alert('Answer all interview questions before submitting.');
+      return;
+    }
+    answers[question.question_id] = answer;
+  }
+  await api('/pipeline/' + encodeURIComponent(sid) + '/interview/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answers }) });
+  interviewQuestions = [];
+  $('#interview-fields').innerHTML = '';
+  $('#interview-form').classList.add('hidden');
+};
 
 ['interview','design','validate','plan','review','develop'].forEach((name) => stage({ stage: name, status: 'pending' }));
 addEventListener('hashchange', activateTabs);
