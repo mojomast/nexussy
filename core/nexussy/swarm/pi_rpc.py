@@ -122,7 +122,7 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     return rpc
 
 def _command_parts(raw: str) -> list[str]:
-    path = pathlib.Path(raw).expanduser()
+    path = pathlib.Path(raw).expanduser().resolve()
     if path.exists():
         return [str(path)]
     return shlex.split(raw)
