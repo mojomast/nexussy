@@ -48,11 +48,11 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
             await engine._save_art(rid, sid, root, "merge_report", MergeReport(run_id=rid, base_commit="mock", merge_commit="mock", merged_workers=[orch.worker_id], passed=True).model_dump_json(indent=2)),
             await engine._save_art(rid, sid, root, "changed_files", ChangedFilesManifest(run_id=rid, base_commit="mock", merge_commit="mock").model_dump_json(indent=2)),
         ]
-    context = await spawn_workers(engine, req, detail, rid, root, selected_models)
+    context = await spawn_workers(engine, req, detail, rid, root, selected_models, spawn_fn=kwargs.get("spawn_fn", spawn_pi_worker))
     return await merge_workers(engine, req, detail, rid, root, context)
 
 
-async def spawn_workers(engine, req, detail, rid, root, selected_models):
+async def spawn_workers(engine, req, detail, rid, root, selected_models, spawn_fn=spawn_pi_worker):
     sid = detail.session.session_id
     main = pathlib.Path(root)
     workers_root = main.parent / "workers"
@@ -74,7 +74,7 @@ async def spawn_workers(engine, req, detail, rid, root, selected_models):
     orch = Worker(worker_id=f"orchestrator-{uuid4().hex[:6]}", run_id=rid, role=WorkerRole.orchestrator, status=WorkerStatus.running, task_id=f"task-{uuid4().hex[:6]}", task_title="Orchestrate develop run", worktree_path=str(main), branch_name="main", model=orch_model)
     await engine._persist_worker(orch)
     await engine.emit(SSEEventType.worker_spawned, sid, rid, orch)
-    return {"sid": sid, "main": main, "workers_root": workers_root, "artifacts_dir": main / ".nexussy" / "artifacts", "base": base, "cfg": cfg, "roles": roles, "orch": orch, "selected_models": selected_models}
+    return {"sid": sid, "main": main, "workers_root": workers_root, "artifacts_dir": main / ".nexussy" / "artifacts", "base": base, "cfg": cfg, "roles": roles, "orch": orch, "selected_models": selected_models, "spawn_fn": spawn_fn}
 
 
 async def merge_workers(engine, req, detail, rid, root, context):
@@ -122,17 +122,17 @@ async def run_single_worker(engine, req, detail, rid, root, role, idx, context):
     await engine.emit(SSEEventType.worker_spawned, sid, rid, worker)
     await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
     await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.running))
-    await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt)
+    await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, spawn_fn=context["spawn_fn"])
     if not [path for path in pathlib.Path(wt).glob("**/*") if ".git" not in path.parts]:
         pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
     commit = await commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
     return {"worker": worker, "idx": idx, "wid": wid, "wt": wt, "branch": branch, "commit": commit}
 
 
-async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0):
+async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0, spawn_fn=spawn_pi_worker):
     if _depth >= 3:
         raise RuntimeError("worker RPC max resume depth exceeded")
-    rpc = await spawn_pi_worker(cfg, rid, worker.worker_id, role.value, str(main), wt)
+    rpc = await spawn_fn(cfg, rid, worker.worker_id, role.value, str(main), wt)
     rpc.worker_id = worker.worker_id
     engine.active_worker_rpcs.setdefault(rid, []).append(rpc)
     req_id = await rpc.request(worker.task_title, "nexussy develop task")
@@ -164,7 +164,7 @@ async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _de
         await engine.emit(SSEEventType.worker_status, sid, rid, worker)
         await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
         await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.running))
-        await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth=_depth + 1)
+        await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth=_depth + 1, spawn_fn=spawn_fn)
 
 
 async def merge_single_worker(engine, result, req, detail, rid, root, context, workers, merged) -> WorkerMergeResult:

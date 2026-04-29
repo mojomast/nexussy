@@ -1278,8 +1278,7 @@ async def test_worker_rpc_timeout_uses_pause_state_captured_at_timeout(monkeypat
     await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
     worker = Worker(worker_id="backend-1", run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, task_id="task-1", task_title="Build backend", worktree_path=str(tmp_path), branch_name="worker/backend-1", model="openai/gpt-5.5-fast")
     engine.paused["rid"] = True
-    monkeypatch.setattr("nexussy.pipeline.engine.spawn_pi_worker", fake_spawn)
-    await engine._run_worker_rpc("rid", "sid", worker, 1, cfg, WorkerRole.backend, tmp_path, tmp_path)
+    await engine._run_worker_rpc("rid", "sid", worker, 1, cfg, WorkerRole.backend, tmp_path, tmp_path, spawn_fn=fake_spawn)
     rows = await db.read("SELECT status FROM worker_tasks WHERE task_id=?", ("task-1",))
     assert rows[-1]["status"] == WorkerTaskStatus.running.value
 
