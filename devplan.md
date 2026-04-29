@@ -43,6 +43,7 @@
 - Full codebase review fix pass complete: core SSE/tool payloads, worker streams, existing-repo import validation, rate-limit handling, CORS/secret schema drift, 404 semantics, and MCP controls were tightened; TUI restored Pi TUI as default, removed non-contract handoff endpoints, made `/stage` view-only, and hydrates status/workers/artifacts; web and ops fixes are recorded above. Coordinator checks passed: `python3 -m pytest -q core/tests` (86 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck`, `python3 -m pytest -q web/tests` (50 passed), shell syntax, ops tests, installer dry-run, core startup smoke, and alternate-port web startup smoke.
 - Local/team hardening complete: sandboxed executor docs and doctor warning, `dev`/`trusted-lan` profiles, local audit log, operations backup/restore docs, API key rotation plus auth-failure rate limiting, and full live configured-provider plus installed-Pi develop smoke were added without SaaS/multi-tenant features. Final checks passed across core, TUI, web, shell syntax, ops tests, and installer dry-run.
 - Review-response pass complete: fixed dashboard multi-question interview submission, expanded CI into core/TUI/web/ops jobs using `python3`, split pipeline helpers/stages so `engine.py` is 299 lines, and added `scripts/smoke_integration.sh` plus operations docs. Full verification passed after every item.
+- Smoke hardening pass complete: smoke SSE parsing, changed-file field usage, Pi command path/args handling, engine spawn dependency injection, and stale remaining-spec text were fixed with parser harness coverage and full verification.
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -74,6 +75,7 @@
 - [✅] M2: Full codebase review findings fixed across core, TUI, web, and ops/docs with passing coordinator verification.
 - [✅] N1: Local/team hardening raised local/trusted-LAN readiness with executor docs, profiles, audit logging, operations docs, rotate-key/auth rate limits, and R-080 live provider-plus-Pi evidence.
 - [✅] O1: Review-response architecture fixes complete for web multi-answer interviews, CI matrix, pipeline stage extraction, and live smoke evidence.
+- [✅] P1: Smoke hardening fixes complete for parser correctness, Pi command handling, spawn test isolation, and stale status docs.
 - [ ] Next: no active planned task group; await the next SPEC/review assignment.
 <!-- NEXT_TASK_GROUP_END -->
 

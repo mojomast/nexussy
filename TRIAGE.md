@@ -1,5 +1,10 @@
 ## What is solid
 
+- Resolved: smoke SSE parsing now reads the next non-empty `data:` line after `event: done`, and `scripts/test_smoke_parser.sh` proves core-style multiline frames locally.
+- Resolved: the smoke script now uses the verified `ChangedFilesManifest.files` field instead of `changed_files`.
+- Resolved: `NEXUSSY_PI_COMMAND` handling now preserves executable paths with spaces, supports command strings with args, and posts `pi_command` plus `pi_args` separately.
+- Resolved: the engine compatibility wrapper no longer mutates `develop.spawn_pi_worker` globally; tests pass `spawn_fn` explicitly.
+- Resolved: `FULL_SPEC_REMAINING.md` stale local/team hardening “in progress” text is cleared.
 - Core regression suite is green: `python3 -m pytest -q core/tests` passed with 89 tests and 3 existing warnings.
 - `scripts/smoke_integration.sh` is executable and `bash -n scripts/smoke_integration.sh` passes.
 - CI has the expected four verification jobs plus Docker gating: `.github/workflows/ci.yml` defines `core`, `tui`, `web`, `ops`, and `docker-build`, with `docker-build.needs: [core, tui, web, ops]`.

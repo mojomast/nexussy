@@ -8,6 +8,11 @@
 - [review-response] fix: CI matrix expanded — TUI, web, ops jobs added, `python3` throughout.
 - [review-response] refactor: `engine.py` split into `pipeline/helpers.py` + `pipeline/stages/*`.
 - [review-response] feat: `scripts/smoke_integration.sh` — repeatable live integration smoke.
+- [smoke-hardening] fix: SSE done-frame parser in smoke script handles core's multiline frame format.
+- [smoke-hardening] fix: `changed_files` field name verified and corrected to `files` in the smoke script.
+- [smoke-hardening] fix: `PI_COMMAND` space/args handling hardened in script and core.
+- [smoke-hardening] fix: engine compat wrapper no longer mutates `spawn_pi_worker` globally.
+- [smoke-hardening] docs: `FULL_SPEC_REMAINING.md` stale status text cleared.
 - [local-team-hardening] Documented the supported `pi.command` / `NEXUSSY_PI_COMMAND` sandboxed executor pattern for trusted LAN/VPN use, clarified that bundled `nexussy-pi` is local-dev only and not a security boundary, and added a launcher doctor warning when bundled Pi is selected with a non-localhost bind.
 - [local-team-hardening] Added `NEXUSSY_PROFILE=dev|trusted-lan`; `trusted-lan` enables API-key auth, rejects wildcard CORS, requires an explicit Pi command, warns on bundled `nexussy-pi`, and moves default service logs under `~/.nexussy/logs/`.
 - [local-team-hardening] Added local append-only `~/.nexussy/audit.log` entries for pipeline lifecycle, config changes, secret add/delete, worker spawn, and auth failures, plus `./nexussy.sh logs --audit`.
