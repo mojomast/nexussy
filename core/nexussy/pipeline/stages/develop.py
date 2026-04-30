@@ -11,6 +11,7 @@ from uuid import uuid4
 from nexussy.api.schemas import (
     ArtifactRef,
     ChangedFilesManifest,
+    DevplanTask,
     DevelopReport,
     GitEventAction,
     GitEventPayload,
@@ -38,22 +39,44 @@ _TASK_LINE_RE = re.compile(r"^\s*-\s*(?:\[[ xX]\]\s*)?(?:(T-\d+)\s*[:\-]\s*)?(.+
 _SUB_BULLET_RE = re.compile(r"^(\s+)[-*]\s*(.+?)\s*$")
 
 
-def _valid_task_specs(value) -> list[dict] | None:
+def _devplan_task_dump(task: DevplanTask) -> dict:
+    return task.model_dump(mode="json")
+
+
+def _valid_task_specs(value, *, repair: bool = False) -> list[dict] | None:
     if not isinstance(value, list):
         return None
     specs: list[dict] = []
     for idx, item in enumerate(value, start=1):
         if not isinstance(item, dict):
             return None
-        title = str(item.get("title") or "").strip()
-        if not title:
-            return None
-        specs.append({
-            "id": str(item.get("id") or f"T-{idx:03d}"),
-            "title": title,
-            "acceptance_criteria": list(item.get("acceptance_criteria") or []),
-            "files_allowed": list(item.get("files_allowed") or []),
-        })
+        raw = dict(item)
+        if "task_id" not in raw and "id" in raw:
+            raw["task_id"] = raw.pop("id")
+        if isinstance(raw.get("acceptance_criteria"), list):
+            raw["acceptance_criteria"] = "; ".join(str(x) for x in raw["acceptance_criteria"] if str(x).strip())
+        if repair:
+            raw.setdefault("task_id", f"T-auto-{idx}")
+            raw.setdefault("owner", "unknown")
+            raw.setdefault("depends_on", [])
+            raw.setdefault("files_allowed", ["*"])
+            raw.setdefault("acceptance_criteria", "implementation satisfies requested behavior")
+            raw.setdefault("title", f"Task {idx}")
+        try:
+            specs.append(_devplan_task_dump(DevplanTask.model_validate(raw)))
+        except Exception:
+            if not repair:
+                return None
+            raw = {
+                "task_id": str(raw.get("task_id") or f"T-auto-{idx}"),
+                "title": str(raw.get("title") or f"Task {idx}"),
+                "acceptance_criteria": str(raw.get("acceptance_criteria") or "implementation satisfies requested behavior"),
+                "files_allowed": list(raw.get("files_allowed") or ["*"]),
+                "depends_on": list(raw.get("depends_on") or []),
+                "owner": raw.get("owner") or "unknown",
+                "estimated_tokens": raw.get("estimated_tokens") if isinstance(raw.get("estimated_tokens"), int) else None,
+            }
+            specs.append(_devplan_task_dump(DevplanTask.model_validate(raw)))
     return specs or None
 
 
@@ -64,10 +87,10 @@ def _slice_devplan_tasks(devplan_text: str, devplan_tasks_json: str | None = Non
     """
     if devplan_text is None:
         raise TypeError("devplan_text must be a string")
-    fallback = [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    fallback = [_devplan_task_dump(DevplanTask(task_id="T-001", title="Implement devplan", acceptance_criteria="implementation satisfies requested behavior", files_allowed=["*"], depends_on=[], owner="unknown"))]
     if devplan_tasks_json:
         try:
-            sidecar_specs = _valid_task_specs(json.loads(devplan_tasks_json))
+            sidecar_specs = _valid_task_specs(json.loads(devplan_tasks_json), repair=True)
         except Exception:
             sidecar_specs = None
         if sidecar_specs:
@@ -136,7 +159,7 @@ def _slice_devplan_tasks(devplan_text: str, devplan_tasks_json: str | None = Non
                         if p:
                             files.append(p)
                 j += 1
-            tasks.append({"id": task_id, "title": title, "acceptance_criteria": acceptance, "files_allowed": files})
+            tasks.append(_devplan_task_dump(DevplanTask(task_id=task_id, title=title, acceptance_criteria="; ".join(acceptance) or "implementation satisfies requested behavior", files_allowed=files or ["*"], depends_on=[], owner="unknown")))
             i = j
             continue
         i += 1

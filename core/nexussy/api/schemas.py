@@ -221,6 +221,8 @@ class MergeReport(StrictModel):
     run_id:str; base_commit:str; merge_commit:str|None=None; merged_workers:list[str]=Field(default_factory=list); conflicts:list[str]=Field(default_factory=list); passed:bool; created_at:datetime=Field(default_factory=now_utc)
 class DevelopReport(StrictModel):
     run_id:str; passed:bool; workers:list[Worker]=Field(default_factory=list); tasks_total:int=0; tasks_passed:int=0; tasks_failed:int=0; tests_command:str|None=None; tests_passed:bool|None=None; created_at:datetime=Field(default_factory=now_utc)
+class DevplanTask(StrictModel):
+    task_id:str; title:str; acceptance_criteria:str; files_allowed:list[str]=Field(default_factory=list); depends_on:list[str]=Field(default_factory=list); owner:str|None=None; estimated_tokens:int|None=None
 
 class CoreConfig(StrictModel): host:str="127.0.0.1"; port:int=7771; cors_allow_origins:list[str]=Field(default_factory=lambda:["http://127.0.0.1:7772"])
 class WebConfig(StrictModel): host:str="127.0.0.1"; port:int=7772; core_base_url:str="http://127.0.0.1:7771"
@@ -228,10 +230,11 @@ class AuthConfig(StrictModel): enabled:bool=False; api_key_env:str="NEXUSSY_API_
 class DatabaseConfig(StrictModel): global_path:str="~/.nexussy/state.db"; project_relative_path:str=".nexussy/state.db"; wal_enabled:bool=True; busy_timeout_ms:int=5000; write_retry_count:int=5; write_retry_base_ms:int=100
 class ProvidersConfig(StrictModel): default_model:str="openai/gpt-5.5-fast"; allow_fallback:bool=False; request_timeout_s:int=120; max_retries:int=3; retry_base_ms:int=500
 class StageModelConfig(StrictModel): model:str="openai/gpt-5.5-fast"; max_retries:int=3; max_iterations:int|None=None
+class PlanStageConfig(StageModelConfig): devplan_task_validation:Literal["strict","repair","none"]="repair"
 class InterviewStageConfig(StageModelConfig): answer_timeout_s:int=3600; min_description_words:int=50
 class DevelopStageConfig(StrictModel): model:str="openai/gpt-5.5-fast"; orchestrator_model:str="openai/gpt-5.5-fast"; max_retries:int=2
 class StagesConfig(StrictModel):
-    interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:StageModelConfig=Field(default_factory=StageModelConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); plan:StageModelConfig=Field(default_factory=StageModelConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
+    interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:StageModelConfig=Field(default_factory=StageModelConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); plan:PlanStageConfig=Field(default_factory=PlanStageConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
 class SwarmConfig(StrictModel): max_workers:int=8; default_worker_count:int=2; worker_task_timeout_s:int=900; worker_start_timeout_s:int=30; file_lock_timeout_s:int=120; file_lock_retry_ms:int=250; merge_strategy:Literal["no_ff","squash"]="no_ff"; conflict_strategy:Literal["ours","diff3","abort"]="ours"
 class PiConfig(StrictModel): command:str="nexussy-pi"; args:list[str]=Field(default_factory=list); startup_timeout_s:int=30; shutdown_timeout_s:int=10; max_stdout_line_bytes:int=1048576
 class SSEConfig(StrictModel): heartbeat_interval_s:int=15; client_queue_max_events:int=1000; replay_max_events:int=10000; retry_ms:int=3000

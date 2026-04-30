@@ -177,7 +177,13 @@ async def _steer(arguments: dict[str, Any], *, engine, db):
     await db.write(tx)
     if req.target == "orchestrator":
         if engine is not None:
-            engine.steer_queue.setdefault(req.run_id, []).append({"id": inserted["id"], "message": req.message, "priority": req.priority, "ts": now})
+            if req.message == "CLEAR_CONTEXT":
+                engine.steer_queue.pop(req.run_id, None)
+                engine.steer_context.pop(req.run_id, None)
+                consumed_at = now_utc().isoformat()
+                await db.write(lambda con: con.execute("UPDATE steer_events SET consumed_at=? WHERE run_id=? AND target='orchestrator' AND consumed_at IS NULL", (consumed_at, req.run_id)))
+            else:
+                engine.steer_queue.setdefault(req.run_id, []).append({"id": inserted["id"], "message": req.message, "priority": req.priority, "ts": now})
     else:
         # Mirror worker_inject path: emit worker_stream event and forward to active RPC if present
         sid = run_rows[0]["session_id"]
@@ -188,6 +194,14 @@ async def _steer(arguments: dict[str, Any], *, engine, db):
                 if getattr(rpc, "worker_id", None) == req.worker_id:
                     await rpc.inject(req.message)
     return {"ok": True, "id": inserted["id"]}
+
+
+async def _steer_status(arguments: dict[str, Any], *, engine, db):
+    run_id = arguments["run_id"]
+    if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (run_id,)):
+        raise KeyError("run")
+    rows = await db.read("SELECT id, run_id, target, worker_id, message, priority, created_at, consumed_at FROM steer_events WHERE run_id=? ORDER BY id DESC LIMIT 3", (run_id,))
+    return {"run_id": run_id, "queue_length": len(getattr(engine, "steer_queue", {}).get(run_id, [])) if engine is not None else 0, "recent": rows}
 
 
 def _json_rpc_error(code: int, message: str, request_id=None) -> dict[str, Any]:
@@ -276,4 +290,5 @@ register("nexussy_inject", "Inject guidance into a running pipeline", {"type": "
 register("nexussy_worker_spawn", "Spawn a worker in the swarm", {"type": "object", "required": ["run_id", "role", "task"], "properties": {"run_id": {"type": "string"}, "role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "model": {"type": "string"}}}, _worker_spawn)
 register("nexussy_worker_assign", "Assign a task to an existing worker", {"type": "object", "required": ["run_id", "worker_id", "task"], "properties": {"run_id": {"type": "string"}, "worker_id": {"type": "string"}, "task_id": {"type": "string"}, "task": {"type": "string"}, "phase_number": {"type": "integer"}}}, _worker_assign)
 register("nexussy_list_workers", "List workers for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _list_workers)
-register("nexussy_steer", "Steer a running pipeline orchestrator or a specific worker", {"type": "object", "required": ["target", "run_id", "message"], "properties": {"target": {"type": "string", "enum": ["orchestrator", "worker"]}, "run_id": {"type": "string"}, "worker_id": {"type": "string"}, "message": {"type": "string"}, "priority": {"type": "string", "enum": ["low", "normal", "high"]}}}, _steer)
+register("nexussy_steer", "Steer a running pipeline orchestrator or a specific worker", {"type": "object", "required": ["target", "run_id", "message"], "properties": {"target": {"type": "string", "enum": ["orchestrator", "worker"]}, "run_id": {"type": "string"}, "worker_id": {"type": "string"}, "message": {"type": "string"}, "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]}}}, _steer)
+register("nexussy_steer_status", "List queued and recent steering events for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _steer_status)

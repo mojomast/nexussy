@@ -10,6 +10,8 @@
 - [feat:devplan-sidecar] plan now saves a `devplan_tasks` JSON artifact next to `devplan.md`; develop task slicing reads the JSON sidecar first and falls back to markdown parsing when absent or invalid.
 - [feat:conflict-policy] `swarm.conflict_strategy` now controls merge-conflict handling with `ours`, `diff3`, and `abort` modes; conflict reports include `needs_review` plus `conflicts_detail` for diff3 review.
 - [feat:autoskip-confidence] `stages.interview.min_description_words` now gates auto-skip answer confidence, tags short-description answers as low confidence, and nudges design prompts toward conservative choices.
+- [feat:tui-steer] TUI chat supports `/steer`, worker `@mention` targeting, DB-backed `/steer list`, and `/steer clear` via MCP.
+- [feat:devplan-contract] `devplan_tasks` is now a `DevplanTask[]` JSON contract with strict/repair/none validation modes and markdown fallback.
 - [feat:interview-autoskip] setting `metadata.skip_interview = "true"` on `/pipeline/start` synthesizes interview answers from the project description through `engine._provider_text(StageName.interview, ...)` with `source="auto"` and skips the human pause gate.
 - [feat:merge-recovery] `merge_single_worker` no longer raises immediately on merge conflict; it emits a `conflict_report` artifact listing conflicting paths, attempts `git checkout --ours` + `git add` per path, retries `git commit --no-edit`, and only raises `RuntimeError("merge conflict - auto-resolution failed")` if the second commit fails.
 

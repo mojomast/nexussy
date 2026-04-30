@@ -26,6 +26,7 @@ export class CoreClient {
   getSession(sessionId:string){ return this.json("GET",`/sessions/${encodeURIComponent(sessionId)}`); }
   deleteSession(sessionId:string,delete_files=false){ return this.json("DELETE",`/sessions/${encodeURIComponent(sessionId)}`,undefined,{delete_files}); }
   startPipeline(body:unknown){ return this.json<RunStartResponse>("POST","/pipeline/start",body); }
+  mcpCall<T=unknown>(name:string, args:Record<string, unknown>){ return this.json<T>("POST","/mcp/call",{name, arguments:args}); }
   chat(body:{message:string;model?:string|null}){ return this.json<{ok:boolean;message:string;model:string;usage?:unknown}>("POST","/assistant/reply",body); }
   status(run_id:string){ return this.json<PipelineStatusResponse>("GET","/pipeline/status",undefined,{run_id}); }
   inject(body:{run_id:string;message:string;worker_id?:string|null;stage?:StageName|null}){ return this.json("POST","/pipeline/inject",body); }

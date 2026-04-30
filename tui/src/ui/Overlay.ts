@@ -4,7 +4,7 @@ import { renderHandoffModal } from "../components/HandoffModal";
 
 export function renderOverlay(state: ChatUiState): string[] {
   if (state.overlay === "none") return [];
-  if (state.overlay === "help") return ["/help", "/onboarding", "/new <description>", "/status", "/stages", "/plan", "/artifacts", "/workers", "/worker <id>", "/dashboard", "/chat", "/pause", "/resume-run", "/skip <stage> <reason>", "/inject [worker_id] <message>", "/secrets", "/doctor", "/quit"];
+  if (state.overlay === "help") return ["/help", "/onboarding", "/new <description>", "/status", "/stages", "/plan", "/artifacts", "/workers", "/worker <id>", "/dashboard", "/chat", "/pause", "/resume-run", "/skip <stage> <reason>", "/inject [worker_id] <message>", "/steer <message>", "/steer @<worker-id> <message>", "/steer list", "/steer clear", "/secrets", "/doctor", "/quit"];
   if (state.overlay === "onboarding") return renderOnboarding();
   if (state.overlay === "status") return ["Status", `run: ${state.app.runId ?? "none"}`, `paused: ${state.app.paused ? "yes" : "no"}`, `final: ${state.app.finalStatus ?? "-"}`, `tokens: ${state.app.usage.total_tokens}`];
   if (state.overlay === "stages") return ["Stages", ...Object.entries(state.app.stages).map(([k,v]) => `${k}: ${v}`)];

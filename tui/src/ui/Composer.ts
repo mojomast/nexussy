@@ -9,6 +9,7 @@ import type { ChatUiState, ClientLike, CommandOutcome } from "./types";
 const greetingPattern = /^(hi|hello|hey|yo|sup|howdy|hiya|what'?s\s+up|whatsg\s+up|what'?s?\s*good)[!.\s]*$/i;
 const stages = new Set(["interview","design","validate","plan","review","develop"]);
 const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
+const steerWorkerPattern = /^[a-z0-9-]+$/;
 export type InteractionBucket = "ask" | "command" | "choice-selection" | "confirmation" | "ambiguous";
 
 export function looksLikeProjectRequest(text:string): boolean {
@@ -88,8 +89,44 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/skip") { const stage = rest.shift() as StageName; const reason = rest.join(" "); if (!stage || !reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(withHistory.app.runId, stage, reason); return [{ ...withHistory, statusMessage:`skipped ${stage}` }, { message:`skipped ${stage}` }]; }
   if (cmd === "/spawn") { const role = rest.shift() as WorkerRole; if (!role || !roles.has(role)) throw new Error("invalid role"); const task = rest.join(" "); if (!task) throw new Error("task required"); await client.spawn({ run_id:withHistory.app.runId, role, task }); return [{ ...withHistory, statusMessage:"spawned" }, { message:"spawned" }]; }
   if (cmd === "/inject") { const maybe = rest[0]; const workerId = maybe && WORKER_ID_PATTERN.test(maybe) ? rest.shift() : undefined; const message = rest.join(" "); if (!message) throw new Error("message required"); if (workerId) await client.injectWorker(workerId, { run_id:withHistory.app.runId, worker_id:workerId, message }); else await client.inject({ run_id:withHistory.app.runId, message }); return [{ ...withHistory, statusMessage:"injected" }, { message:"injected" }]; }
+  if (cmd === "/steer") return handleSteerCommand(client, withHistory, rest);
   if (cmd === "/escape") return [closeOverlay(withHistory), { message:"overlay closed" }];
   throw new Error(`unknown command ${cmd}`);
+}
+
+async function handleSteerCommand(client:ClientLike, state:ChatUiState, args:string[]): Promise<[ChatUiState, CommandOutcome]> {
+  const runId = state.app.runId;
+  if (!runId) throw new Error("run_id is required for /steer");
+  if (!client.mcpCall) throw new Error("core client does not support MCP calls");
+  const sub = args[0];
+  if (sub === "list") {
+    const status = await client.mcpCall<{queue_length:number; recent:Array<{target:string; worker_id?:string|null; message:string; priority:string; created_at:string; consumed_at?:string|null}>}>("nexussy_steer_status", { run_id:runId });
+    const recent = status.recent.slice(0, 3).map(e => `${e.target}${e.worker_id ? ` ${e.worker_id}` : ""}: ${e.message}`).join("; ") || "none";
+    const message = `steer queue: ${status.queue_length}; recent: ${recent}`;
+    return [{ ...state, statusMessage:message }, { message }];
+  }
+  if (sub === "clear") {
+    await client.mcpCall("nexussy_steer", { target:"orchestrator", run_id:runId, message:"CLEAR_CONTEXT", priority:"normal" });
+    return [{ ...state, statusMessage:"Steering context cleared" }, { message:"Steering context cleared" }];
+  }
+  if (!args.length) throw new Error("usage: /steer <message> or /steer @<worker-id> <message>");
+  const maybeMention = args[0];
+  if (maybeMention?.startsWith("@")) {
+    const workerId = maybeMention.slice(1);
+    if (!steerWorkerPattern.test(workerId)) throw new Error("invalid worker_id");
+    let app = state.app;
+    if (!app.workers[workerId]) app = reduceWorkersSnapshot(app, await client.workers(runId) as any);
+    if (!app.workers[workerId]) throw new Error("worker not found");
+    const message = args.slice(1).join(" ").trim();
+    if (!message) throw new Error("message required");
+    await client.mcpCall("nexussy_steer", { target:"worker", run_id:runId, worker_id:workerId, message, priority:"normal" });
+    const toast = `Steering message sent to worker ${workerId}`;
+    return [{ ...state, app, statusMessage:toast }, { message:toast }];
+  }
+  const message = args.join(" ").trim();
+  if (!message) throw new Error("message required");
+  await client.mcpCall("nexussy_steer", { target:"orchestrator", run_id:runId, message, priority:"normal" });
+  return [{ ...state, statusMessage:"Steering message sent to orchestrator" }, { message:"Steering message sent to orchestrator" }];
 }
 
 async function hydrateRunStatus(client:ClientLike, app:ChatUiState["app"]): Promise<ChatUiState["app"]> {

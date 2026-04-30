@@ -13,6 +13,7 @@ ENV_MAP = {
   "NEXUSSY_REVIEW_MODEL": ("stages","review","model"), "NEXUSSY_DEVELOP_MODEL": ("stages","develop","model"),
   "NEXUSSY_ORCHESTRATOR_MODEL": ("stages","develop","orchestrator_model"), "NEXUSSY_PI_COMMAND": ("pi","command"), "NEXUSSY_LOG_LEVEL": ("logging","level"),
   "NEXUSSY_SWARM_CONFLICT_STRATEGY": ("swarm","conflict_strategy"), "NEXUSSY_INTERVIEW_MIN_DESCRIPTION_WORDS": ("stages","interview","min_description_words"),
+  "NEXUSSY_PLAN_DEVPLAN_TASK_VALIDATION": ("stages","plan","devplan_task_validation"),
 }
 
 def _merge(a: dict, b: dict) -> dict:

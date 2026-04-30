@@ -1389,7 +1389,7 @@ async def test_pi_rpc_request_without_stdin_raises_runtime_error():
 
 @pytest.mark.asyncio
 async def test_steer_orchestrator(tmp_path):
-    from nexussy.mcp import _steer
+    from nexussy.mcp import _steer, _steer_status
 
     db = Database(str(tmp_path / "state.db"))
     await db.init()
@@ -1409,6 +1409,9 @@ async def test_steer_orchestrator(tmp_path):
     assert "focus on auth" in engine.steer_context.get(rid, [])
     rows = await db.read("SELECT consumed_at FROM steer_events WHERE run_id=?", (rid,))
     assert rows[0]["consumed_at"]
+    status = await _steer_status({"run_id": rid}, engine=engine, db=db)
+    assert status["queue_length"] == 0
+    assert status["recent"][0]["message"] == "focus on auth"
     with pytest.raises(Exception):
         await _steer({"target":"worker","run_id":rid,"message":"hi"}, engine=engine, db=db)
 
@@ -1465,26 +1468,27 @@ def test_slice_devplan_tasks():
 """
     specs = _slice_devplan_tasks(devplan)
     assert len(specs) == 3
-    assert specs[0]["id"] == "T-001"
+    assert specs[0]["task_id"] == "T-001"
     assert specs[0]["title"] == "Build the API server"
     assert "returns 200 on /health" in specs[0]["acceptance_criteria"]
     assert "exposes /pipeline/start" in specs[0]["acceptance_criteria"]
     assert "core/nexussy/api/server.py" in specs[0]["files_allowed"]
     assert "core/nexussy/api/schemas.py" in specs[0]["files_allowed"]
-    assert specs[1]["id"] == "T-002"
+    assert specs[1]["task_id"] == "T-002"
     assert specs[1]["title"] == "Implement database layer"
     assert "WAL mode enabled" in specs[1]["acceptance_criteria"]
     assert specs[1]["files_allowed"] == ["core/nexussy/db.py"]
     # Synthesized id for entry without explicit id
-    assert specs[2]["id"] == "T-003"
+    assert specs[2]["task_id"] == "T-003"
     assert specs[2]["title"] == "Build the TUI dashboard"
     assert specs[2]["files_allowed"] == ["tui/src/App.tsx"]
     # Empty string yields fallback
     fallback = _slice_devplan_tasks("")
-    assert fallback == [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    assert fallback[0]["task_id"] == "T-001"
+    assert fallback[0]["files_allowed"] == ["*"]
     # Devplan with no parseable tasks also yields fallback
     nothing = _slice_devplan_tasks("# Just a heading\n\nNo tasks here.\n")
-    assert nothing == [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    assert nothing[0]["task_id"] == "T-001"
     # None raises TypeError
     with pytest.raises(TypeError):
         _slice_devplan_tasks(None)
@@ -1542,8 +1546,8 @@ async def test_devplan_tasks_sidecar(tmp_path):
     rows = await db.read("SELECT content_text FROM artifacts WHERE run_id=? AND kind='devplan_tasks'", ("run-sidecar",))
     tasks = json.loads(rows[0]["content_text"])
     assert "Build API" in tasks[0]["title"]
-    sidecar = json.dumps([{"id":"T-999","title":"Sidecar wins","acceptance_criteria":["ok"],"files_allowed":["core/x.py"]}])
-    assert _slice_devplan_tasks("# No tasks", sidecar)[0]["id"] == "T-999"
+    sidecar = json.dumps([{"task_id":"T-999","title":"Sidecar wins","acceptance_criteria":"ok","files_allowed":["core/x.py"],"depends_on":[],"owner":"A","estimated_tokens":100}])
+    assert _slice_devplan_tasks("# No tasks", sidecar)[0]["task_id"] == "T-999"
 
 
 @pytest.mark.asyncio

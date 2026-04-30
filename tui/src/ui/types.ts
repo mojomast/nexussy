@@ -37,6 +37,7 @@ export interface CommandOutcome { message:string; stream?:boolean; exit?:boolean
 
 export type ClientLike = {
   startPipeline(body:unknown): Promise<{run_id:string; session_id:string}>|{run_id:string; session_id:string};
+  mcpCall?<T=unknown>(name:string, args:Record<string, unknown>): Promise<T>|T;
   chat(body:{message:string; model?:string|null}): Promise<{message:string; model:string; usage?:unknown}>|{message:string; model:string; usage?:unknown};
   inject(body:{run_id:string; message:string; worker_id?:string|null; stage?:StageName|null}): Promise<unknown>|unknown;
   injectWorker(worker_id:string, body:{run_id:string; worker_id:string; message:string}): Promise<unknown>|unknown;

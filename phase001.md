@@ -50,4 +50,5 @@
 - Full SPEC coverage pass added evidence for Ubuntu install idempotency and live two-worker swarm workload control; R-063, R-069, and R-075 are now tested with artifacts under `scripts/evidence/`, and final core/TUI/web/ops/shell verification passes.
 - Steering injection and devplan task sidecar pass added consumed steering injection for plan/develop, `devplan_tasks` JSON artifacts, urgent steering pause preemption, and regression coverage; core/TUI/web verification passes.
 - Conflict policy and autoskip confidence pass added configurable `ours`/`diff3`/`abort` merge-conflict behavior, richer conflict reports, auto-skip confidence tagging, and conservative design prompting for low-confidence generated answers; core/TUI/web verification passes.
+- TUI steering and devplan JSON contract pass added `/steer` orchestrator/worker/list/clear commands, DB-backed steer event status, and strict `DevplanTask[]` validation/repair with markdown fallback; core/TUI/web verification passes.
 <!-- PHASE_PROGRESS_END -->

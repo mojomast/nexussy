@@ -49,48 +49,59 @@ Full SPEC coverage evidence pass complete: R-063/R-069 closed with `ubuntu:22.04
 Feature pass 3 complete: task slicing (`_slice_devplan_tasks` + per-worker `json.dumps(task_spec)` Pi RPC payload), steering (`nexussy_steer` MCP tool, `SteerRequest` schema, `steer_events` SQLite table at schema_version=3, `engine.steer_queue` drained into `engine.steer_context` at each stage boundary, worker-target inject path), interview auto-skip (`metadata.skip_interview="true"` synthesizes all answers via provider with `source="auto"` and bypasses the human gate), and merge conflict recovery (`merge_single_worker` saves a `conflict_report` artifact, runs `git checkout --ours` + `git add` + `git commit --no-edit` per conflicting path, only raises if the second commit fails). Full verification: `python3 -m pytest -q core/tests` (97 passed, +5 new), `cd tui && bun test && bun run typecheck` (67 passed), `python3 -m pytest -q web/tests` (52 passed).
 Steering injection sidecar pass complete: plan/develop now consume orchestrator steering into prompts/task specs, mark `steer_events.consumed_at`, write/read `devplan_tasks` JSON sidecar, and `priority="urgent"` unblocks paused waits. Full verification: `python3 -m pytest -q core/tests` (100 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
 Conflict policy and autoskip confidence pass complete: `swarm.conflict_strategy` now supports `ours`, `diff3`, and `abort`; `conflict_report` includes `needs_review` and `conflicts_detail`; auto-skip interview answers use `stages.interview.min_description_words` for `confidence` tagging, and low-confidence answers prepend conservative design guidance. Full verification: `python3 -m pytest -q core/tests` (104 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed). Steering `consumed_at` verified by `test_steer_orchestrator` and `test_steer_context_injected_into_plan`.
+TUI steering and devplan contract pass complete: TUI `/steer` supports orchestrator messages, `@worker-id` targeting, DB-backed `/steer list`, and `/steer clear`; core now exposes `nexussy_steer_status` and validates/repairs strict `DevplanTask[]` sidecars with markdown fallback. Full verification: `python3 -m pytest -q core/tests` (107 passed), `cd tui && bun test` (70 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
-## HANDOFF — Conflict policy and autoskip confidence
+## HANDOFF — TUI steering UI and DevplanTask contract
 
 ### What was implemented
 
-Files changed:
+Task 1 files changed:
 
-- `core/nexussy/api/schemas.py`: added `InterviewQuestionAnswer.confidence`, `InterviewStageConfig.min_description_words`, and `SwarmConfig.conflict_strategy`.
-- `core/nexussy/config.py`: added env mappings for `NEXUSSY_SWARM_CONFLICT_STRATEGY` and `NEXUSSY_INTERVIEW_MIN_DESCRIPTION_WORDS`.
-- `core/nexussy/pipeline/stages/develop.py`: implemented `ours`, `diff3`, and `abort` conflict strategies and enriched `conflict_report` with `needs_review` plus `conflicts_detail`.
-- `core/nexussy/pipeline/stages/interview.py`: auto-skip answers now get `confidence="low"` when the description is shorter than the configured threshold.
-- `core/nexussy/pipeline/stages/design.py`: low-confidence interview artifacts prepend conservative design instructions.
-- `core/tests/test_core_contract.py`: added `test_conflict_strategy_diff3`, `test_conflict_strategy_abort`, `test_autoskip_low_confidence`, and `test_design_prompt_low_confidence_note`; existing merge and steering consumed-at coverage still passes.
+- `tui/src/ui/Composer.ts`: added `/steer`, `/steer @<worker-id>`, `/steer list`, and `/steer clear` command handling with worker existence checks and confirmation messages.
+- `tui/src/ui/types.ts`: added optional `mcpCall` to the TUI client interface.
+- `tui/src/client.ts`: added `mcpCall()` for `/mcp/call`.
+- `tui/src/ui/Overlay.ts` and `tui/src/ui/CommandPalette.ts`: added steering commands to help/palette listings.
+- `tui/tests/steer.test.ts` and `tui/tests/client.test.ts`: covered orchestrator steering, worker steering, list/clear behavior, and the real `/mcp/call` request shape.
+- `core/nexussy/mcp.py`: added `nexussy_steer_status` so `/steer list` reads real DB `steer_events`; `CLEAR_CONTEXT` clears in-memory steering context/queue and marks unconsumed DB rows consumed.
+
+Task 2 files changed:
+
+- `core/nexussy/api/schemas.py`: added `DevplanTask` and `PlanStageConfig.devplan_task_validation`.
+- `core/nexussy/config.py`: added `NEXUSSY_PLAN_DEVPLAN_TASK_VALIDATION` mapping.
+- `core/nexussy/pipeline/stages/plan.py`: prompts for `devplan_tasks.json`, extracts/validates/repairs `DevplanTask[]`, and saves strict JSON.
+- `core/nexussy/pipeline/stages/develop.py`: validates sidecar JSON as `DevplanTask[]` first and falls back to markdown mapping.
+- `core/tests/test_devplan_contract.py` and `core/tests/test_core_contract.py`: covered strict, repair, markdown fallback, and updated existing sidecar/slicer expectations.
 - Status/docs changed: `AGENTS.md`, `CHANGELOG.md`, `devplan.md`, `phase001.md`, and `handoff.md`.
 
 ### Final test counts
 
 | Suite | Command | Result |
 |---|---|---|
-| Core | `python3 -m pytest -q core/tests` | **104 passed** |
-| TUI | `cd tui && bun test` | **67 passed** |
+| Core | `python3 -m pytest -q core/tests` | **107 passed** |
+| TUI | `cd tui && bun test` | **70 passed** |
 | TUI | `cd tui && bun run typecheck` | **clean** |
 | Web | `python3 -m pytest -q web/tests` | **52 passed** |
 
-### Steering consumed_at
+### Steering List Verification
 
-- Verified with `python3 -m pytest -q core/tests/test_core_contract.py::test_steer_orchestrator core/tests/test_core_contract.py::test_steer_context_injected_into_plan`.
-- Both tests passed and assert `steer_events.consumed_at` is populated after orchestrator steering is consumed.
+- `/steer list` calls `nexussy_steer_status` through `/mcp/call` and renders `queue_length` plus the 3 most recent rows from the SQLite `steer_events` table.
+- Verified by `core/tests/test_core_contract.py::test_steer_orchestrator`, which inserts real steering through `_steer()` and reads it back through `_steer_status()`, and by `tui/tests/steer.test.ts`, which asserts the TUI renders the returned recent DB events.
 
 ### Deviations
 
 - `python -m pytest ...` could not run because `python` is unavailable in this environment; all Python suites were run with `python3`.
-- For `diff3`, the implementation commits the merge after checking out `--ours` so downstream changed-file extraction and worktree cleanup continue normally, while `conflict_report.recovered=false` and `needs_review=true` preserve the review signal.
+- The requested file name `tui/src/core-client.ts` does not exist; the live client is `tui/src/client.ts`, so `mcpCall()` was added there.
+- `/steer clear` records a `CLEAR_CONTEXT` steering event through `nexussy_steer`, clears the in-memory queue/context, and marks unconsumed orchestrator rows consumed instead of leaving `CLEAR_CONTEXT` queued for a later stage.
+- `DevplanTask.acceptance_criteria` is a strict string in the JSON contract; markdown fallback joins legacy bullet-list criteria with `; `.
 
 ### Kyle / Perplexity Review
 
-- Ask whether `diff3` should preserve conflict markers in the actual working tree instead of committing `--ours` content plus artifact detail, and what that means for later stages.
-- Ask whether `conflict_report` should become a formal `ArtifactKind` schema model with validation rather than an ad-hoc JSON object.
-- Ask whether low-confidence auto-skip should block before design for very short descriptions instead of continuing conservatively.
-- Ask whether confidence should be per-answer only or summarized at the `InterviewArtifact` level for UI and MCP consumers.
+- Ask whether `nexussy_steer_status` should be promoted from MCP-only to a public REST endpoint for web/TUI consistency.
+- Ask whether `/steer clear` should emit an SSE event so users can see context clearing in live logs.
+- Ask whether `DevplanTask.acceptance_criteria` should remain a string or become a structured list in a future contract revision.
+- Ask whether `owner` should be constrained to subagent IDs/roles instead of free text.
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->
