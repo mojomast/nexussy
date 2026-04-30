@@ -173,7 +173,7 @@ class AssistantReplyResponse(StrictModel):
     ok:bool=True; message:str; model:str; usage:TokenUsage=Field(default_factory=TokenUsage)
 
 class InterviewQuestionAnswer(StrictModel):
-    question_id:str; question:str; answer:str; source:Literal["user","auto","default"]="user"
+    question_id:str; question:str; answer:str; source:Literal["user","auto","default"]="user"; confidence:Literal["low","high"]="high"
 class InterviewArtifact(StrictModel):
     project_name:str; project_slug:str; description:str; questions:list[InterviewQuestionAnswer]=Field(default_factory=list); requirements:list[str]=Field(default_factory=list); constraints:list[str]=Field(default_factory=list); risks:list[str]=Field(default_factory=list); created_at:datetime=Field(default_factory=now_utc)
 class ComplexityProfile(StrictModel):
@@ -228,11 +228,11 @@ class AuthConfig(StrictModel): enabled:bool=False; api_key_env:str="NEXUSSY_API_
 class DatabaseConfig(StrictModel): global_path:str="~/.nexussy/state.db"; project_relative_path:str=".nexussy/state.db"; wal_enabled:bool=True; busy_timeout_ms:int=5000; write_retry_count:int=5; write_retry_base_ms:int=100
 class ProvidersConfig(StrictModel): default_model:str="openai/gpt-5.5-fast"; allow_fallback:bool=False; request_timeout_s:int=120; max_retries:int=3; retry_base_ms:int=500
 class StageModelConfig(StrictModel): model:str="openai/gpt-5.5-fast"; max_retries:int=3; max_iterations:int|None=None
-class InterviewStageConfig(StageModelConfig): answer_timeout_s:int=3600
+class InterviewStageConfig(StageModelConfig): answer_timeout_s:int=3600; min_description_words:int=50
 class DevelopStageConfig(StrictModel): model:str="openai/gpt-5.5-fast"; orchestrator_model:str="openai/gpt-5.5-fast"; max_retries:int=2
 class StagesConfig(StrictModel):
     interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:StageModelConfig=Field(default_factory=StageModelConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); plan:StageModelConfig=Field(default_factory=StageModelConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
-class SwarmConfig(StrictModel): max_workers:int=8; default_worker_count:int=2; worker_task_timeout_s:int=900; worker_start_timeout_s:int=30; file_lock_timeout_s:int=120; file_lock_retry_ms:int=250; merge_strategy:Literal["no_ff","squash"]="no_ff"
+class SwarmConfig(StrictModel): max_workers:int=8; default_worker_count:int=2; worker_task_timeout_s:int=900; worker_start_timeout_s:int=30; file_lock_timeout_s:int=120; file_lock_retry_ms:int=250; merge_strategy:Literal["no_ff","squash"]="no_ff"; conflict_strategy:Literal["ours","diff3","abort"]="ours"
 class PiConfig(StrictModel): command:str="nexussy-pi"; args:list[str]=Field(default_factory=list); startup_timeout_s:int=30; shutdown_timeout_s:int=10; max_stdout_line_bytes:int=1048576
 class SSEConfig(StrictModel): heartbeat_interval_s:int=15; client_queue_max_events:int=1000; replay_max_events:int=10000; retry_ms:int=3000
 class SecurityConfig(StrictModel): scrub_logs:bool=True; reject_symlink_escape:bool=True; keyring_service:str="nexussy"; cors_origins:list[str]=Field(default_factory=lambda:["*"])

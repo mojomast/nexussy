@@ -47,6 +47,7 @@
 - Production hardening pass complete: smoke and spawn fixes were reverified, secret set/delete provider-cache invalidation has regression coverage, R-040 plan tasks now repair missing owner/acceptance/tests, and R-058/R-067 now officially use OpenTUI by default with Pi TUI opt-in. Full verification passed across core, TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
 - Full SPEC coverage pass complete: R-063/R-069 are closed with two real Ubuntu 22.04 `./install.sh --non-interactive` runs and health evidence; R-075 is closed with a live backend/frontend swarm run using a configured provider, real Pi command, pause/resume, passed done event, and develop/merge/changed-files artifacts. Final verification passed across core (92 tests), TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
 - Steering injection and devplan task sidecar pass complete: plan consumes queued orchestrator steering into provider prompts, develop includes steering in worker task specs, consumed steering rows get `consumed_at`, urgent steering clears paused waits, and plan writes `devplan_tasks` JSON for develop-side slicing. Final verification passed across core (100 tests), TUI (67 tests plus typecheck), and web (52 tests).
+- Conflict policy and autoskip confidence pass complete: `swarm.conflict_strategy` supports `ours`, `diff3`, and `abort`; conflict reports now include `needs_review` and `conflicts_detail`; auto-skip interview answers are confidence-tagged based on `stages.interview.min_description_words`, and low-confidence answers prepend conservative design guidance. Final verification passed across core (104 tests), TUI (67 tests plus typecheck), and web (52 tests).
 <!-- PROGRESS_LOG_END -->
 
 <!-- NEXT_TASK_GROUP_START -->
@@ -82,6 +83,7 @@
 - [✅] Q1: Production hardening fixes complete for provider cache invalidation coverage, plan task contract repair, OpenTUI default contract alignment, docs, and traceability artifacts.
 - [✅] R1: Full SPEC coverage evidence complete for Ubuntu install idempotency and live multi-agent swarm workload control.
 - [✅] S1: Steering injection, `devplan_tasks` sidecar, and urgent steering pause preemption completed with core regression coverage.
+- [✅] T1: Conflict resolution policy and auto-skip confidence gate completed with core regression coverage.
 - [ ] Next: no active planned task group; await Kyle/Perplexity review.
 <!-- NEXT_TASK_GROUP_END -->
 

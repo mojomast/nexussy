@@ -1564,15 +1564,74 @@ async def test_urgent_steer_unblocks_pause(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_merge_conflict_recovery(tmp_path):
-    """Verify merge conflicts auto-resolve via `git checkout --ours` and recommit.
+async def test_autoskip_low_confidence(tmp_path):
+    from nexussy.pipeline.stages import interview
 
-    Builds a real git repo with two branches that touch the same line of the
-    same file, then drives `merge_single_worker` directly with a mocked engine.
-    """
-    from unittest.mock import AsyncMock, MagicMock
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    engine = Engine(db, load_config(overrides={"stages": {"interview": {"min_description_words": 50}}}))
+    root = tmp_path / "project"
+    root.mkdir()
+    calls = []
+
+    async def provider_text(st, sid, run_id, prompt, selected_models, allow_mock):
+        calls.append(prompt)
+        if "Generate a JSON array" in prompt:
+            return json.dumps([
+                {"id": "q_name", "question": "What is the name?"},
+                {"id": "q_lang", "question": "Language?"},
+                {"id": "q_desc", "question": "Description?"},
+                {"id": "q_type", "question": "Type?"},
+            ])
+        return json.dumps({"q_name": "Tiny", "q_lang": "Python", "q_desc": "tiny api", "q_type": "API"})
+
+    engine._provider_text = provider_text
+    req = types.SimpleNamespace(project_name="Tiny", project_slug=None, description="tiny api", metadata={"skip_interview": "true"}, auto_approve_interview=False, resume_run_id=None)
+    detail = types.SimpleNamespace(session=types.SimpleNamespace(session_id="sid", project_slug="tiny"))
+    cp = types.SimpleNamespace(model_dump_json=lambda indent=None: "{}")
+    await interview.run(engine, req, detail, "rid-low", cp, str(root), {}, True)
+    rows = await db.read("SELECT content_text FROM artifacts WHERE run_id=? AND kind='interview'", ("rid-low",))
+    artifact = json.loads(rows[0]["content_text"])
+    assert {q["confidence"] for q in artifact["questions"]} == {"low"}
+
+
+@pytest.mark.asyncio
+async def test_design_prompt_low_confidence_note(tmp_path):
+    from nexussy.api.schemas import InterviewArtifact, InterviewQuestionAnswer
+    from nexussy.pipeline.stages import design
+
+    engine = types.SimpleNamespace()
+    captured = {}
+    artifact = InterviewArtifact(
+        project_name="Tiny",
+        project_slug="tiny",
+        description="tiny api",
+        questions=[InterviewQuestionAnswer(question_id="q1", question="Description?", answer="tiny api", source="auto", confidence="low")],
+        requirements=["tiny api"],
+    )
+
+    async def latest_interview(rid):
+        return artifact
+
+    async def provider_text(st, sid, run_id, prompt, selected_models, allow_mock):
+        captured["prompt"] = prompt
+        return "# Goals\nMinimal.\n# Architecture\nSmall.\n# Dependencies\nPython.\n# Risks\nFew.\n# Test Strategy\nPytest.\n"
+
+    async def save_art(rid, sid, root, kind, text, phase=None):
+        return types.SimpleNamespace(kind=kind, text=text)
+
+    engine._latest_interview_artifact = latest_interview
+    engine._provider_text = provider_text
+    engine._save_art = save_art
+    req = types.SimpleNamespace(description="tiny api")
+    detail = types.SimpleNamespace(session=types.SimpleNamespace(session_id="sid"))
+    await design.run(engine, req, detail, "rid-design", None, str(tmp_path), {}, True)
+    assert captured["prompt"].startswith("Some interview answers were auto-generated from a short description and have low confidence")
+    assert "Do not infer features not explicitly stated." in captured["prompt"]
+
+
+async def _make_conflicting_worker_repo(tmp_path):
     from nexussy.api.schemas import WorkerRole, Worker, WorkerStatus
-    from nexussy.pipeline.stages.develop import merge_single_worker, WorkerMergeResult
     from nexussy.swarm.gitops import _git, init_repo, create_worktree, commit_worker
 
     main = tmp_path / "repo"
@@ -1580,22 +1639,26 @@ async def test_merge_conflict_recovery(tmp_path):
     main.mkdir()
     (main / "shared.txt").write_text("base content\n")
     base = await init_repo(str(main))
-    # Main branch advances first.
     (main / "shared.txt").write_text("main wins\n")
     await _git(main, "add", ".")
     await _git(main, "commit", "-m", "main edit")
-    # Worker worktree branched from base, conflicts with main.
     wid = "backend-test01"
     wt, branch = await create_worktree(str(main), str(workers_root), wid, base)
     (Path(wt) / "shared.txt").write_text("worker wins\n")
     commit = await commit_worker(wt, "worker edit")
-
     worker = Worker(
         worker_id=wid, run_id="rid-test", role=WorkerRole.backend,
         status=WorkerStatus.running, task_id="task-test", task_title="Test conflict",
         worktree_path=wt, branch_name=branch, model="fake",
     )
+    return main, base, wid, wt, branch, commit, worker, WorkerRole
+
+
+def _mock_merge_engine(conflict_strategy="ours"):
+    from unittest.mock import AsyncMock, MagicMock
+
     engine = MagicMock()
+    engine.config = types.SimpleNamespace(swarm=types.SimpleNamespace(conflict_strategy=conflict_strategy))
     engine.emit = AsyncMock()
     engine._persist_worker = AsyncMock()
     engine._persist_worker_task = AsyncMock()
@@ -1604,6 +1667,19 @@ async def test_merge_conflict_recovery(tmp_path):
         saved_artifacts.append((kind, text))
         return MagicMock(kind=kind)
     engine._save_art = AsyncMock(side_effect=_capture_save)
+    return engine, saved_artifacts
+
+
+@pytest.mark.asyncio
+async def test_merge_conflict_recovery(tmp_path):
+    """Verify merge conflicts auto-resolve via `git checkout --ours` and recommit.
+
+    Builds a real git repo with two branches that touch the same line of the
+    same file, then drives `merge_single_worker` directly with a mocked engine.
+    """
+    from nexussy.pipeline.stages.develop import merge_single_worker, WorkerMergeResult
+    main, base, wid, wt, branch, commit, worker, WorkerRole = await _make_conflicting_worker_repo(tmp_path)
+    engine, saved_artifacts = _mock_merge_engine("ours")
 
     context = {
         "sid": "sid-test", "main": main, "base": base,
@@ -1621,6 +1697,8 @@ async def test_merge_conflict_recovery(tmp_path):
     assert len(conflict_reports) == 1
     cr = json.loads(conflict_reports[0])
     assert cr["recovered"] is True
+    assert cr["needs_review"] is False
+    assert cr["conflicts_detail"] == {"shared.txt": ""}
     assert "shared.txt" in cr["conflicts"]
     assert "shared.txt" in cr["auto_resolved"]
     assert cr["auto_resolution_failed"] == []
@@ -1633,3 +1711,46 @@ async def test_merge_conflict_recovery(tmp_path):
         if kind == "merge_report" and json.loads(text).get("passed") is False
     ]
     assert failure_merge_reports == []
+
+
+@pytest.mark.asyncio
+async def test_conflict_strategy_diff3(tmp_path):
+    from nexussy.pipeline.stages.develop import merge_single_worker, WorkerMergeResult
+
+    main, base, wid, wt, branch, commit, worker, WorkerRole = await _make_conflicting_worker_repo(tmp_path)
+    engine, saved_artifacts = _mock_merge_engine("diff3")
+    context = {"sid": "sid-test", "main": main, "base": base, "roles": [WorkerRole.backend], "artifacts_dir": main / ".nexussy" / "artifacts"}
+    result = {"worker": worker, "idx": 1, "wid": wid, "wt": wt, "branch": branch, "commit": commit}
+
+    merge_result = await merge_single_worker(engine, result, None, None, "rid-test", str(main), context, [], [])
+
+    assert isinstance(merge_result, WorkerMergeResult)
+    conflict_reports = [text for kind, text in saved_artifacts if kind == "conflict_report"]
+    cr = json.loads(conflict_reports[0])
+    assert cr["recovered"] is False
+    assert cr["needs_review"] is True
+    assert "shared.txt" in cr["conflicts_detail"]
+    assert "<<<<<<<" in cr["conflicts_detail"]["shared.txt"]
+    assert "|||||||" in cr["conflicts_detail"]["shared.txt"]
+    assert (main / "shared.txt").read_text() == "main wins\n"
+
+
+@pytest.mark.asyncio
+async def test_conflict_strategy_abort(tmp_path):
+    from nexussy.pipeline.stages.develop import merge_single_worker
+    from nexussy.swarm.gitops import _git
+
+    main, base, wid, wt, branch, commit, worker, WorkerRole = await _make_conflicting_worker_repo(tmp_path)
+    engine, saved_artifacts = _mock_merge_engine("abort")
+    context = {"sid": "sid-test", "main": main, "base": base, "roles": [WorkerRole.backend], "artifacts_dir": main / ".nexussy" / "artifacts"}
+    result = {"worker": worker, "idx": 1, "wid": wid, "wt": wt, "branch": branch, "commit": commit}
+
+    with pytest.raises(RuntimeError, match="shared.txt"):
+        await merge_single_worker(engine, result, None, None, "rid-test", str(main), context, [], [])
+
+    conflict_reports = [text for kind, text in saved_artifacts if kind == "conflict_report"]
+    cr = json.loads(conflict_reports[0])
+    assert cr["recovered"] is False
+    assert cr["needs_review"] is False
+    assert cr["conflicts_detail"] == {"shared.txt": ""}
+    assert await _git(main, "status", "--porcelain") == ""

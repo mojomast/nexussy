@@ -48,42 +48,49 @@ Production hardening pass complete: smoke/parser and spawn-injection fixes were 
 Full SPEC coverage evidence pass complete: R-063/R-069 closed with `ubuntu:22.04` Docker evidence for two real `./install.sh --non-interactive` runs plus health checks in `scripts/evidence/install_idempotency_run1.txt` and `scripts/evidence/install_idempotency_run2.txt`. R-075 closed with `scripts/evidence/swarm_proof_run.json`, recording a live configured-provider backend/frontend swarm run, real Pi command availability, pause/resume responses, final `done final_status=passed`, and `develop_report`/`merge_report`/`changed_files` artifacts. Core no-change worker commits now return HEAD and are regression-tested. Final verification passed: `python3 -m pytest -q core/tests` (92 passed), `cd tui && bun test && bun run typecheck` (67 passed), `python3 -m pytest -q web/tests` (52 passed), shell syntax, smoke parser, `./ops_tests.sh`, and installer dry-run.
 Feature pass 3 complete: task slicing (`_slice_devplan_tasks` + per-worker `json.dumps(task_spec)` Pi RPC payload), steering (`nexussy_steer` MCP tool, `SteerRequest` schema, `steer_events` SQLite table at schema_version=3, `engine.steer_queue` drained into `engine.steer_context` at each stage boundary, worker-target inject path), interview auto-skip (`metadata.skip_interview="true"` synthesizes all answers via provider with `source="auto"` and bypasses the human gate), and merge conflict recovery (`merge_single_worker` saves a `conflict_report` artifact, runs `git checkout --ours` + `git add` + `git commit --no-edit` per conflicting path, only raises if the second commit fails). Full verification: `python3 -m pytest -q core/tests` (97 passed, +5 new), `cd tui && bun test && bun run typecheck` (67 passed), `python3 -m pytest -q web/tests` (52 passed).
 Steering injection sidecar pass complete: plan/develop now consume orchestrator steering into prompts/task specs, mark `steer_events.consumed_at`, write/read `devplan_tasks` JSON sidecar, and `priority="urgent"` unblocks paused waits. Full verification: `python3 -m pytest -q core/tests` (100 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
+Conflict policy and autoskip confidence pass complete: `swarm.conflict_strategy` now supports `ours`, `diff3`, and `abort`; `conflict_report` includes `needs_review` and `conflicts_detail`; auto-skip interview answers use `stages.interview.min_description_words` for `confidence` tagging, and low-confidence answers prepend conservative design guidance. Full verification: `python3 -m pytest -q core/tests` (104 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed). Steering `consumed_at` verified by `test_steer_orchestrator` and `test_steer_context_injected_into_plan`.
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
-## HANDOFF — Steering injection, devplan sidecar, urgent preemption
+## HANDOFF — Conflict policy and autoskip confidence
 
 ### What was implemented
 
-- Plan steering injection: `core/nexussy/pipeline/stages/plan.py` now calls `await engine.consume_steer(rid)` before provider completion and prepends a `## Steering Instructions` block to the plan prompt when messages exist.
-- Develop steering injection: `core/nexussy/pipeline/stages/develop.py` now consumes queued orchestrator steering before worker assignment and adds the same steering block to each task spec sent through the Pi RPC JSON payload.
-- Steering persistence: `core/nexussy/pipeline/engine.py` now marks consumed queued steering rows with `steer_events.consumed_at`; `core/nexussy/mcp.py` stores inserted event IDs in `engine.steer_queue`.
-- Devplan sidecar: `plan.run()` saves `devplan_tasks` JSON alongside `devplan.md`; `develop._slice_devplan_tasks(devplan_text, devplan_tasks_json=None)` reads valid sidecar JSON first and falls back to markdown/anchor parsing.
-- Urgent preemption: `priority="urgent"` is accepted in `core/nexussy/api/schemas.py`; the paused poll loop drains urgent steering into `steer_context` and clears paused state immediately.
-- Artifact support: `core/nexussy/api/schemas.py` and `core/nexussy/artifacts/store.py` now include the `devplan_tasks` artifact kind/path.
-- Regression tests: `core/tests/test_core_contract.py` adds `test_steer_context_injected_into_plan`, `test_devplan_tasks_sidecar`, and `test_urgent_steer_unblocks_pause`; the prior steering test now verifies `consumed_at`.
-- Status/docs changed: `AGENTS.md`, `CHANGELOG.md`, `devplan.md`, `phase001.md`, and `handoff.md` updated.
+Files changed:
+
+- `core/nexussy/api/schemas.py`: added `InterviewQuestionAnswer.confidence`, `InterviewStageConfig.min_description_words`, and `SwarmConfig.conflict_strategy`.
+- `core/nexussy/config.py`: added env mappings for `NEXUSSY_SWARM_CONFLICT_STRATEGY` and `NEXUSSY_INTERVIEW_MIN_DESCRIPTION_WORDS`.
+- `core/nexussy/pipeline/stages/develop.py`: implemented `ours`, `diff3`, and `abort` conflict strategies and enriched `conflict_report` with `needs_review` plus `conflicts_detail`.
+- `core/nexussy/pipeline/stages/interview.py`: auto-skip answers now get `confidence="low"` when the description is shorter than the configured threshold.
+- `core/nexussy/pipeline/stages/design.py`: low-confidence interview artifacts prepend conservative design instructions.
+- `core/tests/test_core_contract.py`: added `test_conflict_strategy_diff3`, `test_conflict_strategy_abort`, `test_autoskip_low_confidence`, and `test_design_prompt_low_confidence_note`; existing merge and steering consumed-at coverage still passes.
+- Status/docs changed: `AGENTS.md`, `CHANGELOG.md`, `devplan.md`, `phase001.md`, and `handoff.md`.
 
 ### Final test counts
 
 | Suite | Command | Result |
 |---|---|---|
-| Core | `python3 -m pytest -q core/tests` | **100 passed** |
+| Core | `python3 -m pytest -q core/tests` | **104 passed** |
 | TUI | `cd tui && bun test` | **67 passed** |
 | TUI | `cd tui && bun run typecheck` | **clean** |
 | Web | `python3 -m pytest -q web/tests` | **52 passed** |
 
+### Steering consumed_at
+
+- Verified with `python3 -m pytest -q core/tests/test_core_contract.py::test_steer_orchestrator core/tests/test_core_contract.py::test_steer_context_injected_into_plan`.
+- Both tests passed and assert `steer_events.consumed_at` is populated after orchestrator steering is consumed.
+
 ### Deviations
 
 - `python -m pytest ...` could not run because `python` is unavailable in this environment; all Python suites were run with `python3`.
-- Develop steering is embedded as a `steering_instructions` field in each JSON task spec so the Pi RPC payload remains structured JSON.
+- For `diff3`, the implementation commits the merge after checking out `--ours` so downstream changed-file extraction and worktree cleanup continue normally, while `conflict_report.recovered=false` and `needs_review=true` preserve the review signal.
 
 ### Kyle / Perplexity Review
 
-- Review whether develop-stage steering should remain a task-spec field or become a top-level orchestrator prompt separate from worker task JSON.
-- Review whether `consumed_at` should also be set for worker-target steering after successful RPC inject, or remain orchestrator-consumption-only.
-- Review whether urgent steering should emit an explicit SSE event when it preempts a paused run.
-- Review whether `devplan_tasks` should be promoted to a formal public artifact contract in `SPEC.md` with stricter schema validation.
+- Ask whether `diff3` should preserve conflict markers in the actual working tree instead of committing `--ours` content plus artifact detail, and what that means for later stages.
+- Ask whether `conflict_report` should become a formal `ArtifactKind` schema model with validation rather than an ad-hoc JSON object.
+- Ask whether low-confidence auto-skip should block before design for very short descriptions instead of continuing conservatively.
+- Ask whether confidence should be per-answer only or summarized at the `InterviewArtifact` level for UI and MCP consumers.
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->

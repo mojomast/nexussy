@@ -41,13 +41,15 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
     ck = await save_checkpoint(engine.db, rid, StageName.interview, ".nexussy/checkpoints/interview-questions.json", content=question_content)
     await engine.emit(SSEEventType.checkpoint_saved, sid, rid, ck)
     if auto_mode:
+        threshold = int(getattr(engine.config.stages.interview, "min_description_words", 50) or 50)
+        confidence = "low" if len(req.description.split()) < threshold else "high"
         answer_prompt = (
             "Answer these interview questions as JSON using only the project description. "
             "Return a JSON object mapping each question id to a concise answer.\n\n"
             f"Project name: {req.project_name}\nProject description: {req.description}\nQuestions: {json.dumps([{'id': q.question_id, 'question': q.question} for q in questions])}"
         )
         answers = parse_auto_answers(await engine._provider_text(st, sid, rid, answer_prompt, selected_models, allow_mock), questions, req)
-        answered = [InterviewQuestionAnswer(question_id=q.question_id, question=q.question, answer=answers[q.question_id], source="auto") for q in questions]
+        answered = [InterviewQuestionAnswer(question_id=q.question_id, question=q.question, answer=answers[q.question_id], source="auto", confidence=confidence) for q in questions]
     else:
         pending = InterviewArtifact(project_name=req.project_name, project_slug=detail.session.project_slug, description=req.description, questions=questions, requirements=[req.description])
         await engine._save_art(rid, sid, root, "interview", pending.model_dump_json(indent=2))

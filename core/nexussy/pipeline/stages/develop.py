@@ -319,17 +319,27 @@ async def _git_proc(cwd: pathlib.Path, *args: str, timeout: float = 60.0) -> tup
     return proc.returncode, stdout.decode(errors="replace")
 
 
-async def _attempt_conflict_recovery(main: pathlib.Path, branch: str, conflicts: list[str]) -> tuple[bool, list[str], list[str]]:
-    """Re-run merge then auto-resolve via `git checkout --ours` and finalize.
-
-    Returns (recovered, auto_resolved, auto_resolution_failed).
-    """
+async def _attempt_conflict_recovery(engine, main: pathlib.Path, branch: str, conflicts: list[str]) -> dict:
+    """Re-run merge and apply the configured conflict strategy."""
+    strategy = getattr(getattr(engine.config, "swarm", None), "conflict_strategy", "ours")
+    if strategy not in {"ours", "diff3", "abort"}:
+        strategy = "ours"
     auto_resolved: list[str] = []
     auto_resolution_failed: list[str] = []
+    conflicts_detail: dict[str, str] = {path: "" for path in conflicts}
     # Re-enter merge state (merge_no_ff aborted it). Ignore failure return-code -
     # a conflicting merge will return non-zero but leave the index in MERGING state.
-    await _git_proc(main, "merge", "--no-ff", branch, "-m", f"merge {branch}")
+    merge_args = ("-c", "merge.conflictStyle=diff3", "merge", "--no-ff", branch, "-m", f"merge {branch}") if strategy == "diff3" else ("merge", "--no-ff", branch, "-m", f"merge {branch}")
+    await _git_proc(main, *merge_args)
+    if strategy == "abort":
+        await _git_proc(main, "merge", "--abort")
+        return {"recovered": False, "needs_review": False, "auto_resolved": [], "auto_resolution_failed": list(conflicts), "conflicts_detail": conflicts_detail, "aborted": True}
     for path in conflicts:
+        if strategy == "diff3":
+            try:
+                conflicts_detail[path] = (main / path).read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                conflicts_detail[path] = ""
         co_rc, _ = await _git_proc(main, "checkout", "--ours", "--", path)
         if co_rc != 0:
             auto_resolution_failed.append(path)
@@ -342,12 +352,12 @@ async def _attempt_conflict_recovery(main: pathlib.Path, branch: str, conflicts:
     if auto_resolution_failed:
         # Abort the in-progress merge so subsequent operations have a clean tree.
         await _git_proc(main, "merge", "--abort")
-        return False, auto_resolved, auto_resolution_failed
+        return {"recovered": False, "needs_review": strategy == "diff3", "auto_resolved": auto_resolved, "auto_resolution_failed": auto_resolution_failed, "conflicts_detail": conflicts_detail, "aborted": False}
     commit_rc, _ = await _git_proc(main, "commit", "--no-edit")
     if commit_rc != 0:
         await _git_proc(main, "merge", "--abort")
-        return False, auto_resolved, auto_resolution_failed
-    return True, auto_resolved, auto_resolution_failed
+        return {"recovered": False, "needs_review": strategy == "diff3", "auto_resolved": auto_resolved, "auto_resolution_failed": auto_resolution_failed, "conflicts_detail": conflicts_detail, "aborted": False}
+    return {"recovered": strategy == "ours", "needs_review": strategy == "diff3", "auto_resolved": auto_resolved, "auto_resolution_failed": auto_resolution_failed, "conflicts_detail": conflicts_detail, "aborted": False}
 
 
 async def merge_single_worker(engine, result, req, detail, rid, root, context, workers, merged) -> WorkerMergeResult:
@@ -365,18 +375,22 @@ async def merge_single_worker(engine, result, req, detail, rid, root, context, w
     merge_result = await merge_no_ff(str(main), branch)
     if not merge_result.passed:
         await engine.emit(SSEEventType.git_event, sid, rid, GitEventPayload(action=GitEventAction.merge_conflict, worker_id=wid, branch_name=branch, paths=merge_result.conflicts, message="merge conflict"))
-        recovered, auto_resolved, auto_resolution_failed = await _attempt_conflict_recovery(main, branch, merge_result.conflicts)
+        recovery = await _attempt_conflict_recovery(engine, main, branch, merge_result.conflicts)
         report = {
             "run_id": rid,
             "worker_id": wid,
             "branch": branch,
             "conflicts": list(merge_result.conflicts),
-            "auto_resolved": auto_resolved,
-            "auto_resolution_failed": auto_resolution_failed,
-            "recovered": recovered,
+            "auto_resolved": recovery["auto_resolved"],
+            "auto_resolution_failed": recovery["auto_resolution_failed"],
+            "recovered": recovery["recovered"],
+            "needs_review": recovery["needs_review"],
+            "conflicts_detail": recovery["conflicts_detail"],
         }
         await engine._save_art(rid, sid, root, "conflict_report", json.dumps(report, indent=2, sort_keys=True))
-        if not recovered:
+        if recovery["aborted"]:
+            raise RuntimeError("merge conflict - aborted: " + ", ".join(merge_result.conflicts))
+        if not recovery["recovered"] and not recovery["needs_review"]:
             await engine._save_art(rid, sid, root, "merge_report", MergeReport(run_id=rid, base_commit=base, merged_workers=merged, conflicts=merge_result.conflicts, passed=False).model_dump_json(indent=2))
             await engine._save_art(rid, sid, root, "develop_report", DevelopReport(run_id=rid, passed=False, workers=workers + [worker], tasks_total=len(roles), tasks_passed=len(merged), tasks_failed=1).model_dump_json(indent=2))
             raise RuntimeError("merge conflict - auto-resolution failed")
