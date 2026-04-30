@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import pathlib
+import re
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -31,6 +32,83 @@ from nexussy.swarm.pi_rpc import spawn_pi_worker
 class WorkerMergeResult:
     worker: Worker
     worker_id: str
+
+
+_TASK_LINE_RE = re.compile(r"^\s*-\s*(?:\[[ xX]\]\s*)?(?:(T-\d+)\s*[:\-]\s*)?(.+?)\s*$")
+_SUB_BULLET_RE = re.compile(r"^(\s+)[-*]\s*(.+?)\s*$")
+
+
+def _slice_devplan_tasks(devplan_text: str) -> list[dict]:
+    """Parse a devplan markdown artifact into atomic task specs.
+
+    Each spec has keys: id, title, acceptance_criteria, files_allowed.
+    """
+    if devplan_text is None:
+        raise TypeError("devplan_text must be a string")
+    fallback = [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    if not devplan_text.strip():
+        return fallback
+    lines = devplan_text.splitlines()
+    tasks: list[dict] = []
+    in_tasks_section = False
+    auto_id = 0
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        # Detect heading sections
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip().lower()
+            in_tasks_section = ("task" in heading) or heading.startswith("phase ")
+            i += 1
+            continue
+        # Top-level task bullet (no leading indent)
+        if in_tasks_section and re.match(r"^-\s", line):
+            m = _TASK_LINE_RE.match(line)
+            if not m:
+                i += 1
+                continue
+            explicit_id = m.group(1)
+            title = (m.group(2) or "").strip()
+            if not title:
+                i += 1
+                continue
+            auto_id += 1
+            task_id = explicit_id or f"T-{auto_id:03d}"
+            acceptance: list[str] = []
+            files: list[str] = []
+            # Look ahead for indented sub-bullets
+            j = i + 1
+            while j < len(lines):
+                sub = lines[j]
+                if not sub.strip():
+                    j += 1
+                    continue
+                sm = _SUB_BULLET_RE.match(sub)
+                if not sm:
+                    break
+                content = sm.group(2)
+                low = content.lower()
+                if low.startswith("acceptance criteria:") or low.startswith("acceptance:"):
+                    _, _, rest = content.partition(":")
+                    for piece in rest.split(","):
+                        p = piece.strip()
+                        if p:
+                            acceptance.append(p)
+                elif low.startswith("files_allowed:") or low.startswith("files:"):
+                    _, _, rest = content.partition(":")
+                    for piece in rest.split(","):
+                        p = piece.strip()
+                        if p:
+                            files.append(p)
+                j += 1
+            tasks.append({"id": task_id, "title": title, "acceptance_criteria": acceptance, "files_allowed": files})
+            i = j
+            continue
+        i += 1
+    if not tasks:
+        return fallback
+    return tasks
 
 
 async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs) -> list[ArtifactRef]:
@@ -86,7 +164,15 @@ async def merge_workers(engine, req, detail, rid, root, context):
     orch = context["orch"]
     workers = [orch]
     merged = []
-    worker_results = await asyncio.gather(*[run_single_worker(engine, req, detail, rid, root, role, idx, context) for idx, role in enumerate(roles, start=1)], return_exceptions=True)
+    devplan_text = ""
+    try:
+        devplan_path = pathlib.Path(root) / "devplan.md"
+        if devplan_path.exists():
+            devplan_text = devplan_path.read_text(encoding="utf-8")
+    except Exception:
+        devplan_text = ""
+    specs = _slice_devplan_tasks(devplan_text)
+    worker_results = await asyncio.gather(*[run_single_worker(engine, req, detail, rid, root, role, idx, context, task_spec=specs[(idx - 1) % len(specs)]) for idx, role in enumerate(roles, start=1)], return_exceptions=True)
     for result in worker_results:
         if isinstance(result, Exception):
             raise result
@@ -106,7 +192,7 @@ async def merge_workers(engine, req, detail, rid, root, context):
     ]
 
 
-async def run_single_worker(engine, req, detail, rid, root, role, idx, context):
+async def run_single_worker(engine, req, detail, rid, root, role, idx, context, task_spec: dict | None = None):
     sid = context["sid"]
     main = context["main"]
     workers_root = context["workers_root"]
@@ -117,25 +203,27 @@ async def run_single_worker(engine, req, detail, rid, root, role, idx, context):
     async with engine.git_lock:
         wt, branch = await create_worktree(str(main), str(workers_root), wid, base)
     await engine.emit(SSEEventType.git_event, sid, rid, GitEventPayload(action=GitEventAction.worktree_created, worker_id=wid, branch_name=branch, message="worktree created"))
-    worker = Worker(worker_id=wid, run_id=rid, role=role, status=WorkerStatus.running, task_id=f"task-{uuid4().hex[:6]}", task_title=f"Develop task {idx}", worktree_path=wt, branch_name=branch, model=selected_models.get("develop") or engine.config.stages.develop.model)
+    task_title = (task_spec or {}).get("title") or f"Develop task {idx}"
+    worker = Worker(worker_id=wid, run_id=rid, role=role, status=WorkerStatus.running, task_id=f"task-{uuid4().hex[:6]}", task_title=task_title, worktree_path=wt, branch_name=branch, model=selected_models.get("develop") or engine.config.stages.develop.model)
     await engine._persist_worker(worker)
     await engine.emit(SSEEventType.worker_spawned, sid, rid, worker)
     await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
     await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.running))
-    await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, spawn_fn=context["spawn_fn"])
+    await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, spawn_fn=context["spawn_fn"], task_spec=task_spec)
     if not [path for path in pathlib.Path(wt).glob("**/*") if ".git" not in path.parts]:
         pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
     commit = await commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
     return {"worker": worker, "idx": idx, "wid": wid, "wt": wt, "branch": branch, "commit": commit}
 
 
-async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0, spawn_fn=spawn_pi_worker):
+async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0, spawn_fn=spawn_pi_worker, task_spec: dict | None = None):
     if _depth >= 3:
         raise RuntimeError("worker RPC max resume depth exceeded")
     rpc = await spawn_fn(cfg, rid, worker.worker_id, role.value, str(main), wt)
     rpc.worker_id = worker.worker_id
     engine.active_worker_rpcs.setdefault(rid, []).append(rpc)
-    req_id = await rpc.request(worker.task_title, "nexussy develop task")
+    prompt = json.dumps(task_spec) if task_spec else "nexussy develop task"
+    req_id = await rpc.request(worker.task_title, prompt)
     was_paused_on_timeout = False
     try:
         await rpc.wait_response(req_id, engine.config.swarm.worker_task_timeout_s)
@@ -164,7 +252,55 @@ async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _de
         await engine.emit(SSEEventType.worker_status, sid, rid, worker)
         await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
         await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.running))
-        await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth=_depth + 1, spawn_fn=spawn_fn)
+        await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth=_depth + 1, spawn_fn=spawn_fn, task_spec=task_spec)
+
+
+async def _git_proc(cwd: pathlib.Path, *args: str, timeout: float = 60.0) -> tuple[int, str]:
+    """Run a git command via asyncio subprocess. Returns (returncode, combined_output)."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise TimeoutError(f"git {' '.join(args)} timed out after {timeout}s")
+    return proc.returncode, stdout.decode(errors="replace")
+
+
+async def _attempt_conflict_recovery(main: pathlib.Path, branch: str, conflicts: list[str]) -> tuple[bool, list[str], list[str]]:
+    """Re-run merge then auto-resolve via `git checkout --ours` and finalize.
+
+    Returns (recovered, auto_resolved, auto_resolution_failed).
+    """
+    auto_resolved: list[str] = []
+    auto_resolution_failed: list[str] = []
+    # Re-enter merge state (merge_no_ff aborted it). Ignore failure return-code -
+    # a conflicting merge will return non-zero but leave the index in MERGING state.
+    await _git_proc(main, "merge", "--no-ff", branch, "-m", f"merge {branch}")
+    for path in conflicts:
+        co_rc, _ = await _git_proc(main, "checkout", "--ours", "--", path)
+        if co_rc != 0:
+            auto_resolution_failed.append(path)
+            continue
+        add_rc, _ = await _git_proc(main, "add", "--", path)
+        if add_rc != 0:
+            auto_resolution_failed.append(path)
+            continue
+        auto_resolved.append(path)
+    if auto_resolution_failed:
+        # Abort the in-progress merge so subsequent operations have a clean tree.
+        await _git_proc(main, "merge", "--abort")
+        return False, auto_resolved, auto_resolution_failed
+    commit_rc, _ = await _git_proc(main, "commit", "--no-edit")
+    if commit_rc != 0:
+        await _git_proc(main, "merge", "--abort")
+        return False, auto_resolved, auto_resolution_failed
+    return True, auto_resolved, auto_resolution_failed
 
 
 async def merge_single_worker(engine, result, req, detail, rid, root, context, workers, merged) -> WorkerMergeResult:
@@ -182,10 +318,29 @@ async def merge_single_worker(engine, result, req, detail, rid, root, context, w
     merge_result = await merge_no_ff(str(main), branch)
     if not merge_result.passed:
         await engine.emit(SSEEventType.git_event, sid, rid, GitEventPayload(action=GitEventAction.merge_conflict, worker_id=wid, branch_name=branch, paths=merge_result.conflicts, message="merge conflict"))
-        await engine._save_art(rid, sid, root, "merge_report", MergeReport(run_id=rid, base_commit=base, merged_workers=merged, conflicts=merge_result.conflicts, passed=False).model_dump_json(indent=2))
-        await engine._save_art(rid, sid, root, "develop_report", DevelopReport(run_id=rid, passed=False, workers=workers + [worker], tasks_total=len(roles), tasks_passed=len(merged), tasks_failed=1).model_dump_json(indent=2))
-        raise RuntimeError("merge conflict")
+        recovered, auto_resolved, auto_resolution_failed = await _attempt_conflict_recovery(main, branch, merge_result.conflicts)
+        report = {
+            "run_id": rid,
+            "worker_id": wid,
+            "branch": branch,
+            "conflicts": list(merge_result.conflicts),
+            "auto_resolved": auto_resolved,
+            "auto_resolution_failed": auto_resolution_failed,
+            "recovered": recovered,
+        }
+        await engine._save_art(rid, sid, root, "conflict_report", json.dumps(report, indent=2, sort_keys=True))
+        if not recovered:
+            await engine._save_art(rid, sid, root, "merge_report", MergeReport(run_id=rid, base_commit=base, merged_workers=merged, conflicts=merge_result.conflicts, passed=False).model_dump_json(indent=2))
+            await engine._save_art(rid, sid, root, "develop_report", DevelopReport(run_id=rid, passed=False, workers=workers + [worker], tasks_total=len(roles), tasks_passed=len(merged), tasks_failed=1).model_dump_json(indent=2))
+            raise RuntimeError("merge conflict - auto-resolution failed")
     await remove_worktree(str(main), wt, branch)
+    await engine.emit(SSEEventType.git_event, sid, rid, GitEventPayload(action=GitEventAction.worktree_removed, worker_id=wid, branch_name=branch, message="worktree removed"))
+    worker.status = WorkerStatus.finished
+    await engine._persist_worker(worker)
+    await engine.emit(SSEEventType.worker_status, sid, rid, worker)
+    await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.passed)
+    await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.passed))
+    return WorkerMergeResult(worker=worker, worker_id=wid)
     await engine.emit(SSEEventType.git_event, sid, rid, GitEventPayload(action=GitEventAction.worktree_removed, worker_id=wid, branch_name=branch, message="worktree removed"))
     worker.status = WorkerStatus.finished
     await engine._persist_worker(worker)

@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] — feature-pass-3
+
+### Pipeline Features
+
+- [feat:task-slicing] develop stage now parses the devplan artifact via `_slice_devplan_tasks(devplan_text)` into atomic task specs (id, title, acceptance_criteria, files_allowed) and passes one `json.dumps(task_spec)` per worker as the Pi RPC request payload.
+- [feat:steering] new `nexussy_steer` MCP tool with `SteerRequest` schema persists every steering event to the `steer_events` SQLite table (schema_version bumped to 3); orchestrator-target messages enqueue on `engine.steer_queue[run_id]` and drain into `engine.steer_context[run_id]` at each stage boundary, worker-target messages forward to the existing worker inject path.
+- [feat:interview-autoskip] setting `metadata.skip_interview = "true"` on `/pipeline/start` synthesizes interview answers from the project description through `engine._provider_text(StageName.interview, ...)` with `source="auto"` and skips the human pause gate.
+- [feat:merge-recovery] `merge_single_worker` no longer raises immediately on merge conflict; it emits a `conflict_report` artifact listing conflicting paths, attempts `git checkout --ours` + `git add` per path, retries `git commit --no-edit`, and only raises `RuntimeError("merge conflict - auto-resolution failed")` if the second commit fails.
+
 ## [Unreleased] — gap-sprint-2
 
 ### Local-Team Hardening

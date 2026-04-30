@@ -10,7 +10,11 @@
 - Resolved: R-063/R-069 full Ubuntu 22.04 noninteractive install idempotency is proven by `scripts/evidence/install_idempotency_run1.txt` and `scripts/evidence/install_idempotency_run2.txt`.
 - Resolved: R-075 live multi-agent swarm workload control is proven by `scripts/evidence/swarm_proof_run.json` with backend/frontend workers, pause/resume, final passed status, and develop/merge/changed-files artifacts.
 - Resolved: `FULL_SPEC_REMAINING.md` stale local/team hardening “in progress” text is cleared.
-- Core regression suite is green: `python3 -m pytest -q core/tests` passed with 92 tests and 3 existing warnings.
+- Resolved: develop stage now slices the devplan artifact into atomic task specs (`_slice_devplan_tasks`) and dispatches one JSON-encoded spec per worker via the Pi RPC `request` payload.
+- Resolved: orchestrator and worker steering is wired through the `nexussy_steer` MCP tool and the `steer_events` SQLite table; orchestrator-target messages drain into `engine.steer_context[run_id]` at each stage boundary; worker-target messages flow through the existing inject path.
+- Resolved: interview stage auto-skips human gating when `metadata.skip_interview == "true"`, synthesizing all answers via the configured provider and marking each `InterviewQuestionAnswer.source = "auto"`.
+- Resolved: develop merge conflicts are now recovered automatically — `merge_single_worker` saves a `conflict_report` artifact, runs `git checkout --ours` + `git add` for each conflicting path, attempts `git commit --no-edit`, and only raises if the second commit also fails.
+- Core regression suite is green: `python3 -m pytest -q core/tests` passed with 97 tests and 3 existing warnings.
 - TUI regression suite is green: `bun test && bun run typecheck` passed with 67 tests.
 - Web regression suite is green: `python3 -m pytest -q web/tests` passed with 52 tests.
 - Root operations checks are green: shell syntax, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run` pass.

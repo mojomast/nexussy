@@ -14,7 +14,7 @@ upgrades, so each migration must be safe after `CREATE TABLE IF NOT EXISTS`.
 import asyncio, pathlib, sqlite3, threading
 from datetime import datetime, timezone
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, project_slug TEXT UNIQUE, project_name TEXT, status TEXT, created_at TEXT, updated_at TEXT, detail_json TEXT);
@@ -60,9 +60,27 @@ def _migration_v2(con):
     # created by SCHEMA so this migration only records that tracking is active.
     return None
 
+def _migration_v3(con):
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS steer_events(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT NOT NULL,
+          target TEXT NOT NULL,
+          worker_id TEXT,
+          message TEXT NOT NULL,
+          priority TEXT NOT NULL DEFAULT 'normal',
+          created_at TEXT NOT NULL,
+          consumed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_steer_run ON steer_events(run_id);
+        """
+    )
+
 MIGRATIONS = {
     1: _migration_v1,
     2: _migration_v2,
+    3: _migration_v3,
 }
 
 def _apply_schema_migrations(con):

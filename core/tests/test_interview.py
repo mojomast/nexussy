@@ -170,6 +170,28 @@ async def test_interview_provider_retry_and_question_checkpoint(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_interview_autoskip(tmp_path, monkeypatch):
+    await reset_core(tmp_path, monkeypatch)
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete_factory([]))
+    async with await client() as c:
+        r=await c.post("/pipeline/start", json={"project_name":"HabitTrack","description":"Build a Python REST API for tracking habits with SQLite tests","auto_approve_interview":False,"stop_after_stage":"interview","metadata":{"mock_provider":True,"skip_interview":"true"}})
+        assert r.status_code == 200, r.text
+        body=r.json()
+        for _ in range(200):
+            ev=(await c.get("/events", params={"run_id":body["run_id"]})).json()
+            if ev and ev[-1]["type"] == "done": break
+            status=(await c.get("/pipeline/status", params={"run_id":body["run_id"]})).json()
+            assert status["run"]["status"] != "paused", "skip_interview should not pause"
+            await asyncio.sleep(.02)
+        else:
+            raise AssertionError("pipeline did not finish")
+        assert not any(e["type"] == "pause_state_changed" and e["payload"].get("paused") for e in ev)
+        artifact=json.loads((await c.get("/pipeline/artifacts/interview", params={"session_id":body["session_id"]})).json()["content_text"])
+    assert len(artifact["questions"]) >= 4
+    assert {q["source"] for q in artifact["questions"]} == {"auto"}
+
+
+@pytest.mark.asyncio
 async def test_interview_replay(tmp_path, monkeypatch):
     await reset_core(tmp_path, monkeypatch)
     monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete_factory([]))

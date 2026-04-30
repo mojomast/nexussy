@@ -16,7 +16,12 @@ logger = logging.getLogger(__name__); STAGES=[StageName(s) for s in STAGE_ORDER]
 def _rate_limited_error(provider: str, model: str, limited) -> ErrorResponse: return ErrorResponse(error_code=ErrorCode.rate_limited, message="provider rate limited", details={"provider":provider,"model":model,"reset_at":limited["reset_at"]}, retryable=True)
 class Engine:
     def __init__(self, db, config):
-        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None; self._run_usage:dict[str,TokenUsage]={}
+        self.db=db; self.config=config; self.queues:dict[str,set[asyncio.Queue]]={}; self.tasks={}; self.paused={}; self.interview_waiters:dict[str,asyncio.Future]={}; self.interview_questions:dict[str,list[InterviewQuestionAnswer]]={}; self.session_runs:dict[str,str]={}; self.active_worker_rpcs:dict[str,list]={}; self.blocked_previous_status:dict[str,str]={}; self.git_lock=asyncio.Lock(); self.provider_env_cache:dict|None=None; self._run_usage:dict[str,TokenUsage]={}; self.steer_queue:dict[str,list[dict]]={}; self.steer_context:dict[str,list[str]]={}
+    def consume_steer(self, run_id: str) -> list[dict]:
+        msgs = self.steer_queue.pop(run_id, [])
+        if msgs:
+            self.steer_context.setdefault(run_id, []).extend(m.get("message","") for m in msgs)
+        return msgs
     def invalidate_provider_cache(self): self.provider_env_cache=None
     async def restore_interview_state(self) -> None:
         rows = await self.db.read("SELECT run_id, session_id FROM runs WHERE status = 'running'", ())
@@ -145,6 +150,7 @@ class Engine:
                 await self.emit(SSEEventType.stage_status, detail.session.session_id, run.run_id, StageStatusSchema(stage=st,status=StageRunStatus.passed,attempt=1,finished_at=fin,output_artifacts=made))
                 ck=await save_checkpoint(self.db, run.run_id, st, f".nexussy/checkpoints/{st.value}.json", content=await self._checkpoint_content_for_stage(run.run_id, st, made))
                 await self.emit(SSEEventType.checkpoint_saved, detail.session.session_id, run.run_id, ck); prev=st; i += 1
+                if self.steer_queue.get(run.run_id): self.consume_steer(run.run_id)
                 if st == StageName.plan: review_feedback_for_plan = ""
             usage=self._run_usage.get(run.run_id, TokenUsage())
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, current_stage=?, usage_json=? WHERE run_id=?",("passed",now_utc().isoformat(),prev.value if prev else None,usage.model_dump_json(),run.run_id)))

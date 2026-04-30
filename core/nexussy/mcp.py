@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from nexussy.api.schemas import ArtifactManifestResponse, ArtifactRef, Blocker, ControlResponse, ErrorCode, ErrorResponse, InterviewAnswerRequest, PausePayload, PipelineInjectRequest, PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary, SSEEventType, SessionDetail, StageStatusSchema, Worker, WorkerAssignRequest, WorkerSpawnRequest, WorkerStatus, WorkerTaskPayload, WorkerTaskStatus
+from nexussy.api.schemas import ArtifactManifestResponse, ArtifactRef, Blocker, ControlResponse, ErrorCode, ErrorResponse, InterviewAnswerRequest, PausePayload, PipelineInjectRequest, PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary, SSEEventType, SessionDetail, StageStatusSchema, SteerRequest, Worker, WorkerAssignRequest, WorkerSpawnRequest, WorkerStatus, WorkerStreamPayload, WorkerTaskPayload, WorkerTaskStatus
 from nexussy.session import now_utc
 
 ToolHandler = Callable[..., Awaitable[Any]]
@@ -161,6 +161,35 @@ async def _list_workers(arguments: dict[str, Any], *, engine=None, db=None):
     return [Worker.model_validate_json(x["worker_json"]).model_dump(mode="json") for x in await db.read("SELECT worker_json FROM workers WHERE run_id=?", (run_id,))]
 
 
+async def _steer(arguments: dict[str, Any], *, engine, db):
+    req = SteerRequest.model_validate(arguments)
+    run_rows = await db.read("SELECT session_id,status FROM runs WHERE run_id=?", (req.run_id,))
+    if not run_rows:
+        raise KeyError("run")
+    now = now_utc().isoformat()
+    inserted = {"id": None}
+    def tx(con):
+        cur = con.execute(
+            "INSERT INTO steer_events(run_id, target, worker_id, message, priority, created_at) VALUES(?,?,?,?,?,?)",
+            (req.run_id, req.target, req.worker_id, req.message, req.priority, now),
+        )
+        inserted["id"] = cur.lastrowid
+    await db.write(tx)
+    if req.target == "orchestrator":
+        if engine is not None:
+            engine.steer_queue.setdefault(req.run_id, []).append({"message": req.message, "priority": req.priority, "ts": now})
+    else:
+        # Mirror worker_inject path: emit worker_stream event and forward to active RPC if present
+        sid = run_rows[0]["session_id"]
+        if engine is not None and hasattr(engine, "emit"):
+            payload = WorkerStreamPayload(worker_id=req.worker_id, stream_kind="rpc", line=json.dumps({"type": "inject", "message": req.message, "priority": req.priority, "source": "steer"}), parsed=True)
+            await engine.emit(SSEEventType.worker_stream, sid, req.run_id, payload)
+            for rpc in list(getattr(engine, "active_worker_rpcs", {}).get(req.run_id, [])):
+                if getattr(rpc, "worker_id", None) == req.worker_id:
+                    await rpc.inject(req.message)
+    return {"ok": True, "id": inserted["id"]}
+
+
 def _json_rpc_error(code: int, message: str, request_id=None) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
@@ -247,3 +276,4 @@ register("nexussy_inject", "Inject guidance into a running pipeline", {"type": "
 register("nexussy_worker_spawn", "Spawn a worker in the swarm", {"type": "object", "required": ["run_id", "role", "task"], "properties": {"run_id": {"type": "string"}, "role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "model": {"type": "string"}}}, _worker_spawn)
 register("nexussy_worker_assign", "Assign a task to an existing worker", {"type": "object", "required": ["run_id", "worker_id", "task"], "properties": {"run_id": {"type": "string"}, "worker_id": {"type": "string"}, "task_id": {"type": "string"}, "task": {"type": "string"}, "phase_number": {"type": "integer"}}}, _worker_assign)
 register("nexussy_list_workers", "List workers for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _list_workers)
+register("nexussy_steer", "Steer a running pipeline orchestrator or a specific worker", {"type": "object", "required": ["target", "run_id", "message"], "properties": {"target": {"type": "string", "enum": ["orchestrator", "worker"]}, "run_id": {"type": "string"}, "worker_id": {"type": "string"}, "message": {"type": "string"}, "priority": {"type": "string", "enum": ["low", "normal", "high"]}}}, _steer)

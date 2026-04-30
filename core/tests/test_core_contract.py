@@ -1107,10 +1107,15 @@ def test_develop_merge_conflict_lifecycle(monkeypatch, tmp_path):
             ev = c.get("/events", params={"run_id": r["run_id"]}).json()
             if ev and ev[-1]["type"] == "done": break
             import time; time.sleep(.05)
-        assert ev[-1]["payload"]["final_status"] == "failed"
+        assert ev[-1]["payload"]["final_status"] == "passed"
         assert any(e["type"] == "git_event" and e["payload"].get("action") == "merge_conflict" for e in ev)
         merge = c.get("/pipeline/artifacts/merge_report", params={"session_id":r["session_id"]}).json()["content_text"]
-        assert json.loads(merge)["passed"] is False
+        assert json.loads(merge)["passed"] is True
+        conflict = c.get("/pipeline/artifacts/conflict_report", params={"session_id":r["session_id"]}).json()["content_text"]
+        cr = json.loads(conflict)
+        assert cr["recovered"] is True
+        assert "shared.txt" in cr["conflicts"]
+        assert "shared.txt" in cr["auto_resolved"]
 
 
 @pytest.mark.asyncio
@@ -1380,3 +1385,192 @@ async def test_pi_rpc_request_without_stdin_raises_runtime_error():
     proc = types.SimpleNamespace(stdin=None)
     with pytest.raises(RuntimeError, match="stdin"):
         await PiRPCProcess(proc).request("task")
+
+
+def test_steer_orchestrator(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        tools = c.get("/mcp/tools").json()
+        names = {tool["name"] for tool in tools["tools"]}
+        assert "nexussy_steer" in names
+        started = c.post("/mcp/call", json={"name":"nexussy_start_pipeline","arguments":{"project_name":"Steer Demo","description":"small api","auto_approve_interview":True,"stop_after_stage":"design","metadata":{"mock_provider":True}}})
+        assert started.status_code == 200, started.text
+        rid = started.json()["run_id"]
+        # Pause so the steer can be observed in queue before stage boundary drains it
+        server.engine.paused[rid] = True
+        steered = c.post("/mcp/call", json={"name":"nexussy_steer","arguments":{"target":"orchestrator","run_id":rid,"message":"focus on auth","priority":"high"}})
+        assert steered.status_code == 200, steered.text
+        body = steered.json()
+        assert body["ok"] is True and isinstance(body["id"], int) and body["id"] >= 1
+        # DB row exists
+        rows = asyncio.get_event_loop().run_until_complete(server.db.read("SELECT * FROM steer_events WHERE run_id=?", (rid,)))
+        assert len(rows) == 1
+        assert rows[0]["target"] == "orchestrator" and rows[0]["message"] == "focus on auth" and rows[0]["priority"] == "high"
+        # Engine queue contains the message
+        assert server.engine.steer_queue.get(rid) and server.engine.steer_queue[rid][0]["message"] == "focus on auth"
+        # Drain via consume_steer (simulating stage-boundary drain)
+        consumed = server.engine.consume_steer(rid)
+        assert consumed and consumed[0]["message"] == "focus on auth"
+        assert rid not in server.engine.steer_queue or not server.engine.steer_queue.get(rid)
+        assert "focus on auth" in server.engine.steer_context.get(rid, [])
+        # Reject worker target without worker_id via Pydantic validation surfaced as 4xx/5xx
+        bad = c.post("/mcp/call", json={"name":"nexussy_steer","arguments":{"target":"worker","run_id":rid,"message":"hi"}})
+        assert bad.status_code != 200 or "error" in bad.json()
+        # Cleanup the paused run
+        server.engine.paused.pop(rid, None)
+        task = server.engine.tasks.get(rid)
+        if task: task.cancel()
+
+
+def test_steer_worker(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    server.config = load_config()
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    captured = {"injects": []}
+    class FakeRPC:
+        def __init__(self, wid): self.worker_id = wid
+        async def inject(self, msg): captured["injects"].append(msg)
+    with TestClient(app) as c:
+        started = c.post("/mcp/call", json={"name":"nexussy_start_pipeline","arguments":{"project_name":"Steer Worker","description":"small api","auto_approve_interview":True,"stop_after_stage":"design","metadata":{"mock_provider":True}}})
+        assert started.status_code == 200, started.text
+        rid = started.json()["run_id"]
+        spawned = c.post("/mcp/call", json={"name":"nexussy_worker_spawn","arguments":{"run_id":rid,"role":"backend","task":"impl"}})
+        assert spawned.status_code == 200, spawned.text
+        wid = spawned.json()["worker_id"]
+        # Register a fake active RPC so the worker inject path is exercised
+        server.engine.active_worker_rpcs.setdefault(rid, []).append(FakeRPC(wid))
+        steered = c.post("/mcp/call", json={"name":"nexussy_steer","arguments":{"target":"worker","run_id":rid,"worker_id":wid,"message":"refactor handler"}})
+        assert steered.status_code == 200, steered.text
+        body = steered.json()
+        assert body["ok"] is True and isinstance(body["id"], int)
+        # DB row recorded
+        rows = asyncio.get_event_loop().run_until_complete(server.db.read("SELECT * FROM steer_events WHERE run_id=?", (rid,)))
+        assert len(rows) == 1 and rows[0]["target"] == "worker" and rows[0]["worker_id"] == wid
+        # Worker inject path was invoked
+        assert captured["injects"] == ["refactor handler"]
+        # Worker target should NOT enqueue to orchestrator queue
+        assert not server.engine.steer_queue.get(rid)
+        task = server.engine.tasks.get(rid)
+        if task: task.cancel()
+
+
+def test_slice_devplan_tasks():
+    from nexussy.pipeline.stages.develop import _slice_devplan_tasks
+    devplan = """# Project Plan
+
+## Tasks
+
+- [ ] T-001: Build the API server
+  - acceptance: returns 200 on /health, exposes /pipeline/start
+  - files: core/nexussy/api/server.py, core/nexussy/api/schemas.py
+- [x] T-002: Implement database layer
+  - acceptance criteria: WAL mode enabled, migrations applied
+  - files_allowed: core/nexussy/db.py
+- Build the TUI dashboard
+  - acceptance: renders session list
+  - files: tui/src/App.tsx
+"""
+    specs = _slice_devplan_tasks(devplan)
+    assert len(specs) == 3
+    assert specs[0]["id"] == "T-001"
+    assert specs[0]["title"] == "Build the API server"
+    assert "returns 200 on /health" in specs[0]["acceptance_criteria"]
+    assert "exposes /pipeline/start" in specs[0]["acceptance_criteria"]
+    assert "core/nexussy/api/server.py" in specs[0]["files_allowed"]
+    assert "core/nexussy/api/schemas.py" in specs[0]["files_allowed"]
+    assert specs[1]["id"] == "T-002"
+    assert specs[1]["title"] == "Implement database layer"
+    assert "WAL mode enabled" in specs[1]["acceptance_criteria"]
+    assert specs[1]["files_allowed"] == ["core/nexussy/db.py"]
+    # Synthesized id for entry without explicit id
+    assert specs[2]["id"] == "T-003"
+    assert specs[2]["title"] == "Build the TUI dashboard"
+    assert specs[2]["files_allowed"] == ["tui/src/App.tsx"]
+    # Empty string yields fallback
+    fallback = _slice_devplan_tasks("")
+    assert fallback == [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    # Devplan with no parseable tasks also yields fallback
+    nothing = _slice_devplan_tasks("# Just a heading\n\nNo tasks here.\n")
+    assert nothing == [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    # None raises TypeError
+    with pytest.raises(TypeError):
+        _slice_devplan_tasks(None)
+
+
+@pytest.mark.asyncio
+async def test_merge_conflict_recovery(tmp_path):
+    """Verify merge conflicts auto-resolve via `git checkout --ours` and recommit.
+
+    Builds a real git repo with two branches that touch the same line of the
+    same file, then drives `merge_single_worker` directly with a mocked engine.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from nexussy.api.schemas import WorkerRole, Worker, WorkerStatus
+    from nexussy.pipeline.stages.develop import merge_single_worker, WorkerMergeResult
+    from nexussy.swarm.gitops import _git, init_repo, create_worktree, commit_worker
+
+    main = tmp_path / "repo"
+    workers_root = tmp_path / "workers"
+    main.mkdir()
+    (main / "shared.txt").write_text("base content\n")
+    base = await init_repo(str(main))
+    # Main branch advances first.
+    (main / "shared.txt").write_text("main wins\n")
+    await _git(main, "add", ".")
+    await _git(main, "commit", "-m", "main edit")
+    # Worker worktree branched from base, conflicts with main.
+    wid = "backend-test01"
+    wt, branch = await create_worktree(str(main), str(workers_root), wid, base)
+    (Path(wt) / "shared.txt").write_text("worker wins\n")
+    commit = await commit_worker(wt, "worker edit")
+
+    worker = Worker(
+        worker_id=wid, run_id="rid-test", role=WorkerRole.backend,
+        status=WorkerStatus.running, task_id="task-test", task_title="Test conflict",
+        worktree_path=wt, branch_name=branch, model="fake",
+    )
+    engine = MagicMock()
+    engine.emit = AsyncMock()
+    engine._persist_worker = AsyncMock()
+    engine._persist_worker_task = AsyncMock()
+    saved_artifacts: list[tuple[str, str]] = []
+    async def _capture_save(rid, sid, root, kind, text, phase=None):
+        saved_artifacts.append((kind, text))
+        return MagicMock(kind=kind)
+    engine._save_art = AsyncMock(side_effect=_capture_save)
+
+    context = {
+        "sid": "sid-test", "main": main, "base": base,
+        "roles": [WorkerRole.backend], "artifacts_dir": main / ".nexussy" / "artifacts",
+    }
+    result = {"worker": worker, "idx": 1, "wid": wid, "wt": wt, "branch": branch, "commit": commit}
+
+    merge_result = await merge_single_worker(engine, result, None, None, "rid-test", str(main), context, [], [])
+
+    # Auto-resolution succeeded; function returned without raising.
+    assert isinstance(merge_result, WorkerMergeResult)
+    assert merge_result.worker_id == wid
+    # conflict_report artifact was saved with recovered=True.
+    conflict_reports = [text for kind, text in saved_artifacts if kind == "conflict_report"]
+    assert len(conflict_reports) == 1
+    cr = json.loads(conflict_reports[0])
+    assert cr["recovered"] is True
+    assert "shared.txt" in cr["conflicts"]
+    assert "shared.txt" in cr["auto_resolved"]
+    assert cr["auto_resolution_failed"] == []
+    # The conflicting file in main now contains the "ours" (main) content.
+    final_content = (main / "shared.txt").read_text()
+    assert final_content == "main wins\n"
+    # No merge_report failure artifact was emitted on the success path.
+    failure_merge_reports = [
+        text for kind, text in saved_artifacts
+        if kind == "merge_report" and json.loads(text).get("passed") is False
+    ]
+    assert failure_merge_reports == []
+

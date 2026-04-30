@@ -12,8 +12,10 @@ from nexussy.session import SessionStatus, transition_session_status
 async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs) -> list[ArtifactRef]:
     sid = detail.session.session_id
     st = StageName.interview
+    skip_interview = str(req.metadata.get("skip_interview", "")).lower() == "true"
+    auto_mode = req.auto_approve_interview or skip_interview
     existing = await engine._latest_interview_artifact(rid) if req.resume_run_id else None
-    if existing and existing.questions and not req.auto_approve_interview:
+    if existing and existing.questions and not auto_mode:
         questions = existing.questions
         engine.interview_questions[sid] = questions
         fut = asyncio.get_running_loop().create_future()
@@ -38,7 +40,7 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
     question_content = json.dumps([q.model_dump(mode="json") for q in questions], sort_keys=True)
     ck = await save_checkpoint(engine.db, rid, StageName.interview, ".nexussy/checkpoints/interview-questions.json", content=question_content)
     await engine.emit(SSEEventType.checkpoint_saved, sid, rid, ck)
-    if req.auto_approve_interview:
+    if auto_mode:
         answer_prompt = (
             "Answer these interview questions as JSON using only the project description. "
             "Return a JSON object mapping each question id to a concise answer.\n\n"
