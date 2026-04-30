@@ -50,7 +50,7 @@ class WorkerStatus(str, Enum):
 class WorkerTaskStatus(str, Enum):
     queued="queued"; assigned="assigned"; running="running"; passed="passed"; failed="failed"; skipped="skipped"; blocked="blocked"
 class ArtifactKind(str, Enum):
-    interview="interview"; complexity_profile="complexity_profile"; design_draft="design_draft"; validated_design="validated_design"; validation_report="validation_report"; devplan="devplan"; handoff="handoff"; phase="phase"; review_report="review_report"; develop_report="develop_report"; merge_report="merge_report"; changed_files="changed_files"; conflict_report="conflict_report"
+    interview="interview"; complexity_profile="complexity_profile"; design_draft="design_draft"; validated_design="validated_design"; validation_report="validation_report"; devplan="devplan"; devplan_tasks="devplan_tasks"; handoff="handoff"; phase="phase"; review_report="review_report"; develop_report="develop_report"; merge_report="merge_report"; changed_files="changed_files"; conflict_report="conflict_report"
 class ToolName(str, Enum):
     spawn_worker="spawn_worker"; assign_task="assign_task"; get_swarm_state="get_swarm_state"; read_file="read_file"; write_file="write_file"; edit_file="edit_file"; bash="bash"; list_files="list_files"; search_code="search_code"; claim_file="claim_file"; release_file="release_file"; add_context="add_context"
 class LockStatus(str, Enum):
@@ -140,7 +140,7 @@ class PipelineInjectRequest(StrictModel):
 class ControlResponse(StrictModel):
     ok:bool=True; run_id:str; status:RunStatus; message:str
 class SteerRequest(StrictModel):
-    target:Literal["orchestrator","worker"]; run_id:str; worker_id:str|None=None; message:str; priority:Literal["low","normal","high"]="normal"
+    target:Literal["orchestrator","worker"]; run_id:str; worker_id:str|None=None; message:str; priority:Literal["low","normal","high","urgent"]="normal"
     @field_validator("run_id", "message", "worker_id")
     @classmethod
     def non_empty_public_strings(cls, v):

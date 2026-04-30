@@ -177,7 +177,7 @@ async def _steer(arguments: dict[str, Any], *, engine, db):
     await db.write(tx)
     if req.target == "orchestrator":
         if engine is not None:
-            engine.steer_queue.setdefault(req.run_id, []).append({"message": req.message, "priority": req.priority, "ts": now})
+            engine.steer_queue.setdefault(req.run_id, []).append({"id": inserted["id"], "message": req.message, "priority": req.priority, "ts": now})
     else:
         # Mirror worker_inject path: emit worker_stream event and forward to active RPC if present
         sid = run_rows[0]["session_id"]

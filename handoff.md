@@ -47,132 +47,43 @@ Smoke hardening pass complete: `smoke_integration.sh` now parses multiline SSE f
 Production hardening pass complete: smoke/parser and spawn-injection fixes were reverified, secret set/delete invalidates provider env cache with regression coverage, R-040 plan tasks repair missing owner/acceptance/tests, and R-058/R-067 now define OpenTUI as default with Pi TUI opt-in. Full verification passed: `python3 -m pytest -q core/tests` (91 passed), `cd tui && bun test && bun run typecheck` (67 passed), `python3 -m pytest -q web/tests` (52 passed), shell syntax, `bash scripts/test_smoke_parser.sh`, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run`.
 Full SPEC coverage evidence pass complete: R-063/R-069 closed with `ubuntu:22.04` Docker evidence for two real `./install.sh --non-interactive` runs plus health checks in `scripts/evidence/install_idempotency_run1.txt` and `scripts/evidence/install_idempotency_run2.txt`. R-075 closed with `scripts/evidence/swarm_proof_run.json`, recording a live configured-provider backend/frontend swarm run, real Pi command availability, pause/resume responses, final `done final_status=passed`, and `develop_report`/`merge_report`/`changed_files` artifacts. Core no-change worker commits now return HEAD and are regression-tested. Final verification passed: `python3 -m pytest -q core/tests` (92 passed), `cd tui && bun test && bun run typecheck` (67 passed), `python3 -m pytest -q web/tests` (52 passed), shell syntax, smoke parser, `./ops_tests.sh`, and installer dry-run.
 Feature pass 3 complete: task slicing (`_slice_devplan_tasks` + per-worker `json.dumps(task_spec)` Pi RPC payload), steering (`nexussy_steer` MCP tool, `SteerRequest` schema, `steer_events` SQLite table at schema_version=3, `engine.steer_queue` drained into `engine.steer_context` at each stage boundary, worker-target inject path), interview auto-skip (`metadata.skip_interview="true"` synthesizes all answers via provider with `source="auto"` and bypasses the human gate), and merge conflict recovery (`merge_single_worker` saves a `conflict_report` artifact, runs `git checkout --ours` + `git add` + `git commit --no-edit` per conflicting path, only raises if the second commit fails). Full verification: `python3 -m pytest -q core/tests` (97 passed, +5 new), `cd tui && bun test && bun run typecheck` (67 passed), `python3 -m pytest -q web/tests` (52 passed).
+Steering injection sidecar pass complete: plan/develop now consume orchestrator steering into prompts/task specs, mark `steer_events.consumed_at`, write/read `devplan_tasks` JSON sidecar, and `priority="urgent"` unblocks paused waits. Full verification: `python3 -m pytest -q core/tests` (100 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
-- Do not use or clone `ussycode`.
-- Build mock fixtures from `SPEC.md`, not from another module implementation.
-- D changed only root operational files: `install.sh`, `nexussy.sh`, `ops_tests.sh`, `README.md`, `devplan.md`, `phase001.md`, and `handoff.md`.
-- Shell syntax passed. Shellcheck is not installed in this environment. Full `install.sh --non-interactive` was not run to avoid package-manager side effects in `core/`, `tui/`, and `web/` during a D-only handoff.
-- B changed only `tui/` implementation files plus required status updates to `devplan.md`/`handoff.md`.
-- TUI imports Pi packages optionally at runtime while keeping package dependencies; deterministic renderer/state tests do not require a live core.
-- C changed `web/` implementation files plus required status updates to `devplan.md`/`handoff.md`.
-- `python` is not available in this environment; `python3 -m pytest -q web/tests` passes, and `PYTHONPATH=/home/mojo/projects/nexussy/web timeout 3s python3 -m nexussy_web.app` starts on `127.0.0.1:7772`.
-- D hardening modified only root-owned files. Checks run: `bash -n install.sh nexussy.sh ops_tests.sh` passed; `./ops_tests.sh` passed and covers dry-run no writes, idempotent config/env, duplicate start, stale PID cleanup, logs, and doctor diagnostics; shellcheck unavailable.
-- B hardening modified `tui/` implementation/tests plus required status updates to `devplan.md`/`handoff.md`; no `core/` or `web/` files were touched.
-- Master pass touched core, TUI, web, root traceability/status artifacts, and `core/pyproject.toml`. Checks run: `python3 -m pytest -q core/tests`; `python3 -m pytest -q core/tests -k "develop or worktree or pi"`; `bun test && bun run typecheck`; `python3 -m pytest -q web/tests`; `bash -n install.sh nexussy.sh`; `./install.sh --non-interactive --dry-run`; isolated install/start/status/health/stop; explicit mock and fake-provider start smokes; missing-provider gate returned 503 `model_unavailable`. ShellCheck was unavailable for this historical pass and was later closed in Cycle 6.
-- Completion checks run: `python3 -m pytest -q core/tests` (20 passed), `cd tui && bun install && bun test && bun run typecheck` (17 passed), `python3 -m pytest -q web/tests` (43 passed), `bash -n install.sh nexussy.sh ops_tests.sh`, `./install.sh --non-interactive --dry-run`, `./ops_tests.sh`, isolated install/start/status/health/stop, fake-provider production smoke, missing-provider gate, and final Subagent E audit. No sudo used.
-- Guided key setup checks run: `python3 -m pytest -q core/tests` (25 passed) and `cd tui && bun test && bun run typecheck` (27 passed). Piped setup reproduction completed. No secret values are returned by core summaries or rendered by TUI provider-key panels.
-- Added root `launch_verify.sh` helper to start core/web, verify health endpoints, report provider-key count, and print TUI launch instructions.
-- OpenTUI default pass changed only `tui/` code plus required status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (38 passed) and OpenTUI app module import smoke passed.
-- OpenTUI input fix changed only `tui/src/opentui-app.ts` plus required status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (38 passed).
-- OpenTUI layout fix changed only `tui/src/opentui-app.ts` plus required status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (38 passed).
-- OpenTUI harness refactor changed only `tui/src/opentui-app.ts` plus required status artifacts. Research used OpenTUI renderer, layout, keyboard, input, ScrollBox, and lifecycle docs. Checks run: `cd tui && bun test && bun run typecheck` (38 passed) and OpenTUI renderer smoke passed.
-- OpenTUI transcript fix changed only `tui/src/opentui-app.ts` plus required status artifacts after inspecting `/tmp/nexussy-tui.log` and `/tmp/nexussy-core.log`. Checks run: `cd tui && bun test && bun run typecheck` (38 passed) and OpenTUI renderer smoke passed.
-- OpenTUI polish fix changed `tui/src/opentui-app.ts` and `tui/src/ui/Composer.ts` plus required status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (38 passed).
-- Provider-backed idle chat changed `core/nexussy/api/schemas.py`, `core/nexussy/api/server.py`, `core/nexussy/providers.py`, TUI client/composer/types/tests, and status artifacts after user approved a core chat endpoint. Checks run: `python3 -m pytest -q core/tests` (28 passed) and `cd tui && bun test && bun run typecheck` (38 passed).
-- Interview-first TUI mode changed `tui/src/ui/Composer.ts`, `tui/src/ui/types.ts`, `tui/src/opentui-app.ts`, and `tui/tests/chat-ux.test.ts` plus status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (39 passed) and `python3 -m pytest -q core/tests` (28 passed).
-- TUI interaction gate changed `tui/src/ui/Composer.ts`, `tui/src/ui/types.ts`, `tui/src/index.ts`, `tui/src/ui/Onboarding.ts`, and TUI tests plus status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (40 passed).
-- Core interview pass changed `core/nexussy/pipeline/engine.py`, `core/nexussy/api/schemas.py`, `core/nexussy/api/server.py`, `core/tests/test_core_contract.py`, and `core/tests/test_interview.py` plus status artifacts. Checks run: `python3 -m pytest -q core/tests` (33 passed).
-- TUI handoff/anchor pass changed only `tui/` implementation/tests plus required status artifacts. Checks run: `cd tui && bun test && bun run typecheck` (58 passed).
-- Core review-gap pass changed core pipeline/server/checkpoint/MCP/session/security/Pi code, installer systemd idempotency, README, and status artifacts. Checks run: `python3 -m pytest -q core/tests` (44 passed), `cd tui && bun test` (58 passed), and `bash -n install.sh nexussy.sh` passed.
-- SPEC coverage audit used four domain subagents (core, TUI, web, ops/docs) and updated `SPEC_COVERAGE.md`, `FULL_SPEC_REMAINING.md`, README, `devplan.md`, `phase001.md`, and `handoff.md`. No implementation code was changed.
-- Circular development setup added `CIRCULAR_DEVELOPMENT.md` and replaced the broad reopened-gap task with ordered H1-H6 cycles in `devplan.md`. Each cycle has owner, row targets, scope, and exit checks.
-- Cycle 1 / Subagent A changed only `core/` plus required status artifacts. Checks run: `python3 -m pytest -q core/tests` before (44 passed) and after (50 passed). R-040 remains partial only for task owner/acceptance/tests validation outside the Cycle 1 feedback-injection fix.
-- Cycle 2 / Subagent A changed only `core/` implementation/tests plus required status artifacts. Checks run: `python3 -m pytest -q core/tests` before (50 passed) and after (58 passed). R-054/R-080 were partial for live external provider/Pi evidence at Cycle 2 close; Cycle 6 later closed separate live provider/Pi smokes, leaving R-080 partial only for one combined production provider plus live Pi develop run.
-- Cycle 3 / Subagent B changed only `tui/` implementation/tests plus required status artifacts. Checks run before and after: `cd tui && bun test && bun run typecheck` (before 58 passed, after 66 passed). R-059/R-085/R-086 are tested; R-058/R-067 remain partial pending a SPEC/docs decision on OpenTUI as default versus restoring Pi TUI default.
-- Cycle 4 / Subagent C changed only `web/` implementation/tests plus required status artifacts. Checks run before and after: `python3 -m pytest -q web/tests` (before 43 passed, after 45 passed). Startup evidence: `127.0.0.1:7772/` returned dashboard HTML from the already-running web app; `PYTHONPATH=/home/mojo/projects/nexussy/web NEXUSSY_WEB_PORT=17772 timeout 3s python3 -m nexussy_web.app` reached Uvicorn startup and clean shutdown. R-002/R-035/R-062/R-068/R-072/R-087/R-088 are tested.
-- Cycle 5 / Subagent D changed only root ops/status files. Checks run before/after as feasible: `bash -n install.sh nexussy.sh ops_tests.sh`, `./install.sh --non-interactive --dry-run`, and `./ops_tests.sh` passed. Full `./install.sh --non-interactive` twice was not run because it would install packages and start services in this shared workspace; closest safe substitutes are dry-run plus function-level config/env/systemd idempotency tests.
-- Cycle 6 / Coordinator rerun after external tool installation changed status artifacts and shell lint fixes. Checks run: real LiteLLM/default-provider smoke without printing secrets, Pi CLI version/help, installed `pi --rpc` adapter startup, ShellCheck 0.11.0 on root scripts, `python3 -m pytest -q core/tests` (58 passed), `cd tui && bun test && bun run typecheck` (66 passed), `python3 -m pytest -q web/tests` (45 passed), `bash -n install.sh nexussy.sh ops_tests.sh`, `./install.sh --non-interactive --dry-run`, and `./ops_tests.sh`.
-- Code review fix pass changed `core/`, `README.md`, `AGENTS.md`, and required status artifacts only. Checks run after Phase 1, Phase 2, and Phase 3/4: `python3 -m pytest -q core/tests` (58 passed each time).
-- Sequential review-fix subagent pass changed core/root docs/scripts plus status artifacts. Checks run after each subagent commit: `cd core && python3 -m pytest -x -q` (58 passed). `python` is still unavailable in this environment, so `python3` was used.
-- README rewrite changed only root docs/status files: `README.md`, `devplan.md`, `phase001.md`, and `handoff.md`. Checks run: `python3 -m pytest -q core/tests` (58 passed) and `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`.
-- Sequential repair changed core implementation/tests plus required status artifacts. Checks run: targeted tests after each issue, `python3 -m pytest tests/ -v` from `core/` (67 passed), and isolated server smoke on port 17771 posting `/pipeline/start` with `metadata.mock_provider=true`. `python` remains unavailable, so `python3` was used for full tests.
-- Completed: Medium severity core review fixes M1-M4. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: `core/nexussy/providers.py`, `core/nexussy/db.py`, `core/nexussy/mcp.py`, `core/tests/test_core_contract.py`, plus status artifacts. Notes: `python3 -m pytest -q core/tests` passed (74 tests); `python` remains unavailable.
-- Completed: Low severity core review fixes L1-L3. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: `core/nexussy/checkpoint.py`, `core/nexussy/pipeline/engine.py`, `core/nexussy/config.py`, `core/nexussy/security.py`, `core/tests/test_core_contract.py`, plus status artifacts. Notes: `python3 -m pytest -q core/tests` passed (75 tests); `python` remains unavailable.
-- Completed: Subagent C zero-build dashboard refresh. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: `web/nexussy_web/templates/index.html`, `web/nexussy_web/static/app.js`, `web/nexussy_web/static/style.css`, `web/nexussy_web/app.py`, `web/pyproject.toml`, `web/tests/test_app.py`, plus status artifacts. Notes: `python3 -m pytest -q web/tests` passed (47 tests). Existing unrelated core worktree changes were present and not touched.
-- Completed: Bundled Pi worker/RPC implementation. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: `core/nexussy/swarm/local_pi_worker.py`, `core/nexussy/swarm/pi_shim.py`, `core/nexussy/swarm/pi_rpc.py`, `core/nexussy/api/schemas.py`, `core/pyproject.toml`, `core/tests/test_core_contract.py`, `core/tests/test_local_pi_worker.py`, plus status artifacts. Notes: `python3 -m pytest -q core/tests` passed (78 tests); `python` remains unavailable.
-- Completed: Stub/gap integration mission. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: core worker/control/session/Pi/MCP/web/docs/status artifacts. Notes: all available core/web/ops/TUI checks passed; `python` and `ruff` remain unavailable.
-- Completed: Root ops/docs-owned review findings. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: `install.sh`, `nexussy.sh`, `ops_tests.sh`, `README.md`, `AGENTS.md`, `CHANGELOG.md`, `devplan.md`, `phase001.md`, and `handoff.md`. Notes: `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run` passed.
-- Completed: Web-owned review fixes. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: `web/nexussy_web/app.py`, `web/nexussy_web/static/app.js`, `web/nexussy_web/templates/index.html`, `web/tests/test_app.py`, `web/app.js`, `web/index.html`, `web/style.css`, plus required status artifacts. Notes: `python3 -m pytest -q web/tests` passed (50 tests).
-- Completed: Full codebase review fix pass. Next Task: no active planned task group; await next SPEC/review assignment. Files Modified: core API/pipeline/provider/config/MCP/tests, TUI client/commands/state/composer/tests, web dashboard/proxy/tests/assets, root ops/docs/status artifacts. Notes: all coordinator verification listed in QUICK_STATUS passed; `python` remains unavailable, so `python3` was used.
-- Completed: Local/team hardening item 1. Next Task: item 2 deployment profiles. Files Modified: `README.md`, `AGENTS.md`, `nexussy.sh`, `ops_tests.sh`, `CHANGELOG.md`, and `handoff.md`. Notes: full required checks passed; initial core run hit one Pi RPC response timeout and passed on immediate rerun.
-- Completed: Local/team hardening item 2. Next Task: item 3 audit logging. Files Modified: `core/nexussy/config.py`, `core/nexussy/api/server.py`, `core/tests/test_core_contract.py`, `install.sh`, `README.md`, `AGENTS.md`, `CHANGELOG.md`, and `handoff.md`. Notes: full required checks passed; first core run only failed a new temp-home assertion and passed after correction.
-- Completed: Local/team hardening item 3. Next Task: item 4 backup/restore docs. Files Modified: `core/nexussy/audit.py`, `core/nexussy/api/server.py`, `core/nexussy/pipeline/engine.py`, `core/tests/test_core_contract.py`, `nexussy.sh`, `ops_tests.sh`, `CHANGELOG.md`, and `handoff.md`. Notes: full required checks passed.
-- Completed: Local/team hardening item 4. Next Task: item 5 stronger local auth. Files Modified: `OPERATIONS.md`, `README.md`, `CHANGELOG.md`, and `handoff.md`. Notes: full required checks passed.
-- Completed: Local/team hardening item 5. Next Task: item 6 live provider plus Pi smoke. Files Modified: `nexussy.sh`, `ops_tests.sh`, `core/nexussy/api/server.py`, `core/tests/test_core_contract.py`, `README.md`, `CHANGELOG.md`, and `handoff.md`. Notes: full required checks passed.
-- Completed: Local/team hardening item 6. Next Task: final commit/push. Files Modified: `core/nexussy/swarm/pi_rpc.py`, `core/tests/test_local_pi_worker.py`, `README.md`, `AGENTS.md`, `SPEC_COVERAGE.md`, `FULL_SPEC_REMAINING.md`, `CHANGELOG.md`, and `handoff.md`. Notes: live provider plus installed Pi smoke passed and final full required checks passed.
-- Completed: Production hardening pass. Next Task: commit and push. Files Modified: core plan helpers/tests, TUI renderer selector/tests, SPEC/README/OPERATIONS/coverage/triage/status artifacts. Notes: full verification matrix passed; final step is the requested commit and push.
-- Completed: Full SPEC coverage evidence pass. Next Task: commit and push. Files Modified: install/swarm evidence files, core gitops/tests, OPERATIONS/SPEC_COVERAGE/TRIAGE/FULL_SPEC_REMAINING/CHANGELOG/status artifacts. Notes: Ubuntu install evidence and live swarm evidence were real runs; full verification matrix passed.
-
-## HANDOFF — Feature Pass 3 (task slicing, steering, interview autoskip, merge recovery)
+## HANDOFF — Steering injection, devplan sidecar, urgent preemption
 
 ### What was implemented
 
-1. **Task slicing** (`core/nexussy/pipeline/stages/develop.py`)
-   - New pure function `_slice_devplan_tasks(devplan_text: str) -> list[dict]` parses the devplan markdown into atomic specs `{id, title, acceptance_criteria, files_allowed}`. Synthesises `T-NNN` ids when absent; falls back to a single placeholder spec when the devplan is empty or unparseable; raises `TypeError` on `None`.
-   - `merge_workers` reads `<root>/devplan.md` (resolved via `core/nexussy/artifacts/store.py` mapping where `"devplan" -> "devplan.md"` at the project root, NOT under `.nexussy/artifacts/`), slices it, and distributes one spec per worker round-robin.
-   - `run_single_worker` and `run_worker_rpc` accept an optional `task_spec` kwarg. When present, the Pi RPC `request` payload becomes `json.dumps(task_spec)`; otherwise the legacy `"nexussy develop task"` string is used. The recursive resume call threads `task_spec` through.
+- Plan steering injection: `core/nexussy/pipeline/stages/plan.py` now calls `await engine.consume_steer(rid)` before provider completion and prepends a `## Steering Instructions` block to the plan prompt when messages exist.
+- Develop steering injection: `core/nexussy/pipeline/stages/develop.py` now consumes queued orchestrator steering before worker assignment and adds the same steering block to each task spec sent through the Pi RPC JSON payload.
+- Steering persistence: `core/nexussy/pipeline/engine.py` now marks consumed queued steering rows with `steer_events.consumed_at`; `core/nexussy/mcp.py` stores inserted event IDs in `engine.steer_queue`.
+- Devplan sidecar: `plan.run()` saves `devplan_tasks` JSON alongside `devplan.md`; `develop._slice_devplan_tasks(devplan_text, devplan_tasks_json=None)` reads valid sidecar JSON first and falls back to markdown/anchor parsing.
+- Urgent preemption: `priority="urgent"` is accepted in `core/nexussy/api/schemas.py`; the paused poll loop drains urgent steering into `steer_context` and clears paused state immediately.
+- Artifact support: `core/nexussy/api/schemas.py` and `core/nexussy/artifacts/store.py` now include the `devplan_tasks` artifact kind/path.
+- Regression tests: `core/tests/test_core_contract.py` adds `test_steer_context_injected_into_plan`, `test_devplan_tasks_sidecar`, and `test_urgent_steer_unblocks_pause`; the prior steering test now verifies `consumed_at`.
+- Status/docs changed: `AGENTS.md`, `CHANGELOG.md`, `devplan.md`, `phase001.md`, and `handoff.md` updated.
 
-2. **Steering** (`core/nexussy/api/schemas.py`, `core/nexussy/db.py`, `core/nexussy/pipeline/engine.py`, `core/nexussy/mcp.py`)
-   - `SteerRequest` strict model with `target: Literal["orchestrator","worker"]`, `run_id`, `worker_id?` (validator enforces presence when target=worker), `message`, `priority: Literal["low","normal","high"]`.
-   - `nexussy_steer` MCP tool inserts a row into `steer_events` and either appends to `engine.steer_queue[run_id]` (orchestrator) or invokes the worker RPC `inject()` path mirroring `worker_inject` in `server.py`.
-   - Engine init adds `self.steer_queue: dict[str, list[dict]] = {}` and `self.steer_context: dict[str, list[str]] = {}`. `consume_steer(run_id)` pops queued messages. The `_run` loop drains the queue at each stage boundary (after `checkpoint_saved`, before next stage) into `steer_context` for downstream prompt injection.
-
-3. **Interview auto-skip** (`core/nexussy/pipeline/stages/interview.py`)
-   - Added a single `auto_mode = req.auto_approve_interview or str(req.metadata.get("skip_interview","")).lower() == "true"` boolean. When true, the stage generates questions then synthesizes answers via `engine._provider_text(StageName.interview, ...)` with `source="auto"` and never pauses for a human gate. Manual pause path is preserved when neither flag is set. Schemas untouched.
-
-4. **Merge conflict recovery** (`core/nexussy/pipeline/stages/develop.py`, `core/nexussy/artifacts/store.py`, `core/nexussy/api/schemas.py`)
-   - New helpers `_git_proc(...)` (async subprocess wrapper mirroring `core/nexussy/swarm/gitops.py`) and `_attempt_conflict_recovery(...)`.
-   - On conflict, `merge_single_worker` emits the existing `git_event` `merge_conflict` SSE event, then writes a `conflict_report` artifact `{run_id, worker_id, branch, conflicts, auto_resolved, auto_resolution_failed, recovered}`. Recovery re-runs `git merge --no-ff` (since `merge_no_ff` aborts on conflict and leaves a clean tree), then `git checkout --ours -- <path>` + `git add <path>` per conflicting file, then `git commit --no-edit`. On unrecoverable failure it calls `git merge --abort` to leave the worktree clean before raising `RuntimeError("merge conflict - auto-resolution failed")`.
-   - `ArtifactKind.conflict_report` enum value and `artifact_path()` mapping entry added because `ArtifactRef.kind` is a strict enum and the path map is a strict dict.
-
-### Current test counts
+### Final test counts
 
 | Suite | Command | Result |
 |---|---|---|
-| Core | `python3 -m pytest -q core/tests` | **97 passed** (was 92; +1 slice, +2 steer, +1 autoskip, +1 merge recovery) |
-| TUI | `cd tui && bun test` | **67 passed** (unchanged) |
+| Core | `python3 -m pytest -q core/tests` | **100 passed** |
+| TUI | `cd tui && bun test` | **67 passed** |
 | TUI | `cd tui && bun run typecheck` | **clean** |
-| Web | `python3 -m pytest -q web/tests` | **52 passed** (unchanged) |
+| Web | `python3 -m pytest -q web/tests` | **52 passed** |
 
-### `steer_events` DB schema
+### Deviations
 
-Added in `core/nexussy/db.py` migration `_migration_v3` (CURRENT_SCHEMA_VERSION bumped 2 → 3):
+- `python -m pytest ...` could not run because `python` is unavailable in this environment; all Python suites were run with `python3`.
+- Develop steering is embedded as a `steering_instructions` field in each JSON task spec so the Pi RPC payload remains structured JSON.
 
-```sql
-CREATE TABLE IF NOT EXISTS steer_events(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id TEXT NOT NULL,
-  target TEXT NOT NULL,
-  worker_id TEXT,
-  message TEXT NOT NULL,
-  priority TEXT NOT NULL DEFAULT 'normal',
-  created_at TEXT NOT NULL,
-  consumed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_steer_run ON steer_events(run_id);
-```
+### Kyle / Perplexity Review
 
-`consumed_at` is reserved for a future drainer that marks orchestrator events as flushed into `steer_context`; the current implementation leaves it `NULL` and tracks consumption in-memory via `consume_steer()`. Worker-target events are also recorded but no `consumed_at` is set after inject.
-
-### Deviations from spec
-
-- **F2 steering, SSE event at stage boundary.** Spec offered two options ("emit an SSE event" or "store on `steer_context` for next stage"). Chose the second — no new SSE event type was added. Drain runs after `checkpoint_saved`, true stage boundary. Tests assert queue drain, not an SSE event.
-- **F2 worker inject path reuse.** `worker_inject` in `server.py` is an HTTP route, not a shared function. Inlined the equivalent `engine.active_worker_rpcs[rid]` lookup + `rpc.inject()` call into `_steer` rather than refactor `server.py` (out of scope).
-- **F4 schema scope.** Spec listed `develop.py` and `test_core_contract.py`. Had to also touch `core/nexussy/artifacts/store.py` (authorized by spec) AND `core/nexussy/api/schemas.py` to add `ArtifactKind.conflict_report` because `ArtifactRef.kind` is a strict enum. Single-token addition, fully within the `core/` boundary.
-- **F4 existing test updated.** `test_develop_merge_conflict_lifecycle` previously asserted `final_status=="failed"` and `merge_report.passed is False` on conflict. Those assertions directly contradict the new auto-resolution behavior. The test was updated to assert the run now passes, the `merge_conflict` SSE event still fires, and the new `conflict_report` artifact records `recovered: true`. This is a contract change forced by the spec.
-- **F4 unrecoverable sub-test skipped.** Constructing a deterministic `checkout --ours` failure scenario without filesystem races adds noise. The success path covers the recovery code; the failure-branch shape of `conflict_report` is type-validated.
-- **F1 baseline drift.** Spec said "92 existing tests"; actual baseline was 92 only on disk-fresh state. After F2 and F3 landed first (+3 tests), F1 saw 95 baseline → 96. Final: 97.
-
-### What Kyle should review next with Perplexity
-
-1. **`steer_context` consumer.** The drained orchestrator messages are stored on `engine.steer_context[run_id]` but no stage prompt currently reads them. Decide where to inject them — natural candidates: `design`, `plan`, and `develop` system prompts. Ask Perplexity for prior-art on "human-in-the-loop steering injection points for staged LLM agent pipelines" and whether a single steering channel or per-stage channels are preferable.
-2. **`steer_events.consumed_at` lifecycle.** Currently never written. Decide whether to mark consumed_at when (a) the queue drains into steer_context, (b) the next stage's provider call actually consumes it, or (c) a separate API confirms processing. This affects audit and replay semantics.
-3. **Steering priority semantics.** `priority` is persisted but not honored — high-priority messages should arguably preempt the next stage boundary or interrupt mid-stage. Ask Perplexity for patterns on preemption vs. boundary draining in agent orchestrators.
-4. **Devplan slicer regex robustness.** `_slice_devplan_tasks` uses a markdown-ish regex. Real provider-generated devplans may use varied formats (numbered lists, h3 headings, JSON code-fenced blocks). Worth asking Perplexity for "robust markdown task list parsing" or whether to switch to a structured devplan JSON sidecar (`devplan.tasks.json`) generated alongside `devplan.md`.
-5. **Merge recovery beyond `--ours`.** Always taking the worker's version is the most permissive policy. Ask Perplexity about safer merge strategies for parallel agent worktrees: three-way merge with conflict markers preserved as artifacts for human review, semantic merging via diff3, or per-stage policy (always-ours for code, always-theirs for docs).
-6. **Auto-skip interview answer quality.** Synthesizing all answers from a one-paragraph project description likely produces vague specs. Worth asking Perplexity whether to (a) keep auto-skip as-is for quick dev iteration, (b) require a minimum description length / structured input before allowing skip, or (c) make auto-skip generate a draft that the user can later amend via `/pipeline/{sid}/interview/answer`.
+- Review whether develop-stage steering should remain a task-spec field or become a top-level orchestrator prompt separate from worker task JSON.
+- Review whether `consumed_at` should also be set for worker-target steering after successful RPC inject, or remain orchestrator-consumption-only.
+- Review whether urgent steering should emit an explicit SSE event when it preempts a paused run.
+- Review whether `devplan_tasks` should be promoted to a formal public artifact contract in `SPEC.md` with stricter schema validation.
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->

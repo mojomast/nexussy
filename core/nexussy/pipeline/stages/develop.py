@@ -38,7 +38,26 @@ _TASK_LINE_RE = re.compile(r"^\s*-\s*(?:\[[ xX]\]\s*)?(?:(T-\d+)\s*[:\-]\s*)?(.+
 _SUB_BULLET_RE = re.compile(r"^(\s+)[-*]\s*(.+?)\s*$")
 
 
-def _slice_devplan_tasks(devplan_text: str) -> list[dict]:
+def _valid_task_specs(value) -> list[dict] | None:
+    if not isinstance(value, list):
+        return None
+    specs: list[dict] = []
+    for idx, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            return None
+        title = str(item.get("title") or "").strip()
+        if not title:
+            return None
+        specs.append({
+            "id": str(item.get("id") or f"T-{idx:03d}"),
+            "title": title,
+            "acceptance_criteria": list(item.get("acceptance_criteria") or []),
+            "files_allowed": list(item.get("files_allowed") or []),
+        })
+    return specs or None
+
+
+def _slice_devplan_tasks(devplan_text: str, devplan_tasks_json: str | None = None) -> list[dict]:
     """Parse a devplan markdown artifact into atomic task specs.
 
     Each spec has keys: id, title, acceptance_criteria, files_allowed.
@@ -46,6 +65,13 @@ def _slice_devplan_tasks(devplan_text: str) -> list[dict]:
     if devplan_text is None:
         raise TypeError("devplan_text must be a string")
     fallback = [{"id": "T-001", "title": "Implement devplan", "acceptance_criteria": [], "files_allowed": []}]
+    if devplan_tasks_json:
+        try:
+            sidecar_specs = _valid_task_specs(json.loads(devplan_tasks_json))
+        except Exception:
+            sidecar_specs = None
+        if sidecar_specs:
+            return sidecar_specs
     if not devplan_text.strip():
         return fallback
     lines = devplan_text.splitlines()
@@ -56,6 +82,14 @@ def _slice_devplan_tasks(devplan_text: str) -> list[dict]:
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
+        if stripped == "<!-- NEXT_TASK_GROUP_START -->":
+            in_tasks_section = True
+            i += 1
+            continue
+        if stripped == "<!-- NEXT_TASK_GROUP_END -->":
+            in_tasks_section = False
+            i += 1
+            continue
         # Detect heading sections
         if stripped.startswith("#"):
             heading = stripped.lstrip("#").strip().lower()
@@ -165,13 +199,26 @@ async def merge_workers(engine, req, detail, rid, root, context):
     workers = [orch]
     merged = []
     devplan_text = ""
+    devplan_tasks_text = ""
     try:
         devplan_path = pathlib.Path(root) / "devplan.md"
         if devplan_path.exists():
             devplan_text = devplan_path.read_text(encoding="utf-8")
     except Exception:
         devplan_text = ""
-    specs = _slice_devplan_tasks(devplan_text)
+    try:
+        devplan_tasks_path = pathlib.Path(root) / ".nexussy" / "artifacts" / "devplan_tasks.json"
+        if devplan_tasks_path.exists():
+            devplan_tasks_text = devplan_tasks_path.read_text(encoding="utf-8")
+    except Exception:
+        devplan_tasks_text = ""
+    specs = _slice_devplan_tasks(devplan_text, devplan_tasks_text)
+    steer = await engine.consume_steer(rid)
+    if steer:
+        messages = [m.get("message", "") for m in steer if m.get("message")]
+        if messages:
+            block = "## Steering Instructions\n" + "\n".join(messages)
+            specs = [{**spec, "steering_instructions": block} for spec in specs]
     worker_results = await asyncio.gather(*[run_single_worker(engine, req, detail, rid, root, role, idx, context, task_spec=specs[(idx - 1) % len(specs)]) for idx, role in enumerate(roles, start=1)], return_exceptions=True)
     for result in worker_results:
         if isinstance(result, Exception):

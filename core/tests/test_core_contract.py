@@ -1387,43 +1387,30 @@ async def test_pi_rpc_request_without_stdin_raises_runtime_error():
         await PiRPCProcess(proc).request("task")
 
 
-def test_steer_orchestrator(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
-    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
-    server.config = load_config()
-    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
-    server.engine = Engine(server.db, server.config)
-    with TestClient(app) as c:
-        tools = c.get("/mcp/tools").json()
-        names = {tool["name"] for tool in tools["tools"]}
-        assert "nexussy_steer" in names
-        started = c.post("/mcp/call", json={"name":"nexussy_start_pipeline","arguments":{"project_name":"Steer Demo","description":"small api","auto_approve_interview":True,"stop_after_stage":"design","metadata":{"mock_provider":True}}})
-        assert started.status_code == 200, started.text
-        rid = started.json()["run_id"]
-        # Pause so the steer can be observed in queue before stage boundary drains it
-        server.engine.paused[rid] = True
-        steered = c.post("/mcp/call", json={"name":"nexussy_steer","arguments":{"target":"orchestrator","run_id":rid,"message":"focus on auth","priority":"high"}})
-        assert steered.status_code == 200, steered.text
-        body = steered.json()
-        assert body["ok"] is True and isinstance(body["id"], int) and body["id"] >= 1
-        # DB row exists
-        rows = asyncio.get_event_loop().run_until_complete(server.db.read("SELECT * FROM steer_events WHERE run_id=?", (rid,)))
-        assert len(rows) == 1
-        assert rows[0]["target"] == "orchestrator" and rows[0]["message"] == "focus on auth" and rows[0]["priority"] == "high"
-        # Engine queue contains the message
-        assert server.engine.steer_queue.get(rid) and server.engine.steer_queue[rid][0]["message"] == "focus on auth"
-        # Drain via consume_steer (simulating stage-boundary drain)
-        consumed = server.engine.consume_steer(rid)
-        assert consumed and consumed[0]["message"] == "focus on auth"
-        assert rid not in server.engine.steer_queue or not server.engine.steer_queue.get(rid)
-        assert "focus on auth" in server.engine.steer_context.get(rid, [])
-        # Reject worker target without worker_id via Pydantic validation surfaced as 4xx/5xx
-        bad = c.post("/mcp/call", json={"name":"nexussy_steer","arguments":{"target":"worker","run_id":rid,"message":"hi"}})
-        assert bad.status_code != 200 or "error" in bad.json()
-        # Cleanup the paused run
-        server.engine.paused.pop(rid, None)
-        task = server.engine.tasks.get(rid)
-        if task: task.cancel()
+@pytest.mark.asyncio
+async def test_steer_orchestrator(tmp_path):
+    from nexussy.mcp import _steer
+
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    engine = Engine(db, load_config())
+    rid = "run-steer"
+    sid = "sid-steer"
+    await db.write(lambda con: con.execute("INSERT INTO runs(run_id, session_id, status, current_stage, started_at, finished_at, usage_json) VALUES(?,?,?,?,?,?,?)", (rid, sid, "running", "design", datetime.now(timezone.utc).isoformat(), None, "{}")))
+    body = await _steer({"target":"orchestrator","run_id":rid,"message":"focus on auth","priority":"high"}, engine=engine, db=db)
+    assert body["ok"] is True and isinstance(body["id"], int) and body["id"] >= 1
+    rows = await db.read("SELECT * FROM steer_events WHERE run_id=?", (rid,))
+    assert len(rows) == 1
+    assert rows[0]["target"] == "orchestrator" and rows[0]["message"] == "focus on auth" and rows[0]["priority"] == "high"
+    assert engine.steer_queue.get(rid) and engine.steer_queue[rid][0]["message"] == "focus on auth"
+    consumed = await engine.consume_steer(rid)
+    assert consumed and consumed[0]["message"] == "focus on auth"
+    assert rid not in engine.steer_queue or not engine.steer_queue.get(rid)
+    assert "focus on auth" in engine.steer_context.get(rid, [])
+    rows = await db.read("SELECT consumed_at FROM steer_events WHERE run_id=?", (rid,))
+    assert rows[0]["consumed_at"]
+    with pytest.raises(Exception):
+        await _steer({"target":"worker","run_id":rid,"message":"hi"}, engine=engine, db=db)
 
 
 def test_steer_worker(monkeypatch, tmp_path):
@@ -1504,6 +1491,79 @@ def test_slice_devplan_tasks():
 
 
 @pytest.mark.asyncio
+async def test_steer_context_injected_into_plan(tmp_path):
+    from nexussy.pipeline.stages import plan
+
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    engine = Engine(db, load_config())
+    root = tmp_path / "project"
+    root.mkdir()
+    rid = "run-plan-steer"
+    await db.write(lambda con: con.execute("INSERT INTO steer_events(run_id, target, message, priority, created_at) VALUES(?,?,?,?,?)", (rid, "orchestrator", "prefer sqlite", "high", datetime.now(timezone.utc).isoformat())))
+    rows = await db.read("SELECT id FROM steer_events WHERE run_id=?", (rid,))
+    engine.steer_queue[rid] = [{"id": rows[0]["id"], "message": "prefer sqlite", "priority": "high"}]
+    captured = {}
+
+    async def provider_text(st, sid, run_id, prompt, selected_models, allow_mock):
+        captured["prompt"] = prompt
+        return "# Plan\n\n<!-- PROGRESS_LOG_START -->\n- start\n<!-- PROGRESS_LOG_END -->\n\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] T-001: Build storage\n  - acceptance: uses sqlite\n  - files: core/nexussy/db.py\n<!-- NEXT_TASK_GROUP_END -->\n"
+
+    engine._provider_text = provider_text
+    detail = types.SimpleNamespace(session=types.SimpleNamespace(session_id="sid"))
+    req = types.SimpleNamespace(description="build a service")
+    cp = types.SimpleNamespace(phase_count=0)
+    refs = await plan.run(engine, req, detail, rid, cp, str(root), {}, True)
+    assert captured["prompt"].startswith("## Steering Instructions\nprefer sqlite")
+    assert any(ref.kind == "devplan_tasks" for ref in refs)
+    consumed = await db.read("SELECT consumed_at FROM steer_events WHERE run_id=?", (rid,))
+    assert consumed[0]["consumed_at"]
+
+
+@pytest.mark.asyncio
+async def test_devplan_tasks_sidecar(tmp_path):
+    from nexussy.pipeline.stages import plan
+    from nexussy.pipeline.stages.develop import _slice_devplan_tasks
+
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    engine = Engine(db, load_config())
+    root = tmp_path / "project"
+    root.mkdir()
+
+    async def provider_text(st, sid, run_id, prompt, selected_models, allow_mock):
+        return "# Plan\n\n<!-- PROGRESS_LOG_START -->\n- start\n<!-- PROGRESS_LOG_END -->\n\n<!-- NEXT_TASK_GROUP_START -->\n- [ ] T-001: Build API\n  - acceptance: passes tests\n  - files: core/nexussy/api/server.py\n<!-- NEXT_TASK_GROUP_END -->\n"
+
+    engine._provider_text = provider_text
+    detail = types.SimpleNamespace(session=types.SimpleNamespace(session_id="sid"))
+    req = types.SimpleNamespace(description="build a service")
+    cp = types.SimpleNamespace(phase_count=0)
+    await plan.run(engine, req, detail, "run-sidecar", cp, str(root), {}, True)
+    rows = await db.read("SELECT content_text FROM artifacts WHERE run_id=? AND kind='devplan_tasks'", ("run-sidecar",))
+    tasks = json.loads(rows[0]["content_text"])
+    assert "Build API" in tasks[0]["title"]
+    sidecar = json.dumps([{"id":"T-999","title":"Sidecar wins","acceptance_criteria":["ok"],"files_allowed":["core/x.py"]}])
+    assert _slice_devplan_tasks("# No tasks", sidecar)[0]["id"] == "T-999"
+
+
+@pytest.mark.asyncio
+async def test_urgent_steer_unblocks_pause(tmp_path):
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    engine = Engine(db, load_config())
+    rid = "run-urgent"
+    await db.write(lambda con: con.execute("INSERT INTO steer_events(run_id, target, message, priority, created_at) VALUES(?,?,?,?,?)", (rid, "orchestrator", "stop waiting", "urgent", datetime.now(timezone.utc).isoformat())))
+    rows = await db.read("SELECT id FROM steer_events WHERE run_id=?", (rid,))
+    engine.paused[rid] = True
+    engine.steer_queue[rid] = [{"id": rows[0]["id"], "message": "stop waiting", "priority": "urgent"}]
+    assert await engine._preempt_urgent_steer(rid) is True
+    assert not engine.paused.get(rid)
+    assert engine.steer_context[rid] == ["stop waiting"]
+    consumed = await db.read("SELECT consumed_at FROM steer_events WHERE run_id=?", (rid,))
+    assert consumed[0]["consumed_at"]
+
+
+@pytest.mark.asyncio
 async def test_merge_conflict_recovery(tmp_path):
     """Verify merge conflicts auto-resolve via `git checkout --ours` and recommit.
 
@@ -1573,4 +1633,3 @@ async def test_merge_conflict_recovery(tmp_path):
         if kind == "merge_report" and json.loads(text).get("passed") is False
     ]
     assert failure_merge_reports == []
-
