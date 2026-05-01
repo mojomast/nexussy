@@ -8,6 +8,7 @@
 - Permission manifests now govern worker role capabilities across core, local Pi tools, SSE tool-output denials, and role-aware API/MCP spawn paths.
 - Design context packs add built-in Stripe, Linear, and Minimal guidance with per-run selection from core config, TUI `/new --design-pack`, and the web dashboard start form.
 - Cost analytics now aggregate existing run/stage usage and cost events through `python3 -m nexussy.cli.costs` and `./nexussy.sh analyze-costs`.
+- Post-sprint hardening added Ruff verification, graph-cache cold-start/corruption tests, safe graph-cache writes, analyze-costs empty/invalid-run handling, and dedicated coverage for permission, design-pack, and cost analytics behavior.
 
 ## [Unreleased] — feature-pass-3
 
