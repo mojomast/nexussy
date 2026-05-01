@@ -11,10 +11,81 @@ applied version to `schema_version`. New installs replay the same migrations as
 upgrades, so each migration must be safe after `CREATE TABLE IF NOT EXISTS`.
 """
 
-import asyncio, pathlib, sqlite3, threading
+import asyncio, json, pathlib, sqlite3, threading
 from datetime import datetime, timezone
 
 CURRENT_SCHEMA_VERSION = 3
+
+STAGE_ORDER = ("interview", "design", "validate", "plan", "review", "develop")
+
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost_usd")
+
+def _empty_usage() -> dict:
+    return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 0, "cost_usd": 0.0, "provider": None, "model": None}
+
+def _usage_from_json(raw) -> dict:
+    usage = _empty_usage()
+    if not raw:
+        return usage
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return usage
+    if not isinstance(data, dict):
+        return usage
+    for key in USAGE_KEYS:
+        value = data.get(key, 0)
+        usage[key] = float(value or 0) if key == "cost_usd" else int(value or 0)
+    if not usage["total_tokens"]:
+        usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"] + usage["cache_read_tokens"] + usage["cache_write_tokens"]
+    usage["provider"] = data.get("provider")
+    usage["model"] = data.get("model")
+    return usage
+
+def _add_usage(target: dict, usage: dict) -> None:
+    for key in USAGE_KEYS:
+        target[key] += usage.get(key, 0)
+    target["provider"] = usage.get("provider") or target.get("provider")
+    target["model"] = usage.get("model") or target.get("model")
+
+def _stage_sort_key(stage: str) -> tuple[int, str]:
+    try:
+        return (STAGE_ORDER.index(stage), stage)
+    except ValueError:
+        return (len(STAGE_ORDER), stage)
+
+def _event_stage(event: dict, stage_rows: list[dict], fallback: str | None) -> str:
+    created = event.get("created_at")
+    for row in stage_rows:
+        started = row.get("started_at")
+        finished = row.get("finished_at")
+        if started and created and created >= started and (not finished or created <= finished):
+            return row["stage"]
+    return fallback or "unknown"
+
+def _cost_payload_usage(payload_json: str) -> dict | None:
+    try:
+        envelope = json.loads(payload_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    return _usage_from_json(payload)
+
+def _transition_stage(payload_json: str) -> str | None:
+    try:
+        envelope = json.loads(payload_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    stage = payload.get("to_stage")
+    status = payload.get("to_status")
+    return stage if isinstance(stage, str) and status in (None, "running", "retrying", "paused", "passed") else None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, project_slug TEXT UNIQUE, project_name TEXT, status TEXT, created_at TEXT, updated_at TEXT, detail_json TEXT);
@@ -202,6 +273,64 @@ class Database:
             finally:
                 self._read_pool.release(con)
         return await asyncio.get_event_loop().run_in_executor(None, _do)
+
+    async def cost_analytics(self, run_id: str | None = None, *, all_runs: bool = False) -> dict:
+        """Return read-only token/cost analytics derived from existing metadata.
+
+        The helper intentionally uses only the current schema: run-level
+        ``runs.usage_json``, persisted ``cost_update`` events, and
+        ``stage_runs`` timestamps/status for stage attribution. It performs no
+        migrations and is safe for CLI use while the API server is stopped.
+        """
+        if run_id and all_runs:
+            raise ValueError("run_id cannot be combined with all_runs")
+        if run_id:
+            runs = await self.read("SELECT run_id, session_id, status, current_stage, usage_json FROM runs WHERE run_id=?", (run_id,))
+            if not runs:
+                raise ValueError(f"run not found: {run_id}")
+        elif all_runs:
+            runs = await self.read("SELECT run_id, session_id, status, current_stage, usage_json FROM runs ORDER BY started_at, run_id", ())
+        else:
+            runs = await self.read("SELECT run_id, session_id, status, current_stage, usage_json FROM runs ORDER BY started_at DESC, run_id DESC LIMIT 1", ())
+            if not runs:
+                raise ValueError("no runs found")
+        result_runs = []
+        totals = _empty_usage()
+        for run in runs:
+            item = await self._cost_analytics_for_run(run)
+            result_runs.append(item)
+            _add_usage(totals, item["run_total"])
+        return {"runs": result_runs, "totals": totals}
+
+    async def _cost_analytics_for_run(self, run: dict) -> dict:
+        rid = run["run_id"]
+        stages = await self.read("SELECT stage, status, attempt, started_at, finished_at FROM stage_runs WHERE run_id=?", (rid,))
+        stages = sorted(stages, key=lambda row: _stage_sort_key(row["stage"]))
+        stage_totals = {row["stage"]: _empty_usage() for row in stages}
+        events = await self.read("SELECT type, payload_json, created_at FROM events WHERE run_id=? ORDER BY sequence", (rid,))
+        current_stage = run.get("current_stage")
+        for event in events:
+            if event.get("type") == "stage_transition":
+                current_stage = _transition_stage(event.get("payload_json")) or current_stage
+                continue
+            if event.get("type") != "cost_update":
+                continue
+            usage = _cost_payload_usage(event.get("payload_json"))
+            if usage is None:
+                continue
+            stage = _event_stage(event, stages, current_stage)
+            stage_totals.setdefault(stage, _empty_usage())
+            _add_usage(stage_totals[stage], usage)
+        run_total = _usage_from_json(run.get("usage_json"))
+        if not any(stage_totals[stage]["total_tokens"] or stage_totals[stage]["cost_usd"] for stage in stage_totals):
+            # Keep per-stage rows at zero when no usage events were persisted,
+            # while still reporting the final run total from runs.usage_json.
+            pass
+        elif not run_total["total_tokens"] and not run_total["cost_usd"]:
+            for usage in stage_totals.values():
+                _add_usage(run_total, usage)
+        stage_items = [dict({"stage": stage}, **stage_totals[stage]) for stage in sorted(stage_totals, key=_stage_sort_key)]
+        return {"run_id": rid, "session_id": run.get("session_id"), "status": run.get("status"), "current_stage": run.get("current_stage"), "run_total": run_total, "stages": stage_items}
 
     def close(self):
         """Release all pooled read connections. Call on server shutdown."""
