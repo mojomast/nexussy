@@ -1,120 +1,272 @@
-# nexussy Implementation Checklist
+# nexussy Implementation Devplan
+
+Scope: graphify-style interview context RAG, OpenHarness-style permission manifests, design context packs, and cost analytics.
+
+No new Python package dependencies are approved in this plan. All graph, permission, design-pack, and cost analytics work must use Python stdlib plus existing project dependencies.
 
 <!-- PROGRESS_LOG_START -->
-- Phase 0: SPEC.md read completely; root skeleton initialized; four subagents assigned from SPEC.md contracts.
-- Subagent C: implemented Starlette web dashboard, `/api/*` proxy, SSE proxy, single HTML UI, fixtures, and tests.
-- Subagent D: hardened dry-run installer, venv install path, complete generated config/env templates, launcher diagnostics/PID/log handling, and README operational docs.
-- Subagent B: hardened TUI spec coverage for SSE payload types, fixture/live modes, client routes/auth, slash commands, reducer panels, and tests; `bun install`, `bun test`, and `bun run typecheck` pass.
-- Master pass: added `SPEC_COVERAGE.md`; wired core provider path to explicit mock/fake/LiteLLM modes; added fake-Pi develop worktree integration through `/pipeline/start`; hardened TUI SSE reconnect streaming and web chat cost badge; core/TUI/web/shell smoke commands pass, but SPEC remains partial.
-- Subagent D: added root-only operational smoke tests/evidence for dry-run no writes, idempotent config/env, duplicate start, stale PID cleanup, logs, and doctor diagnostics.
-- Completion pass: closed `SPEC_COVERAGE.md` to 78 tested rows and 4 blocked-external live checks only; final Subagent E audit found no rejected rows.
-- Guided API-key setup pass: core secrets now persist keyring-first with bounded-timeout env-file fallback, config updates persist to YAML, and provider discovery loads persisted keys; TUI adds safe provider-key status/setup/delete commands, hidden-input `--set-key`, and single-terminal provider/key/model setup with core autostart; core and TUI tests pass.
-- OpenTUI pass: TUI now defaults to an `@opentui/core` chat renderer while retaining the prior Pi TUI behind `NEXUSSY_TUI_RENDERER=pi-tui`; `bun test && bun run typecheck` passes.
-- OpenTUI input fix: renderer now binds explicit stdin/stdout, focuses the OpenTUI `InputRenderable` through its supported API, sizes the composer to terminal width, and repaints on input events; TUI tests and typecheck pass.
-- OpenTUI layout fix: live OpenTUI input is no longer duplicated by the string-rendered composer, transcript overflow is hidden, and transcript auto-scrolls to the latest run events; TUI tests and typecheck pass.
-- OpenTUI harness pass: researched OpenTUI renderer/layout/keyboard/ScrollBox/lifecycle docs and refactored the default TUI into flex regions: header, sticky-scroll transcript, wide-screen pipeline/options side rail, status strip, and focused composer; TUI tests/typecheck and OpenTUI renderer smoke pass.
-- OpenTUI transcript fix: main chat now filters out artifact/checkpoint/git/worktree/worker-RPC noise, shows user prompts plus high-signal run/stage/done/error events, and keeps detailed pipeline state in the side rail; TUI tests/typecheck and renderer smoke pass.
-- OpenTUI polish fix: transcript pane now flex-shrinks beside the fixed side rail to prevent text bleeding under it, and typo casual greeting `whatsg up` is handled as small talk; TUI tests/typecheck pass.
-- Provider-backed idle chat pass: added core `POST /assistant/reply` using configured provider/default model without starting a pipeline, wired TUI non-project idle messages through `CoreClient.chat`, kept secrets in core, and added core/TUI regression tests; core tests and TUI tests/typecheck pass.
-- Interview-first TUI pass: requests like `interview me please` enter provider-backed interview mode instead of idle chat or auto-starting the pipeline; follow-up vague app descriptions stay in interview mode until explicit `/new`; TUI tests/typecheck and core tests pass.
-- TUI interaction gate pass: default composer and legacy interactive shell now keep ordinary chat in Ask mode with no provider/pipeline/inject side effects; only slash commands or pending explicit selections/confirmations enter Action mode; TUI tests/typecheck pass.
-- Core interview pass: interview now uses LLM-generated question JSON, auto-synthesizes answers from project descriptions when requested, pauses manual runs for `/pipeline/{session_id}/interview/answer`, persists real multi-question artifacts, and injects interview summaries into design/devplan prompts; core tests pass.
-- TUI handoff/anchor pass: added shared anchor utilities, context-window budget tracking from `cost_update`, handoff prompt generation, anchor-aware devplan/phase/handoff panels, retry-aware stage bar badges, `/handoff`, and regression tests; `bun test && bun run typecheck` passes.
-- Core review-gap pass: provider-backed validate/review/plan stages, checkpoint resume, MCP tools, session deletion cleanup, cancellation cleanup, server startup factory, Pi/security/rate-limit/health hardening, and docs landed; core/TUI/shell checks pass.
-- SPEC coverage audit pass: `SPEC_COVERAGE.md` now distinguishes tested, partial, implemented-untested, and blocked-external rows instead of overclaiming full closure; `FULL_SPEC_REMAINING.md`, README, and status artifacts were updated with reopened gaps.
-- Cycle 1 / Subagent A pass: core runtime semantics now cover explicit provider `passed=false`, stage provider retries, review-feedback re-plan prompts, running-worker pause/resume/requeue, task skip handoff notes, and blocker previous-status restoration; core tests pass.
-- Cycle 3 / Subagent B pass: active composer now covers `/stage`, `/spawn`, and `/export`; context warning/critical prompts, blocking handoff modal copy, compact/patch-pause/auto-restart helpers, DevPlan/Phase/Handoff panel helpers, and artifact PATCH payloads have direct tests; TUI tests/typecheck pass.
-- Cycle 4 / Subagent C pass: web proxy-layer errors now use public `ErrorResponse`, DOM-executed dashboard tests cover errors, DevPlan anchors, worker/config/secrets behavior, and ASGI-level incremental SSE proves first chunk delivery before stream completion; web tests and startup smoke evidence pass.
-- Cycle 5 / Subagent D pass: ops tests now cover systemd-user unit creation/preservation, exact launcher status fields, `start-tui`, `update`, missing-Pi doctor remediation, and missing-provider wording; `bash -n`, dry-run, and ops tests pass. Full noninteractive install twice remains partial due package/service side effects; ShellCheck was closed by the later Cycle 6 external rerun.
-- Cycle 6 / Coordinator pass: after external tools were installed, provider credentials were checked without printing secret values, a harmless real LiteLLM/default-provider call passed, Pi CLI version/help and the core Pi subprocess adapter with installed `pi --rpc` passed under timeouts, ShellCheck 0.11.0 passed on root scripts after lint fixes, and no blocked-external rows remain. Full verification passed across core, TUI, web, shell syntax, installer dry-run, and ops tests.
-- Code review fix pass: DB reads now close connections on exceptions, provider calls avoid global env mutation, CORS is configurable, manual interview waits time out, worker RPC execution runs in parallel before serialized merges, Pi frames are bounded, git SHA scrubbing is narrowed, empty worker commits are safe, schema imports are explicit, MCP calls validate bodies, README/AGENTS document security and worker extension points, and core tests pass after each phase.
-- Sequential review-fix subagent pass added DB indexes/finally cleanup, paused-state cleanup, serialized server startup, engine logging/RPC depth guard, async git subprocess calls, provider plaintext warnings/env caching, atomic SSE sequencing, production CORS enforcement, full MCP start schema, shell hardening, and CHANGELOG documentation; each subagent commit passed `python3 -m pytest -x -q` under `core/`.
-- README rewrite pass replaced the operational/reference-heavy README with a clearer product and operator guide covering purpose, pipeline lifecycle, architecture, install/launcher flows, TUI/web/MCP usage, providers, Pi workers, artifacts, security, configuration, and verification status. Checks passed: `python3 -m pytest -q core/tests` and `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`.
-- Sequential repair pass closed 11 core review issues: file-lock claimed uniqueness, provider cache invalidation, atomic event payload sequencing, keyring-only secret deletion reporting, lazy CORS config, regex complexity signals, worker pause timeout capture, explicit worker merge results, empty relative path rejection, shared stage order, and GLM/ZAI alias documentation. Checks passed: `python3 -m pytest tests/ -v` under `core/` (67 passed) and an isolated core server `/pipeline/start` mock-provider smoke; requested `python -m pytest tests/ -v` could not run because `python` is unavailable.
-- Code review fix run closed A1-A11 and D1-D3: keyring fallback warnings, provider 429 persistence, lock exception narrowing, rename diff parsing, event sequence `RETURNING`, unique mock worker IDs, Pi RPC runtime/event handling, numeric config coercion, stage handler refactor, and security regression tests. Checks passed: `python3 -m pytest -q core/tests` (71 passed); requested `python -m pytest -q core/tests` could not run because `python` is unavailable.
-- Medium severity core review fixes complete: keyring writes no longer leak secrets into `os.environ`, SQLite schema version tracking records current migrations, MCP exposes pause/resume/cancel/artifact/session tools with JSON-RPC error codes, and Pi RPC runtime behavior has regression coverage. Checks passed: `python3 -m pytest -q core/tests` (74 passed).
-- Low severity core review fixes complete: checkpoint hashes now reflect provided artifact/question content, config reuses the shared env-file reader, and secret scrubbing preserves non-secret git/hash fields while continuing to redact API keys, `sk-` tokens, and PEM blocks. Checks passed: `python3 -m pytest -q core/tests` (75 passed).
-- Full H/M/L code review mission complete: H1-H3, M1-M4, and L1-L3 are fixed with AGENTS/CHANGELOG/status updates. Final verification passed with `python3 -m pytest tests/ -v` under `core/`; the requested `python -m pytest tests/ -v` command could not run because `python` is unavailable in this environment.
-- Subagent C zero-build dashboard refresh complete: web now serves separate vanilla `index.html`, `app.js`, and `style.css` assets with no CDN/build step; sessions and pipeline status poll through `/api/*`, run SSE connects via `/api/pipeline/runs/{run_id}/stream`, pause interview answers POST to `/api/pipeline/{session_id}/interview/answer`, and web tests pass.
-- Bundled Pi worker/RPC pass complete: core now ships `nexussy-pi`, local JSON-RPC stdio worker tools, real `pi --rpc-mode` settings handoff, and Pi worker regression tests. Checks passed: `python3 -m pytest -q core/tests` (78 passed).
-- Stub wiring integration complete: core worker inject/stop/stream, pipeline inject, existing repo import, session lifecycle transitions, token usage aggregation, MCP expansion, bundled/real Pi worker paths, core `/ui`, and web dashboard assets are wired. Checks passed: `python3 -m pytest tests/ -v --tb=short` from `core/` (78 passed), `python3 -m pytest -q web/tests` (47 passed), `bash ops_tests.sh`, `cd tui && bun test`, and `cd tui && bun run typecheck`; `python` and `ruff` are unavailable in this environment.
-- Root ops/docs review fixes complete: launcher startup failures now terminate just-started core/web processes and clear PID files, foreground TUI runs have minimal PID/lifecycle-log management, Pi/CORS docs match actual config/env keys, systemd user units reject unsupported unescaped paths, and ops tests keep temporary outputs under their private temp root. Checks passed: `bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh`, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run`.
-- Web-owned review fixes complete: dashboard interview submissions now use `{answers:{question_id:answer}}`, core auth keys are injected by the proxy for fetch/SSE when missing, SPEC status/session response shapes are consumed, required tabs and graph proxy loading are present, swarm/file locks hydrate on status refresh, and stale root-level web assets are neutralized. Checks passed: `python3 -m pytest -q web/tests` (50 passed).
-- Full codebase review fix pass complete: core SSE/tool payloads, worker streams, existing-repo import validation, rate-limit handling, CORS/secret schema drift, 404 semantics, and MCP controls were tightened; TUI restored Pi TUI as default, removed non-contract handoff endpoints, made `/stage` view-only, and hydrates status/workers/artifacts; web and ops fixes are recorded above. Coordinator checks passed: `python3 -m pytest -q core/tests` (86 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck`, `python3 -m pytest -q web/tests` (50 passed), shell syntax, ops tests, installer dry-run, core startup smoke, and alternate-port web startup smoke.
-- Local/team hardening complete: sandboxed executor docs and doctor warning, `dev`/`trusted-lan` profiles, local audit log, operations backup/restore docs, API key rotation plus auth-failure rate limiting, and full live configured-provider plus installed-Pi develop smoke were added without SaaS/multi-tenant features. Final checks passed across core, TUI, web, shell syntax, ops tests, and installer dry-run.
-- Review-response pass complete: fixed dashboard multi-question interview submission, expanded CI into core/TUI/web/ops jobs using `python3`, split pipeline helpers/stages so `engine.py` is 299 lines, and added `scripts/smoke_integration.sh` plus operations docs. Full verification passed after every item.
-- Smoke hardening pass complete: smoke SSE parsing, changed-file field usage, Pi command path/args handling, engine spawn dependency injection, and stale remaining-spec text were fixed with parser harness coverage and full verification.
-- Production hardening pass complete: smoke and spawn fixes were reverified, secret set/delete provider-cache invalidation has regression coverage, R-040 plan tasks now repair missing owner/acceptance/tests, and R-058/R-067 now officially use OpenTUI by default with Pi TUI opt-in. Full verification passed across core, TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
-- Full SPEC coverage pass complete: R-063/R-069 are closed with two real Ubuntu 22.04 `./install.sh --non-interactive` runs and health evidence; R-075 is closed with a live backend/frontend swarm run using a configured provider, real Pi command, pause/resume, passed done event, and develop/merge/changed-files artifacts. Final verification passed across core (92 tests), TUI, web, shell syntax, smoke parser, ops tests, and installer dry-run.
-- Steering injection and devplan task sidecar pass complete: plan consumes queued orchestrator steering into provider prompts, develop includes steering in worker task specs, consumed steering rows get `consumed_at`, urgent steering clears paused waits, and plan writes `devplan_tasks` JSON for develop-side slicing. Final verification passed across core (100 tests), TUI (67 tests plus typecheck), and web (52 tests).
-- Conflict policy and autoskip confidence pass complete: `swarm.conflict_strategy` supports `ours`, `diff3`, and `abort`; conflict reports now include `needs_review` and `conflicts_detail`; auto-skip interview answers are confidence-tagged based on `stages.interview.min_description_words`, and low-confidence answers prepend conservative design guidance. Final verification passed across core (104 tests), TUI (67 tests plus typecheck), and web (52 tests).
-- TUI steering and devplan JSON contract pass complete: TUI `/steer` sends orchestrator or worker-targeted steering via MCP, supports DB-backed list and clear flows, and command help includes steering commands. Core `devplan_tasks` now validates/repairs a strict `DevplanTask[]` sidecar with markdown fallback for develop slicing. Final verification passed across core (107 tests), TUI (70 tests plus typecheck), and web (52 tests).
+- 2026-05-01: Phase 0 orientation completed by reading required local architecture files and external READMEs for graphify, OpenHarness, and awesome-design-md.
+- 2026-05-01: Phase 1 planning completed with four sequential planning subagents and merged into this implementation devplan.
 <!-- PROGRESS_LOG_END -->
 
+## Conflict Resolution
+
+- `core/nexussy/api/schemas.py` is shared by permissions and design packs, so all schema/config work is marked `[SEQUENTIAL]` and must land before dependent feature workers.
+- `core/nexussy/config.py` is shared by design-pack config and launcher-adjacent config behavior, so design-pack config lands before UI selection tasks.
+- `core/nexussy/swarm/local_pi_worker.py` is only touched by permission hardening in the final plan; graph RAG must not touch it.
+- `core/nexussy/pipeline/stages/design.py` and `core/nexussy/pipeline/stages/interview.py` are disjoint after schema work and can run in separate parallel branches.
+- `nexussy.sh` and root ops tests are owned by root/ops work and must be sequenced after the core cost CLI exists.
+
+## Execution Order
+
+1. `[SEQUENTIAL]` Land shared schema/config foundations for permission manifests and design context packs.
+2. `[PARALLEL-GROUP-A]` Run Graphify RAG and Design Packs core/UI work in separate branches only after shared schema/config foundations are committed.
+3. Merge Parallel Group A and make milestone commit: `milestone: graphify RAG + design packs integrated`.
+4. `[PARALLEL-GROUP-B]` Run Permission Governance and Cost Analytics in separate branches. Root launcher cost work starts only after core cost CLI is complete.
+5. Merge Parallel Group B and make milestone commit: `milestone: permission hardening + cost analytics integrated`.
+6. Make final feature milestone commit: `milestone: all 4 features complete — graphify/permissions/design-packs/costs`.
+7. Run final verification subagent and release commit.
+
 <!-- NEXT_TASK_GROUP_START -->
-- [✅] A: core schemas, API, SSE, artifacts, SQLite, security, providers, validate/review loops, fake-Pi swarm/develop, worktrees, blockers, merge conflict lifecycle, and tests completed for deterministic implementation paths.
-- [✅] B: implement TUI client, SSE parser, layout, slash commands, mock fixtures, and tests.
-- [✅] C: implement Starlette web dashboard, proxy routes, SSE proxy, single HTML, fixtures, and tests.
-- [✅] D: implement installer, launcher, README, AGENTS.md, config/env generation, shell tests, and root operational smoke evidence.
-- [✅] F: integration evidence added across core fake provider/Pi/git/SSE, TUI client/render fixtures, web proxy/render tests, and installer/launcher smoke tests.
-- [✅] G: guided TUI provider-key setup implemented with backend keyring/env-file persistence, persisted provider model selection, single-terminal core autostart, no secret-value rendering, docs, and regression tests.
-- [✅] H1: Cycle 1 / Subagent A: core runtime semantics rows R-021/R-031/R-036/R-039/R-040/R-041/R-050/R-077 upgraded/narrowed; tests cover provider `passed=false`, review-feedback re-plan, worker pause/resume/requeue, task skip, and blocker status restoration.
-- [✅] H2: Cycle 2 / Subagent A: core contract/provider/MCP rows R-001/R-028/R-037/R-045/R-047/R-049/R-056/R-083 upgraded; R-054/R-057/R-080 narrowed to external/CORS residuals with retry/fallback/tool-lock evidence added.
-- [✅] H3: Cycle 3 / Subagent B: R-059/R-085/R-086 upgraded to tested; R-058/R-067 narrowed to the OpenTUI-default versus Pi-SPEC contract decision; active composer commands, handoff flows, and anchor panel tests pass.
-- [✅] H4: Cycle 4 / Subagent C: R-002/R-035/R-062/R-068/R-072/R-087/R-088 upgraded to tested with public web `ErrorResponse`, DOM dashboard, incremental SSE, and web startup smoke evidence.
-- [✅] H5: Cycle 5 / Subagent D: R-064/R-089 upgraded to tested; R-010 remains tested with stronger launcher evidence; R-051/R-063/R-069 narrowed to live Pi/full-install residuals before Cycle 6 closed separate live Pi/ShellCheck evidence.
-- [✅] H6: Cycle 6 / Coordinator: live provider/Pi/shellcheck checks passed after external tool installation; R-073/R-074/R-079/R-081 upgraded to tested, with R-080 still partial for a full production provider plus live Pi develop run.
-- [✅] I1: Code review findings fixed across core reliability, security, async compatibility, worker orchestration, API validation, and docs; `python3 -m pytest -q core/tests` passed after each phase.
-- [✅] I2: Sequential subagent review-fix commits completed for DB, engine, server, gitops, providers, SSE, CORS/MCP, shell scripts, and docs; core tests passed after every commit.
-- [✅] I3: README rewritten into a clearer current-state product/operator guide; core tests and root shell syntax checks pass.
-- [✅] J1: Sequential core repair issues 1-11 completed as separate commits with targeted tests; full core tests and isolated mock pipeline smoke pass.
-- [✅] J2: Code review fix run A1-A11 and D1-D3 completed with core reliability, provider, async, config, git diff, refactor, and security-test fixes; `python3 -m pytest -q core/tests` passes.
-- [✅] K1: Medium severity core review fixes M1-M4 completed for providers, DB migrations, MCP tools/stdio errors, and Pi RPC regression coverage.
-- [✅] K2: Low severity core review fixes L1-L3 completed for content-aware checkpoints, shared env-file parsing, and narrowed secret scrubbing.
-- [✅] K3: High/medium/low code review mission H1-H3, M1-M4, L1-L3 completed with docs/status updates and final core verification.
-- [✅] A: bundled Pi worker/RPC implementation completed for local JSON-RPC stdio worker, shim entrypoint, Pi command settings, default command, and core tests.
-- [✅] C: zero-build vanilla web dashboard refresh with session polling, pipeline status polling, SSE live log, and paused interview answer form.
-- [✅] L1: Stub/gap wiring pass completed for bundled Pi, MCP tools, worker controls, pipeline inject, existing repo import, session lifecycle, cost tracking, core `/ui`, and docs/coverage.
-- [✅] C: web-owned review fixes for interview answer schema, auth-aware proxying, SPEC status/session shapes, required tabs/graph, swarm hydration, tests, and stale asset neutralization.
-- [✅] M1: Root ops/docs-owned review findings fixed for launcher cleanup, TUI PID/log handling, Pi/CORS docs, systemd path safety, and ops test temp-file safety.
-- [✅] M2: Full codebase review findings fixed across core, TUI, web, and ops/docs with passing coordinator verification.
-- [✅] N1: Local/team hardening raised local/trusted-LAN readiness with executor docs, profiles, audit logging, operations docs, rotate-key/auth rate limits, and R-080 live provider-plus-Pi evidence.
-- [✅] O1: Review-response architecture fixes complete for web multi-answer interviews, CI matrix, pipeline stage extraction, and live smoke evidence.
-- [✅] P1: Smoke hardening fixes complete for parser correctness, Pi command handling, spawn test isolation, and stale status docs.
-- [✅] Q1: Production hardening fixes complete for provider cache invalidation coverage, plan task contract repair, OpenTUI default contract alignment, docs, and traceability artifacts.
-- [✅] R1: Full SPEC coverage evidence complete for Ubuntu install idempotency and live multi-agent swarm workload control.
-- [✅] S1: Steering injection, `devplan_tasks` sidecar, and urgent steering pause preemption completed with core regression coverage.
-- [✅] T1: Conflict resolution policy and auto-skip confidence gate completed with core regression coverage.
-- [✅] U1: TUI steering UI and `DevplanTask` JSON contract completed with TUI/core regression coverage.
-- [ ] Next: no active planned task group; await Kyle/Perplexity review.
+
+## Shared Foundations
+
+### T-001 `[SEQUENTIAL]` Add RoleCapabilityManifest Schema
+
+Description: Add a strict Pydantic `RoleCapabilityManifest` and role-to-capability defaults for `WorkerRole`.
+
+Files to create or modify: `core/nexussy/api/schemas.py`, `core/nexussy/swarm/roles.py`, `core/tests/test_role_capabilities.py`.
+
+Acceptance criteria: Model uses `ConfigDict(extra="forbid")`; every worker role has a manifest; only orchestrator has `spawn_subagent=true`; analyst is read-only; existing `ToolName` compatibility remains intact.
+
+Dependencies: None.
+
+Estimated complexity: medium.
+
+### T-002 `[SEQUENTIAL]` Add DesignStageConfig Context Pack Schema
+
+Description: Add `stages.design.context_pack` with additive defaults and allowed values `stripe`, `linear`, `minimal`, or no pack.
+
+Files to create or modify: `core/nexussy/api/schemas.py`, `core/nexussy/config.py`, `core/tests/test_design_packs.py`.
+
+Acceptance criteria: Existing installs keep current behavior by default; invalid configured pack names fail validation; request metadata convention is documented in tests as `metadata["design_context_pack"]`.
+
+Dependencies: T-001 because both touch `schemas.py`.
+
+Estimated complexity: medium.
+
+## Graphify Integration (Context RAG)
+
+### T-003 `[PARALLEL-GROUP-A]` Add Lightweight Project Graph Contract
+
+Description: Define a local project graph contract for interview context RAG with nodes, edges, communities, file hashes, cache metadata, and `found` versus `inferred` tags.
+
+Files to create or modify: `core/nexussy/swarm/project_graph.py`, `core/tests/test_project_graph.py`.
+
+Acceptance criteria: Graph is JSON-serializable with stdlib; cache metadata includes schema version, worktree root, generated timestamp, and file hashes; summary output is deterministic and bounded; no new dependencies are introduced.
+
+Dependencies: None.
+
+Estimated complexity: medium.
+
+### T-004 `[PARALLEL-GROUP-A]` Implement Graph Cache Build And Reuse
+
+Description: Build/load graph cache under `.nexussy/graph_cache/graph.json` and reprocess only changed files.
+
+Files to create or modify: `core/nexussy/swarm/project_graph.py`, `core/tests/test_project_graph.py`.
+
+Acceptance criteria: Hashes detect added/changed/deleted files; binary and oversized files are skipped; ignored paths include `.git`, `.nexussy/graph_cache`, venvs, dependency folders, build output, and caches; corrupt cache falls back to rebuild.
+
+Dependencies: T-003.
+
+Estimated complexity: medium.
+
+### T-005 `[PARALLEL-GROUP-A]` Add Compressed Graph Summary
+
+Description: Generate compressed project structure, important files, entry points, relationships, communities, and confidence tags.
+
+Files to create or modify: `core/nexussy/swarm/project_graph.py`, `core/tests/test_project_graph.py`.
+
+Acceptance criteria: Summary avoids full raw file lists; labels facts as `found` or `inferred`; prioritizes SPEC, AGENTS, README, package/config files, source roots, tests, and entry points; synthetic large-project test shows at least 50% prompt-character reduction.
+
+Dependencies: T-004.
+
+Estimated complexity: medium.
+
+### T-006 `[PARALLEL-GROUP-A]` Inject Graph Summary Into Interview Stage
+
+Description: Build or load graph summary before interview LLM calls and inject it into interview prompts.
+
+Files to create or modify: `core/nexussy/pipeline/stages/interview.py`, `core/tests/test_interview_graph_context.py`.
+
+Acceptance criteria: Interview prompts receive graph summary before question and auto-answer calls; build failures fall back to minimal context without raw large file dumps; tests verify injection, cache reuse, and prompt safety.
+
+Dependencies: T-005.
+
+Estimated complexity: high.
+
+## Design Stage Context Packs
+
+### T-007 `[PARALLEL-GROUP-A]` Add Built-In Design Pack Assets
+
+Description: Ship built-in `DESIGN.md`-style packs for Stripe, Linear, and Minimal.
+
+Files to create or modify: `core/nexussy/assets/design_packs/stripe.md`, `core/nexussy/assets/design_packs/linear.md`, `core/nexussy/assets/design_packs/minimal.md`.
+
+Acceptance criteria: Each pack covers visual theme, color palette, typography, components, layout, elevation, do/don'ts, responsive behavior, and agent prompt guide; descriptions match the requested Stripe, Linear, and Minimal design intent.
+
+Dependencies: None.
+
+Estimated complexity: low.
+
+### T-008 `[PARALLEL-GROUP-A]` Inject Selected Design Pack In Design Stage
+
+Description: Resolve `metadata["design_context_pack"]` before config `stages.design.context_pack` and inject selected markdown into the design prompt.
+
+Files to create or modify: `core/nexussy/pipeline/stages/design.py`, `core/tests/test_design_packs.py`.
+
+Acceptance criteria: No pack preserves current prompt behavior; metadata override wins over config; missing assets fail clearly; tests verify prompt injection and invalid pack handling.
+
+Dependencies: T-002, T-007.
+
+Estimated complexity: medium.
+
+### T-009 `[PARALLEL-GROUP-A]` Add TUI Design Pack Selection
+
+Description: Add TUI pipeline-start selection for `none`, `stripe`, `linear`, and `minimal`.
+
+Files to create or modify: `tui/src/**`, `tui/tests/**`.
+
+Acceptance criteria: Selected pack is sent as `metadata.design_context_pack`; no selection preserves existing start behavior; `cd tui && bun test` and `cd tui && bun run typecheck` pass.
+
+Dependencies: T-002.
+
+Estimated complexity: medium.
+
+### T-010 `[PARALLEL-GROUP-A]` Add Web Design Pack Selection
+
+Description: Add web dashboard pipeline-start selection for `none`, `stripe`, `linear`, and `minimal`.
+
+Files to create or modify: `web/nexussy_web/**`, `web/tests/**`.
+
+Acceptance criteria: Selected pack is sent as `metadata.design_context_pack`; no selection preserves existing start behavior; `python3 -m pytest -q web/tests` passes.
+
+Dependencies: T-002.
+
+Estimated complexity: medium.
+
+## OpenHarness Permission Governance
+
+### T-011 `[PARALLEL-GROUP-B]` Replace Ad Hoc Role Checks With Manifests
+
+Description: Map tools to manifest capabilities and add a non-throwing permission helper for runtime worker use while preserving `enforce_tool()` for existing callers.
+
+Files to create or modify: `core/nexussy/swarm/roles.py`, `core/tests/test_role_capabilities.py`.
+
+Acceptance criteria: read/list/search map to `read_files`; write/edit map to `write_files`; bash maps to `run_bash`; spawn/assign maps to `spawn_subagent`; orchestrator plan-artifact write restriction remains enforced.
+
+Dependencies: T-001.
+
+Estimated complexity: medium.
+
+### T-012 `[PARALLEL-GROUP-B]` Enforce Manifests In Local Pi Worker
+
+Description: Enforce active worker role permissions before any local tool touches filesystem, subprocess, or model-call behavior.
+
+Files to create or modify: `core/nexussy/swarm/local_pi_worker.py`, `core/tests/test_local_pi_worker.py`.
+
+Acceptance criteria: Role is derived from launch environment, not LLM arguments; denied read/write/bash/list/edit attempts do not execute; allowed worker behavior remains unchanged.
+
+Dependencies: T-011.
+
+Estimated complexity: medium.
+
+### T-013 `[PARALLEL-GROUP-B]` Emit Permission Denials As Failed Tool Output
+
+Description: Convert permission denials into structured `tool_output`-compatible payloads with `success=false` instead of uncaught exceptions or stderr-only events.
+
+Files to create or modify: `core/nexussy/swarm/local_pi_worker.py`, `core/nexussy/swarm/pi_rpc.py`, `core/tests/test_worker_permission_sse.py`.
+
+Acceptance criteria: Denials are fed back to the LLM as tool output; JSON-RPC run does not fail solely because a tool was denied; SSE emits `SSEEventType.tool_output` with a valid failed payload, worker id, and stage `develop`.
+
+Dependencies: T-012.
+
+Estimated complexity: medium.
+
+### T-014 `[PARALLEL-GROUP-B]` Harden Subagent Spawn Permission
+
+Description: Ensure only orchestrator role can initiate worker/subagent creation across runtime/API/MCP paths where role context exists.
+
+Files to create or modify: `core/nexussy/api/server.py`, `core/nexussy/mcp.py`, `core/nexussy/pipeline/stages/develop.py`, `core/nexussy/swarm/roles.py`, `core/tests/test_role_capabilities.py`.
+
+Acceptance criteria: Non-orchestrator spawn attempts are denied with forbidden responses or failed tool output as appropriate; orchestrator develop spawning still works; tests prove non-orchestrator roles cannot spawn.
+
+Dependencies: T-011.
+
+Estimated complexity: medium.
+
+## Cost Analytics Command
+
+### T-015 `[PARALLEL-GROUP-B]` Add Cost Analytics DB Read Helpers
+
+Description: Add read-only helpers using existing SQLite metadata from `runs.usage_json`, `events` cost updates, and `stage_runs` context.
+
+Files to create or modify: `core/nexussy/db.py`, `core/tests/test_cost_analytics.py`.
+
+Acceptance criteria: No schema migrations; single-run mode validates run existence; aggregate mode groups by run and stage; no usage events returns zero per-stage totals plus run-level total when present.
+
+Dependencies: None.
+
+Estimated complexity: medium.
+
+### T-016 `[PARALLEL-GROUP-B]` Add Core Cost CLI Module
+
+Description: Add `python3 -m nexussy.cli.costs [run_id] [--json] [--all]` for per-stage token and cost analytics.
+
+Files to create or modify: `core/nexussy/cli/costs.py`, `core/tests/test_cost_analytics.py`.
+
+Acceptance criteria: Rejects `[run_id]` with `--all`; reads DB path from existing config defaults; does not require API server; human output includes run, stage, token, cost, provider, and model columns; JSON output has deterministic `runs` and `totals` keys.
+
+Dependencies: T-015.
+
+Estimated complexity: medium.
+
+### T-017 `[SEQUENTIAL]` Wire Launcher Analyze-Costs Command
+
+Description: Add `./nexussy.sh analyze-costs [run_id] [--json] [--all]` forwarding to the core CLI module.
+
+Files to create or modify: `nexussy.sh`, `ops_tests.sh`.
+
+Acceptance criteria: Usage includes the new command; launcher sets `PYTHONPATH` to include `core`; arguments are forwarded safely; shell syntax and ops command-help tests pass.
+
+Dependencies: T-016; must be sequenced after core CLI implementation.
+
+Estimated complexity: low.
+
+## Verification Tasks
+
+### T-018 `[SEQUENTIAL]` Feature Branch Verification
+
+Description: Each execution subagent runs focused tests, `python3 -m ruff check` when available, and `python3 -m pytest core/tests/ -x -q` or area-specific suites before committing.
+
+Files to create or modify: none.
+
+Acceptance criteria: Subagents report exact commands and results; if `python` or `ruff` is unavailable, record that and use available `python3` commands without hiding the deviation.
+
+Dependencies: Feature tasks.
+
+Estimated complexity: low.
+
+### T-019 `[SEQUENTIAL]` Final Integration Verification
+
+Description: Run full verification, update `SPEC_COVERAGE.md` if new requirements are added, update `CHANGELOG.md`, and commit release summary.
+
+Files to create or modify: `SPEC_COVERAGE.md` if needed, `CHANGELOG.md`.
+
+Acceptance criteria: `python3 -m pytest core/tests/ -v`, `cd tui && bun test`, `python3 -m pytest web/tests/ -q`, and `bash -n install.sh nexussy.sh` pass; changelog summarizes all four features.
+
+Dependencies: All feature and milestone commits.
+
+Estimated complexity: medium.
+
 <!-- NEXT_TASK_GROUP_END -->
-
-## Definitions Of Done
-
-- Core: `python -m pytest -q core/tests` passes.
-- Core: `python -m nexussy.api.server` starts on `127.0.0.1:7771`.
-- Core: `/health` returns `ok=true`, `db_ok=true`, `contract_version="1.0"`.
-- Core: `/pipeline/start` with mock provider creates a run and returns `RunStartResponse`.
-- Core: run stream emits `run_started`, six ordered stage transitions, `checkpoint_saved`, and `done` as valid `EventEnvelope` JSON.
-- Core: SSE replay with `Last-Event-ID` returns missed events in order.
-- Core: validate correction and review gate limits follow the spec.
-- Core: file locks prevent simultaneous writes to the same file.
-- Core: git worktree lifecycle creates, commits, merges, extracts changed files, and prunes.
-- Core: fake Pi JSONL subprocess fixture passes.
-- Core: path sanitizer and log scrubber tests pass.
-- TUI: `bun test` and `bun run typecheck` pass.
-- TUI: three-panel mock rendering works without core.
-- TUI: client implements required API routes used by the UI.
-- TUI: SSE parser covers all Section 9 events, malformed rejection, and reconnect with `Last-Event-ID`.
-- TUI: slash commands hit exact Section 18.2 endpoints.
-- TUI: collapsible tool rows and agent roster updates pass tests.
-- Web: `python -m pytest -q web/tests` passes.
-- Web: `python -m nexussy_web.app` starts on `127.0.0.1:7772`.
-- Web: `/` returns one HTML document with all required tabs.
-- Web: no npm/build step required.
-- Web: `/api/health` and SSE routes proxy correctly and preserve SSE fields.
-- Web: DevPlan anchors are highlighted; config/secrets tabs use only API routes.
-- Installer: `bash -n install.sh nexussy.sh` passes.
-- Installer: `./install.sh --non-interactive` is idempotent and generates complete config/env when absent.
-- Installer: launcher `start`, `status`, `stop`, and `doctor` pass smoke checks.
-- Docs: `AGENTS.md` and `README.md` satisfy Section 21 and Section 25.
