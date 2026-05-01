@@ -7,6 +7,7 @@ from nexussy.api.schemas import ArtifactRef, InterviewArtifact, InterviewQuestio
 from nexussy.checkpoint import save_checkpoint
 from nexussy.pipeline.helpers import parse_auto_answers, parse_interview_questions
 from nexussy.session import SessionStatus, transition_session_status
+from nexussy.swarm.project_graph import graph_summary_for_worktree
 
 
 async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs) -> list[ArtifactRef]:
@@ -15,6 +16,7 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
     skip_interview = str(req.metadata.get("skip_interview", "")).lower() == "true"
     auto_mode = req.auto_approve_interview or skip_interview
     existing = await engine._latest_interview_artifact(rid) if req.resume_run_id else None
+    graph_context = graph_summary_for_worktree(root)
     if existing and existing.questions and not auto_mode:
         questions = existing.questions
         engine.interview_questions[sid] = questions
@@ -33,6 +35,7 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
         "Generate a JSON array of 4-8 plain-language interview questions for a non-technical project owner. "
         "Cover project name, primary languages, short description/requirements, project type, and optional frameworks, database, auth, deployment, and testing preferences. "
         "Return only JSON objects with id and question fields.\n\n"
+        f"{graph_context}\n"
         f"Project description: {req.description}"
     )
     questions = parse_interview_questions(await engine._provider_text(st, sid, rid, question_prompt, selected_models, allow_mock))
@@ -46,6 +49,7 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
         answer_prompt = (
             "Answer these interview questions as JSON using only the project description. "
             "Return a JSON object mapping each question id to a concise answer.\n\n"
+            f"{graph_context}\n"
             f"Project name: {req.project_name}\nProject description: {req.description}\nQuestions: {json.dumps([{'id': q.question_id, 'question': q.question} for q in questions])}"
         )
         answers = parse_auto_answers(await engine._provider_text(st, sid, rid, answer_prompt, selected_models, allow_mock), questions, req)
