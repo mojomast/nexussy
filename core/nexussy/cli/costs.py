@@ -78,14 +78,21 @@ async def _run(args: argparse.Namespace) -> int:
     try:
         data = await db.cost_analytics(args.run_id, all_runs=args.all)
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        message = str(exc)
+        if message == "no runs found":
+            print("[]" if args.json_output else "No runs found.")
+            return 0
+        if message.startswith("run not found: "):
+            print("Run not found: " + message.removeprefix("run not found: "), file=sys.stderr)
+            return 1
+        print(f"error: {message}", file=sys.stderr)
         return 2
     finally:
         db.close()
     if args.json_output:
-        print(json.dumps(data, sort_keys=True, separators=(",", ":")))
+        print("[]" if not data["runs"] else json.dumps(data, sort_keys=True, separators=(",", ":")))
     else:
-        print(_human(data))
+        print(_human(data) if data["runs"] else "No runs found.")
     return 0
 
 

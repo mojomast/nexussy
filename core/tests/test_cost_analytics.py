@@ -96,3 +96,27 @@ def test_cost_cli_json_and_argument_validation(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert json.loads(out)["runs"][0]["run_id"] == "run-1"
     assert costs.main(["run-1", "--all"]) == 2
+
+
+def test_cost_cli_empty_db_and_invalid_run_are_friendly(tmp_path, monkeypatch, capsys):
+    db_path = tmp_path / "empty.db"
+    db = Database(str(db_path))
+    import asyncio
+
+    asyncio.run(db.init())
+    db.close()
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(db_path))
+
+    assert costs.main([]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "No runs found."
+    assert captured.err == ""
+
+    assert costs.main(["--json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "[]"
+    assert captured.err == ""
+
+    assert costs.main(["abc-not-real"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "Run not found: abc-not-real"
