@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased] — phase-3-release
+
+### Added
+
+- Graphify-style interview RAG now builds and reuses a lightweight stdlib project graph cache, injects compressed found/inferred context into interview prompts, and keeps prompt payloads bounded.
+- Permission manifests now govern worker role capabilities across core, local Pi tools, SSE tool-output denials, and role-aware API/MCP spawn paths.
+- Design context packs add built-in Stripe, Linear, and Minimal guidance with per-run selection from core config, TUI `/new --design-pack`, and the web dashboard start form.
+- Cost analytics now aggregate existing run/stage usage and cost events through `python3 -m nexussy.cli.costs` and `./nexussy.sh analyze-costs`.
+
 ## [Unreleased] — feature-pass-3
 
 ### Pipeline Features

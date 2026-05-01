@@ -55,6 +55,7 @@ Graphify Integration T-003/T-004/T-005/T-006 complete: core now builds a stdlib 
 Design context packs T-007/T-008/T-009/T-010 complete: built-in Stripe/Linear/Minimal markdown assets are packaged in core, design prompts resolve `metadata.design_context_pack` before config and inject selected pack guidance, TUI supports `/new --design-pack <none|stripe|linear|minimal>`, and web dashboard start form sends selected pack metadata. Verification: `python3 -m pytest core/tests/ -x -q` passed (121), `cd tui && bun test` passed (71), `cd tui && bun run typecheck` passed, `python3 -m pytest web/tests/ -q` passed (52); `python3 -m ruff check` unavailable (`No module named ruff`).
 Permission governance T-011/T-012/T-013/T-014 complete: role tool access now checks `RoleCapabilityManifest`, bundled local Pi denies disallowed tools from `NEXUSSY_WORKER_ROLE` before filesystem/subprocess execution, permission denials become failed `tool_output` SSE payloads, and API/MCP spawn/assign deny non-orchestrator callers when role context is supplied. Verification: `python3 -m pytest core/tests/ -x -q` passed (134); `python3 -m ruff check` unavailable (`No module named ruff`).
 Cost analytics T-015/T-016/T-017 complete: DB read helpers aggregate existing `runs.usage_json`, `cost_update` events, and `stage_runs`; core CLI `python3 -m nexussy.cli.costs [run_id] [--json] [--all]` and launcher `./nexussy.sh analyze-costs` are wired with tests. Verification: `python3 -m pytest core/tests/ -x -q` (131 passed), `bash -n install.sh nexussy.sh`, `./ops_tests.sh`, and launcher smoke passed; `python3 -m ruff check` unavailable (`No module named ruff`).
+Final Phase 3 verification T-019 complete: `python3 -m pytest core/tests/ -v` passed (138), `cd tui && bun test` passed (71), `python3 -m pytest web/tests/ -q` passed (52), and `bash -n install.sh nexussy.sh` passed. `python3 -m ruff check` is unavailable because the `ruff` module is not installed. `SPEC_COVERAGE.md` was reviewed and did not need updates; `CHANGELOG.md` now summarizes graphify RAG, permission manifests, design packs, and cost analytics.
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
@@ -75,7 +76,11 @@ Cost analytics T-015/T-016/T-017 complete: DB read helpers aggregate existing `r
 ## Context: Implemented only cost analytics. No graph RAG, design-pack, or permission-governance work was added. `Database.cost_analytics()` is read-only and uses existing SQLite metadata only; no migrations. CLI reads the DB path via existing config/env defaults. Launcher forwarding sets `PYTHONPATH` to include `core` and forwards arguments safely. `python3 -m ruff check` is unavailable because the `ruff` module is not installed.
 ## Files Modified: `core/nexussy/db.py`, `core/nexussy/cli/__init__.py`, `core/nexussy/cli/costs.py`, `core/tests/test_cost_analytics.py`, `nexussy.sh`, `ops_tests.sh`, `devplan.md`, `phase001.md`, `handoff.md`
 
-## Next Task: T-018 verification after Parallel Group B is merged.
+## Completed: T-019 Final Integration Verification
+## Context: Phase 3 final verification is complete. Required checks passed: `python3 -m pytest core/tests/ -v` (138 passed), `cd tui && bun test` (71 passed), `python3 -m pytest web/tests/ -q` (52 passed), and `bash -n install.sh nexussy.sh`. `python3 -m ruff check` could not run because `ruff` is not installed. `SPEC_COVERAGE.md` was reviewed with no update needed; `CHANGELOG.md` has the release summary for graphify RAG, permission manifests, design packs, and cost analytics.
+## Files Modified: `CHANGELOG.md`, `devplan.md`, `phase001.md`, `handoff.md`
+
+## Next Task: None; Phase 3 release verification is complete.
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->
