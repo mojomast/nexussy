@@ -10,6 +10,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 - 2026-05-01: Shared foundations T-001/T-002 completed with role capability manifests and design context pack config schema/defaults.
 - 2026-05-01: Graphify Integration T-003 through T-006 completed with a stdlib project graph cache, compressed summary, and interview-stage prompt injection.
 - 2026-05-01: Design context packs T-007 through T-010 completed with built-in Stripe/Linear/Minimal assets, design-stage prompt injection, TUI `/new --design-pack` selection, and web dashboard start selection.
+- 2026-05-01: Cost analytics T-015 through T-017 completed with read-only SQLite aggregation, `python3 -m nexussy.cli.costs`, launcher `analyze-costs`, and ops coverage.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution
@@ -210,7 +211,7 @@ Estimated complexity: medium.
 
 ## Cost Analytics Command
 
-### T-015 `[PARALLEL-GROUP-B]` Add Cost Analytics DB Read Helpers
+### T-015 `[✅ PARALLEL-GROUP-B]` Add Cost Analytics DB Read Helpers
 
 Description: Add read-only helpers using existing SQLite metadata from `runs.usage_json`, `events` cost updates, and `stage_runs` context.
 
@@ -222,7 +223,7 @@ Dependencies: None.
 
 Estimated complexity: medium.
 
-### T-016 `[PARALLEL-GROUP-B]` Add Core Cost CLI Module
+### T-016 `[✅ PARALLEL-GROUP-B]` Add Core Cost CLI Module
 
 Description: Add `python3 -m nexussy.cli.costs [run_id] [--json] [--all]` for per-stage token and cost analytics.
 
@@ -234,7 +235,7 @@ Dependencies: T-015.
 
 Estimated complexity: medium.
 
-### T-017 `[SEQUENTIAL]` Wire Launcher Analyze-Costs Command
+### T-017 `[✅ SEQUENTIAL]` Wire Launcher Analyze-Costs Command
 
 Description: Add `./nexussy.sh analyze-costs [run_id] [--json] [--all]` forwarding to the core CLI module.
 

@@ -247,6 +247,16 @@ rotate_key() {
   printf 'New API key (shown once): %s\n' "$key"
 }
 
+analyze_costs() {
+  PYTHON=$(python_cmd) || { warn "Python 3.11+ not found"; return 1; }
+  old_pwd=$(pwd)
+  cd "$ROOT_DIR" || return 1
+  NEXUSSY_CONFIG="$NEXUSSY_CONFIG" NEXUSSY_ENV_FILE="$NEXUSSY_ENV_FILE" PYTHONPATH="$ROOT_DIR/core${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m nexussy.cli.costs "$@"
+  rc=$?
+  cd "$old_pwd" || return 1
+  return "$rc"
+}
+
 doctor() {
   rc=0
   printf 'nexussy doctor\n'
@@ -296,7 +306,7 @@ PY
 
 usage() {
   cat <<'USAGE'
-Usage: ./nexussy.sh start|start-tui|stop|status|logs [--no-follow] core|web|tui|--audit|update|rotate-key|doctor
+Usage: ./nexussy.sh start|start-tui|stop|status|logs [--no-follow] core|web|tui|--audit|update|rotate-key|analyze-costs [run_id] [--json] [--all]|doctor
 USAGE
 }
 
@@ -314,6 +324,7 @@ case "$cmd" in
   logs) shift; show_logs "$@" ;;
   update) update ;;
   rotate-key) rotate_key ;;
+  analyze-costs) shift; analyze_costs "$@" ;;
   doctor) doctor ;;
   -h|--help|help|'') usage ;;
   *) printf '%s\n' "Unknown command: $cmd" >&2; usage >&2; exit 2 ;;
