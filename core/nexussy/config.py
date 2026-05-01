@@ -9,6 +9,7 @@ ENV_MAP = {
  "NEXUSSY_AUTH_ENABLED": ("auth","enabled"), "NEXUSSY_DATABASE_PATH": ("database","global_path"), "NEXUSSY_DEFAULT_MODEL": ("providers","default_model"),
  "NEXUSSY_CORS_ALLOW_ORIGINS": ("core","cors_allow_origins"),
  "NEXUSSY_INTERVIEW_MODEL": ("stages","interview","model"), "NEXUSSY_DESIGN_MODEL": ("stages","design","model"),
+  "NEXUSSY_DESIGN_CONTEXT_PACK": ("stages","design","context_pack"),
  "NEXUSSY_VALIDATE_MODEL": ("stages","validate","model"), "NEXUSSY_PLAN_MODEL": ("stages","plan","model"),
   "NEXUSSY_REVIEW_MODEL": ("stages","review","model"), "NEXUSSY_DEVELOP_MODEL": ("stages","develop","model"),
   "NEXUSSY_ORCHESTRATOR_MODEL": ("stages","develop","orchestrator_model"), "NEXUSSY_PI_COMMAND": ("pi","command"), "NEXUSSY_LOG_LEVEL": ("logging","level"),

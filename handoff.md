@@ -50,58 +50,15 @@ Feature pass 3 complete: task slicing (`_slice_devplan_tasks` + per-worker `json
 Steering injection sidecar pass complete: plan/develop now consume orchestrator steering into prompts/task specs, mark `steer_events.consumed_at`, write/read `devplan_tasks` JSON sidecar, and `priority="urgent"` unblocks paused waits. Full verification: `python3 -m pytest -q core/tests` (100 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
 Conflict policy and autoskip confidence pass complete: `swarm.conflict_strategy` now supports `ours`, `diff3`, and `abort`; `conflict_report` includes `needs_review` and `conflicts_detail`; auto-skip interview answers use `stages.interview.min_description_words` for `confidence` tagging, and low-confidence answers prepend conservative design guidance. Full verification: `python3 -m pytest -q core/tests` (104 passed), `cd tui && bun test` (67 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed). Steering `consumed_at` verified by `test_steer_orchestrator` and `test_steer_context_injected_into_plan`.
 TUI steering and devplan contract pass complete: TUI `/steer` supports orchestrator messages, `@worker-id` targeting, DB-backed `/steer list`, and `/steer clear`; core now exposes `nexussy_steer_status` and validates/repairs strict `DevplanTask[]` sidecars with markdown fallback. Full verification: `python3 -m pytest -q core/tests` (107 passed), `cd tui && bun test` (70 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
+Shared foundations T-001/T-002 complete: core now has strict role capability manifests for every `WorkerRole` plus `DesignStageConfig.context_pack` defaults/validation for `stripe`, `linear`, `minimal`, or no pack. `python3 -m pytest core/tests/ -x -q` passes (116 passed); `python3 -m ruff check` is unavailable because the `ruff` module is not installed.
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
-## HANDOFF — TUI steering UI and DevplanTask contract
-
-### What was implemented
-
-Task 1 files changed:
-
-- `tui/src/ui/Composer.ts`: added `/steer`, `/steer @<worker-id>`, `/steer list`, and `/steer clear` command handling with worker existence checks and confirmation messages.
-- `tui/src/ui/types.ts`: added optional `mcpCall` to the TUI client interface.
-- `tui/src/client.ts`: added `mcpCall()` for `/mcp/call`.
-- `tui/src/ui/Overlay.ts` and `tui/src/ui/CommandPalette.ts`: added steering commands to help/palette listings.
-- `tui/tests/steer.test.ts` and `tui/tests/client.test.ts`: covered orchestrator steering, worker steering, list/clear behavior, and the real `/mcp/call` request shape.
-- `core/nexussy/mcp.py`: added `nexussy_steer_status` so `/steer list` reads real DB `steer_events`; `CLEAR_CONTEXT` clears in-memory steering context/queue and marks unconsumed DB rows consumed.
-
-Task 2 files changed:
-
-- `core/nexussy/api/schemas.py`: added `DevplanTask` and `PlanStageConfig.devplan_task_validation`.
-- `core/nexussy/config.py`: added `NEXUSSY_PLAN_DEVPLAN_TASK_VALIDATION` mapping.
-- `core/nexussy/pipeline/stages/plan.py`: prompts for `devplan_tasks.json`, extracts/validates/repairs `DevplanTask[]`, and saves strict JSON.
-- `core/nexussy/pipeline/stages/develop.py`: validates sidecar JSON as `DevplanTask[]` first and falls back to markdown mapping.
-- `core/tests/test_devplan_contract.py` and `core/tests/test_core_contract.py`: covered strict, repair, markdown fallback, and updated existing sidecar/slicer expectations.
-- Status/docs changed: `AGENTS.md`, `CHANGELOG.md`, `devplan.md`, `phase001.md`, and `handoff.md`.
-
-### Final test counts
-
-| Suite | Command | Result |
-|---|---|---|
-| Core | `python3 -m pytest -q core/tests` | **107 passed** |
-| TUI | `cd tui && bun test` | **70 passed** |
-| TUI | `cd tui && bun run typecheck` | **clean** |
-| Web | `python3 -m pytest -q web/tests` | **52 passed** |
-
-### Steering List Verification
-
-- `/steer list` calls `nexussy_steer_status` through `/mcp/call` and renders `queue_length` plus the 3 most recent rows from the SQLite `steer_events` table.
-- Verified by `core/tests/test_core_contract.py::test_steer_orchestrator`, which inserts real steering through `_steer()` and reads it back through `_steer_status()`, and by `tui/tests/steer.test.ts`, which asserts the TUI renders the returned recent DB events.
-
-### Deviations
-
-- `python -m pytest ...` could not run because `python` is unavailable in this environment; all Python suites were run with `python3`.
-- The requested file name `tui/src/core-client.ts` does not exist; the live client is `tui/src/client.ts`, so `mcpCall()` was added there.
-- `/steer clear` records a `CLEAR_CONTEXT` steering event through `nexussy_steer`, clears the in-memory queue/context, and marks unconsumed orchestrator rows consumed instead of leaving `CLEAR_CONTEXT` queued for a later stage.
-- `DevplanTask.acceptance_criteria` is a strict string in the JSON contract; markdown fallback joins legacy bullet-list criteria with `; `.
-
-### Kyle / Perplexity Review
-
-- Ask whether `nexussy_steer_status` should be promoted from MCP-only to a public REST endpoint for web/TUI consistency.
-- Ask whether `/steer clear` should emit an SSE event so users can see context clearing in live logs.
-- Ask whether `DevplanTask.acceptance_criteria` should remain a string or become a structured list in a future contract revision.
-- Ask whether `owner` should be constrained to subagent IDs/roles instead of free text.
+# Handoff
+## Completed: T-001 RoleCapabilityManifest schema and T-002 DesignStageConfig context_pack schema
+## Next Task: T-003 `[PARALLEL-GROUP-A]` Add Lightweight Project Graph Contract
+## Context: Added only shared foundations. `RoleCapabilityManifest` is strict (`extra="forbid"`) with read/write/bash/spawn booleans and default manifests in `core/nexussy/swarm/roles.py`; existing `ToolName`/`enforce_tool()` behavior is preserved for T-011. `DesignStageConfig.context_pack` defaults to `None` and accepts only `stripe`, `linear`, or `minimal`; request metadata convention is documented in tests as `metadata["design_context_pack"]`. No graph RAG, design asset injection, UI, local worker enforcement, or cost analytics was implemented. `python3 -m ruff check` could not run because `ruff` is not installed; `python3 -m pytest core/tests/ -x -q` passes (116 passed).
+## Files Modified: `core/nexussy/api/schemas.py`, `core/nexussy/swarm/roles.py`, `core/nexussy/config.py`, `core/tests/test_role_capabilities.py`, `core/tests/test_design_packs.py`, `devplan.md`, `handoff.md`
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->

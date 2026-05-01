@@ -7,6 +7,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 <!-- PROGRESS_LOG_START -->
 - 2026-05-01: Phase 0 orientation completed by reading required local architecture files and external READMEs for graphify, OpenHarness, and awesome-design-md.
 - 2026-05-01: Phase 1 planning completed with four sequential planning subagents and merged into this implementation devplan.
+- 2026-05-01: Shared foundations T-001/T-002 completed with role capability manifests and design context pack config schema/defaults.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution
@@ -31,7 +32,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 
 ## Shared Foundations
 
-### T-001 `[SEQUENTIAL]` Add RoleCapabilityManifest Schema
+### T-001 `[✅ SEQUENTIAL]` Add RoleCapabilityManifest Schema
 
 Description: Add a strict Pydantic `RoleCapabilityManifest` and role-to-capability defaults for `WorkerRole`.
 
@@ -43,7 +44,7 @@ Dependencies: None.
 
 Estimated complexity: medium.
 
-### T-002 `[SEQUENTIAL]` Add DesignStageConfig Context Pack Schema
+### T-002 `[✅ SEQUENTIAL]` Add DesignStageConfig Context Pack Schema
 
 Description: Add `stages.design.context_pack` with additive defaults and allowed values `stripe`, `linear`, `minimal`, or no pack.
 
