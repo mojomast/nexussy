@@ -27,6 +27,7 @@ from nexussy.api.schemas import (
 from nexussy.checkpoint import save_checkpoint
 from nexussy.swarm.gitops import commit_worker, create_worktree, extract_changed_files, init_repo, merge_no_ff, prune_worktrees, remove_worktree
 from nexussy.swarm.pi_rpc import spawn_pi_worker
+from nexussy.swarm.roles import check_tool_permission
 
 
 @dataclass
@@ -188,6 +189,9 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
 
 
 async def spawn_workers(engine, req, detail, rid, root, selected_models, spawn_fn=spawn_pi_worker):
+    allowed, reason = check_tool_permission(WorkerRole.orchestrator, "spawn_worker")
+    if not allowed:
+        raise PermissionError(reason or "forbidden")
     sid = detail.session.session_id
     main = pathlib.Path(root)
     workers_root = main.parent / "workers"
@@ -303,7 +307,8 @@ async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _de
             raise
     finally:
         for frame in rpc.frames:
-            await engine.emit(SSEEventType.worker_stream, sid, rid, frame.payload)
+            event_type = SSEEventType.tool_output if frame.kind == "tool_output" else SSEEventType.worker_stream
+            await engine.emit(event_type, sid, rid, frame.payload)
         await rpc.stop(engine.config.pi.shutdown_timeout_s)
         if rpc in engine.active_worker_rpcs.get(rid, []):
             engine.active_worker_rpcs[rid].remove(rpc)

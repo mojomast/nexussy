@@ -22,7 +22,7 @@ from nexussy.api.schemas import (
     PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary,
     SSEEventType, SessionCreateRequest, SessionDetail, StageName,
     StageRunStatus, StageSkipRequest, StageStatusSchema, TokenUsage, Worker,
-    WorkerAssignRequest, WorkerInjectRequest, WorkerSpawnRequest, WorkerStatus,
+    WorkerAssignRequest, WorkerInjectRequest, WorkerRole, WorkerSpawnRequest, WorkerStatus,
     WorkerStreamPayload, WorkerTaskPayload, WorkerTaskStatus,
 )
 from nexussy.config import load_config
@@ -33,6 +33,7 @@ from nexussy.pipeline.engine import ProviderStartError
 from nexussy.providers import active_rate_limit, complete, configured_providers, delete_secret, model_available, persist_rate_limit, provider_error_for_model, provider_for_model, read_env_file, secret_names, secret_summary, set_secret
 from nexussy.security import sanitize_path
 from nexussy.session import now_utc
+from nexussy.swarm.roles import check_tool_permission
 
 logger = logging.getLogger(__name__)
 config=None; db=None; engine=None
@@ -491,6 +492,15 @@ async def worker_get(request):
     return await endpoint(request, inner)
 async def spawn(request):
     async def inner(r):
+        requester_role = r.headers.get("X-Nexussy-Worker-Role") or r.headers.get("X-Worker-Role")
+        if requester_role:
+            try:
+                role = WorkerRole(requester_role)
+            except ValueError:
+                return err(ErrorCode.forbidden,"forbidden",403)
+            allowed, reason = check_tool_permission(role, "spawn_worker")
+            if not allowed:
+                return err(ErrorCode.forbidden,reason or "forbidden",403)
         req=await body(r,WorkerSpawnRequest)
         if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (req.run_id,)):
             raise KeyError("run")
@@ -505,6 +515,15 @@ async def spawn(request):
     return await endpoint(request, inner)
 async def assign(request):
     async def inner(r):
+        requester_role = r.headers.get("X-Nexussy-Worker-Role") or r.headers.get("X-Worker-Role")
+        if requester_role:
+            try:
+                role = WorkerRole(requester_role)
+            except ValueError:
+                return err(ErrorCode.forbidden,"forbidden",403)
+            allowed, reason = check_tool_permission(role, "assign_task")
+            if not allowed:
+                return err(ErrorCode.forbidden,reason or "forbidden",403)
         req=await body(r,WorkerAssignRequest); rows=await db.read("SELECT worker_json FROM workers WHERE worker_id=? AND run_id=?",(req.worker_id,req.run_id));
         if not rows: return err(ErrorCode.worker_not_found,"worker not found",404)
         w=Worker.model_validate_json(rows[0]["worker_json"]); w.task_id=req.task_id or f"task-{uuid4().hex[:8]}"; w.task_title=req.task; w.status=WorkerStatus.assigned

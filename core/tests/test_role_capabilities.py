@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from nexussy.api.schemas import RoleCapabilityManifest, ToolName, WorkerRole
-from nexussy.swarm.roles import ROLE_CAPABILITY_MANIFESTS, enforce_tool, role_capability_manifest
+from nexussy.swarm.roles import ROLE_CAPABILITY_MANIFESTS, check_tool_permission, enforce_tool, role_capability_manifest
 
 
 def test_every_worker_role_has_capability_manifest():
@@ -38,3 +38,23 @@ def test_existing_toolname_enforcement_compatibility_remains():
     with pytest.raises(PermissionError):
         enforce_tool(WorkerRole.analyst, ToolName.write_file)
     assert enforce_tool(WorkerRole.orchestrator, ToolName.write_file, "devplan.md")
+
+
+def test_manifest_backed_runtime_permission_mapping():
+    assert check_tool_permission(WorkerRole.analyst, ToolName.read_file)[0] is True
+    assert check_tool_permission(WorkerRole.analyst, "list_dir")[0] is True
+    assert check_tool_permission(WorkerRole.analyst, ToolName.search_code)[0] is True
+    assert check_tool_permission(WorkerRole.analyst, ToolName.write_file)[0] is False
+    assert check_tool_permission(WorkerRole.analyst, ToolName.edit_file)[0] is False
+    assert check_tool_permission(WorkerRole.analyst, ToolName.bash)[0] is False
+    assert check_tool_permission(WorkerRole.backend, ToolName.bash)[0] is True
+    assert check_tool_permission(WorkerRole.backend, ToolName.spawn_worker)[0] is False
+    assert check_tool_permission(WorkerRole.backend, ToolName.assign_task)[0] is False
+    assert check_tool_permission(WorkerRole.backend, ToolName.get_swarm_state)[0] is False
+    assert check_tool_permission(WorkerRole.orchestrator, ToolName.spawn_worker)[0] is True
+
+
+def test_orchestrator_plan_artifact_write_restriction_still_applies():
+    assert check_tool_permission(WorkerRole.orchestrator, ToolName.write_file, "devplan.md")[0] is True
+    assert check_tool_permission(WorkerRole.orchestrator, ToolName.write_file, "phase/01/notes.md")[0] is True
+    assert check_tool_permission(WorkerRole.orchestrator, ToolName.write_file, "src/app.py")[0] is False

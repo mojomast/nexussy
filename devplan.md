@@ -10,6 +10,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 - 2026-05-01: Shared foundations T-001/T-002 completed with role capability manifests and design context pack config schema/defaults.
 - 2026-05-01: Graphify Integration T-003 through T-006 completed with a stdlib project graph cache, compressed summary, and interview-stage prompt injection.
 - 2026-05-01: Design context packs T-007 through T-010 completed with built-in Stripe/Linear/Minimal assets, design-stage prompt injection, TUI `/new --design-pack` selection, and web dashboard start selection.
+- 2026-05-01: Permission governance T-011 through T-014 completed with manifest-backed runtime checks, local Pi worker denial enforcement, failed tool_output/SSE mapping, and orchestrator-only spawn/assign hardening where role context exists.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution
@@ -160,7 +161,7 @@ Estimated complexity: medium.
 
 ## OpenHarness Permission Governance
 
-### T-011 `[PARALLEL-GROUP-B]` Replace Ad Hoc Role Checks With Manifests
+### T-011 `[✅ PARALLEL-GROUP-B]` Replace Ad Hoc Role Checks With Manifests
 
 Description: Map tools to manifest capabilities and add a non-throwing permission helper for runtime worker use while preserving `enforce_tool()` for existing callers.
 
@@ -172,7 +173,7 @@ Dependencies: T-001.
 
 Estimated complexity: medium.
 
-### T-012 `[PARALLEL-GROUP-B]` Enforce Manifests In Local Pi Worker
+### T-012 `[✅ PARALLEL-GROUP-B]` Enforce Manifests In Local Pi Worker
 
 Description: Enforce active worker role permissions before any local tool touches filesystem, subprocess, or model-call behavior.
 
@@ -184,7 +185,7 @@ Dependencies: T-011.
 
 Estimated complexity: medium.
 
-### T-013 `[PARALLEL-GROUP-B]` Emit Permission Denials As Failed Tool Output
+### T-013 `[✅ PARALLEL-GROUP-B]` Emit Permission Denials As Failed Tool Output
 
 Description: Convert permission denials into structured `tool_output`-compatible payloads with `success=false` instead of uncaught exceptions or stderr-only events.
 
@@ -196,7 +197,7 @@ Dependencies: T-012.
 
 Estimated complexity: medium.
 
-### T-014 `[PARALLEL-GROUP-B]` Harden Subagent Spawn Permission
+### T-014 `[✅ PARALLEL-GROUP-B]` Harden Subagent Spawn Permission
 
 Description: Ensure only orchestrator role can initiate worker/subagent creation across runtime/API/MCP paths where role context exists.
 
