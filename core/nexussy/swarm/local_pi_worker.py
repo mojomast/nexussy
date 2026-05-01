@@ -8,7 +8,9 @@ import re
 import sys
 from typing import Any
 
+from nexussy.api.schemas import StageName, ToolOutputPayload, WorkerRole
 from nexussy.security import sanitize_relative_path, scrub_log
+from nexussy.swarm.roles import check_tool_permission
 
 
 # Security model for the bundled local worker:
@@ -43,6 +45,22 @@ def _root() -> pathlib.Path:
     return pathlib.Path(os.environ.get("NEXUSSY_WORKTREE", ".")).resolve(strict=False)
 
 
+def _active_role() -> WorkerRole:
+    raw = os.environ.get("NEXUSSY_WORKER_ROLE", WorkerRole.backend.value)
+    try:
+        return WorkerRole(raw)
+    except ValueError:
+        return WorkerRole.backend
+
+
+def _permission_denial(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    path = str(arguments.get("path") or "") if isinstance(arguments, dict) else None
+    allowed, reason = check_tool_permission(_active_role(), name, path)
+    if allowed:
+        return None
+    return {"success": False, "error": reason or "forbidden", "code": "permission_denied", "tool_name": name}
+
+
 def _safe_path(path: str) -> pathlib.Path:
     rel = sanitize_relative_path(path)
     root = _root()
@@ -55,6 +73,9 @@ def _safe_path(path: str) -> pathlib.Path:
 async def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name not in TOOL_NAMES:
         raise ValueError("unknown_tool")
+    denied = _permission_denial(name, arguments)
+    if denied is not None:
+        return denied
     if name == "read_file":
         path = _safe_path(str(arguments.get("path") or ""))
         max_bytes = int(arguments.get("max_bytes") or 131_072)
@@ -204,16 +225,21 @@ async def _run_agent(task: str, context: str) -> dict[str, Any]:
         messages.append(assistant)
         for call in assistant["tool_calls"]:
             name = call["function"]["name"]
+            call_id = call.get("id") or name
             args = json.loads(call["function"].get("arguments") or "{}")
-            _event("tool_call", {"name": name, "arguments": args})
+            _event("tool_call", {"call_id": call_id, "name": name, "arguments": args})
             try:
                 result = await run_tool(name, args)
-                _event("tool_result", {"name": name, "result": result})
+                if isinstance(result, dict) and result.get("code") == "permission_denied":
+                    output = ToolOutputPayload(call_id=call_id, stage=StageName.develop, success=False, error=str(result.get("error") or "forbidden"), worker_id=os.environ.get("NEXUSSY_WORKER_ID"))
+                    _event("tool_output", output.model_dump(mode="json"))
+                else:
+                    _event("tool_result", {"name": name, "result": result})
             except Exception as exc:
                 result = {"error": str(exc)}
                 _event("stderr", {"line": scrub_log(str(exc))})
                 _event("tool_result", {"name": name, "result": result})
-            messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "content": json.dumps(result)})
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": json.dumps(result)})
     return {"status": "error", "summary": "max agent turns exceeded"}
 
 

@@ -4,7 +4,7 @@ import asyncio, json, os, pathlib, shlex, signal, sys
 from collections import deque
 from dataclasses import dataclass, field
 
-from nexussy.api.schemas import WorkerStreamPayload
+from nexussy.api.schemas import ToolOutputPayload, WorkerStreamPayload
 from nexussy.security import scrub_log
 
 MAX_FRAMES = 10_000
@@ -150,6 +150,13 @@ async def _drain(rpc: PiRPCProcess, stream, kind: str, worker_id: str, max_bytes
                 if isinstance(obj, dict) and obj.get("id"):
                     rpc.responses[str(obj["id"])] = obj
                     rpc._response_event.set(); rpc._response_event.clear()
+                if isinstance(obj, dict) and obj.get("method") == "agent.event":
+                    params = obj.get("params") or {}
+                    if isinstance(params, dict) and params.get("type") == "tool_output" and isinstance(params.get("payload"), dict):
+                        try:
+                            rpc.frames.append(PiFrame("tool_output", ToolOutputPayload.model_validate(params["payload"])))
+                        except Exception:
+                            pass
             except json.JSONDecodeError:
                 pass
         rpc.frames.append(PiFrame(kind, WorkerStreamPayload(worker_id=worker_id, stream_kind="rpc" if parsed else kind, line=json.dumps(payload) if parsed else text, parsed=parsed, truncated=truncated)))

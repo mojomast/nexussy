@@ -35,6 +35,32 @@ async def test_bash_empty_command_raises():
 
 
 @pytest.mark.asyncio
+async def test_local_pi_worker_denies_by_launch_role_before_execution(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUSSY_WORKTREE", str(tmp_path))
+    monkeypatch.setenv("NEXUSSY_WORKER_ROLE", "analyst")
+
+    denied_write = await run_tool("write_file", {"path": "blocked.txt", "content": "nope"})
+    denied_bash = await run_tool("bash", {"command": "touch should-not-exist"})
+
+    assert denied_write["success"] is False
+    assert denied_write["code"] == "permission_denied"
+    assert denied_bash["success"] is False
+    assert not (tmp_path / "blocked.txt").exists()
+    assert not (tmp_path / "should-not-exist").exists()
+
+
+@pytest.mark.asyncio
+async def test_local_pi_worker_does_not_trust_llm_role_argument(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUSSY_WORKTREE", str(tmp_path))
+    monkeypatch.setenv("NEXUSSY_WORKER_ROLE", "analyst")
+
+    denied = await run_tool("write_file", {"path": "blocked.txt", "content": "nope", "role": "orchestrator"})
+
+    assert denied["success"] is False
+    assert not (tmp_path / "blocked.txt").exists()
+
+
+@pytest.mark.asyncio
 async def test_bash_null_byte_raises():
     with pytest.raises(ValueError):
         await run_tool("bash", {"command": "echo\x00hello"})

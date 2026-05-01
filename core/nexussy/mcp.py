@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from nexussy.api.schemas import ArtifactManifestResponse, ArtifactRef, Blocker, ControlResponse, ErrorCode, ErrorResponse, InterviewAnswerRequest, PausePayload, PipelineInjectRequest, PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary, SSEEventType, SessionDetail, StageStatusSchema, SteerRequest, Worker, WorkerAssignRequest, WorkerSpawnRequest, WorkerStatus, WorkerStreamPayload, WorkerTaskPayload, WorkerTaskStatus
 from nexussy.session import now_utc
+from nexussy.api.schemas import WorkerRole
+from nexussy.swarm.roles import check_tool_permission
 
 ToolHandler = Callable[..., Awaitable[Any]]
 TOOLS: list[dict[str, Any]] = []
@@ -122,7 +124,17 @@ async def _inject(arguments: dict[str, Any], *, engine=None, db=None):
 
 
 async def _worker_spawn(arguments: dict[str, Any], *, engine, db):
-    req = WorkerSpawnRequest.model_validate(arguments)
+    raw = dict(arguments)
+    requester_role = raw.pop("requester_role", None)
+    if requester_role is not None:
+        try:
+            role = WorkerRole(requester_role)
+        except ValueError as exc:
+            raise PermissionError("forbidden") from exc
+        allowed, reason = check_tool_permission(role, "spawn_worker")
+        if not allowed:
+            raise PermissionError(reason or "forbidden")
+    req = WorkerSpawnRequest.model_validate(raw)
     run_rows = await db.read("SELECT session_id FROM runs WHERE run_id=?", (req.run_id,))
     if not run_rows:
         raise KeyError("run")
@@ -139,7 +151,17 @@ async def _worker_spawn(arguments: dict[str, Any], *, engine, db):
 
 
 async def _worker_assign(arguments: dict[str, Any], *, engine, db):
-    req = WorkerAssignRequest.model_validate(arguments)
+    raw = dict(arguments)
+    requester_role = raw.pop("requester_role", None)
+    if requester_role is not None:
+        try:
+            role = WorkerRole(requester_role)
+        except ValueError as exc:
+            raise PermissionError("forbidden") from exc
+        allowed, reason = check_tool_permission(role, "assign_task")
+        if not allowed:
+            raise PermissionError(reason or "forbidden")
+    req = WorkerAssignRequest.model_validate(raw)
     rows = await db.read("SELECT worker_json FROM workers WHERE worker_id=? AND run_id=?", (req.worker_id, req.run_id))
     if not rows:
         raise KeyError("worker")
@@ -287,8 +309,8 @@ register("nexussy_get_artifacts", "Get artifact manifest for a run", {"type": "o
 register("nexussy_list_sessions", "List recent nexussy sessions", {"type": "object", "properties": {"limit": {"type": "integer"}, "offset": {"type": "integer"}}}, _list_sessions)
 register("nexussy_interview_answer", "Submit interview answers for a session", {"type": "object", "required": ["session_id", "answers"], "properties": {"session_id": {"type": "string"}, "answers": {"type": "object"}}}, _interview_answer)
 register("nexussy_inject", "Inject guidance into a running pipeline", {"type": "object", "required": ["run_id", "message"], "properties": {"run_id": {"type": "string"}, "message": {"type": "string"}, "worker_id": {"type": "string"}, "stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]}}}, _inject)
-register("nexussy_worker_spawn", "Spawn a worker in the swarm", {"type": "object", "required": ["run_id", "role", "task"], "properties": {"run_id": {"type": "string"}, "role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "model": {"type": "string"}}}, _worker_spawn)
-register("nexussy_worker_assign", "Assign a task to an existing worker", {"type": "object", "required": ["run_id", "worker_id", "task"], "properties": {"run_id": {"type": "string"}, "worker_id": {"type": "string"}, "task_id": {"type": "string"}, "task": {"type": "string"}, "phase_number": {"type": "integer"}}}, _worker_assign)
+register("nexussy_worker_spawn", "Spawn a worker in the swarm", {"type": "object", "required": ["run_id", "role", "task"], "properties": {"run_id": {"type": "string"}, "role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "model": {"type": "string"}, "requester_role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}}}, _worker_spawn)
+register("nexussy_worker_assign", "Assign a task to an existing worker", {"type": "object", "required": ["run_id", "worker_id", "task"], "properties": {"run_id": {"type": "string"}, "worker_id": {"type": "string"}, "task_id": {"type": "string"}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "requester_role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}}}, _worker_assign)
 register("nexussy_list_workers", "List workers for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _list_workers)
 register("nexussy_steer", "Steer a running pipeline orchestrator or a specific worker", {"type": "object", "required": ["target", "run_id", "message"], "properties": {"target": {"type": "string", "enum": ["orchestrator", "worker"]}, "run_id": {"type": "string"}, "worker_id": {"type": "string"}, "message": {"type": "string"}, "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]}}}, _steer)
 register("nexussy_steer_status", "List queued and recent steering events for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _steer_status)
