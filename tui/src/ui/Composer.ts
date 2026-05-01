@@ -1,4 +1,4 @@
-import { projectNameFromDescription } from "../index";
+import { parseNewCommand, projectNameFromDescription } from "../index";
 import { renderPanels } from "../renderer";
 import { reduceArtifactsSnapshot, reduceSecrets, reduceStatusSnapshot, reduceWorkersSnapshot, triggerHandoff } from "../state";
 import { WORKER_ID_PATTERN } from "../commands";
@@ -48,7 +48,10 @@ export function createChatUiState(appFactory:()=>ChatUiState["app"]): ChatUiStat
 export async function startNewRun(client:ClientLike, state:ChatUiState, description:string): Promise<[ChatUiState, CommandOutcome]> {
   const trimmed = description.trim();
   if (!trimmed) throw new Error("description required");
-  const started = await client.startPipeline({ project_name:projectNameFromDescription(trimmed), description:trimmed, auto_approve_interview:true });
+  const parsed = parseNewCommand(trimmed);
+  if (!parsed.description) throw new Error("description required");
+  const metadata = parsed.designContextPack && parsed.designContextPack !== "none" ? { design_context_pack:parsed.designContextPack } : undefined;
+  const started = await client.startPipeline({ project_name:projectNameFromDescription(parsed.description), description:parsed.description, auto_approve_interview:true, ...(metadata ? { metadata } : {}) });
   return [{ ...state, pendingAction:undefined, app:{ ...state.app, runId:started.run_id, sessionId:started.session_id, finalStatus:undefined }, statusMessage:`started ${started.run_id.slice(0,8)}` }, { message:`started run ${started.run_id}`, stream:true }];
 }
 

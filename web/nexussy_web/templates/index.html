@@ -23,6 +23,19 @@
 
     <section id="pipeline" class="panel pipeline-panel tab">
       <div class="panel-title"><h2>Pipeline</h2><span id="pipeline-summary" class="badge">no run selected</span></div>
+      <form id="pipeline-start-form" class="pipeline-start">
+        <h3>Start pipeline</h3>
+        <input id="start-project-name" placeholder="project name">
+        <textarea id="start-description" rows="3" placeholder="Describe what nexussy should build"></textarea>
+        <label for="design-context-pack">Design pack</label>
+        <select id="design-context-pack">
+          <option value="none">none</option>
+          <option value="stripe">stripe</option>
+          <option value="linear">linear</option>
+          <option value="minimal">minimal</option>
+        </select>
+        <button type="submit">Start</button>
+      </form>
       <div id="stages" class="grid"></div>
       <h3>Transitions</h3><div id="transitions" class="list compact"></div>
       <form id="interview-form" class="interview hidden">

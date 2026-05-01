@@ -20,6 +20,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["nexussy*"]
 
+[tool.setuptools.package-data]
+nexussy = ["assets/design_packs/*.md"]
+
 [project.scripts]
 nexussy-pi = "nexussy.swarm.pi_shim:main"
 

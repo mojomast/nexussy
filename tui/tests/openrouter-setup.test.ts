@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyOpenRouterModel, ensureCoreForSetup, normalizeOpenRouterModel, projectNameFromDescription, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
+import { applyOpenRouterModel, ensureCoreForSetup, normalizeOpenRouterModel, parseNewCommand, projectNameFromDescription, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
 
 class Output { text=""; write(s:string){ this.text += s; return true; } }
 
@@ -99,6 +99,17 @@ test("explicit new helper can start a pipeline run", async () => {
   const started = await startPipelineFromText(client, "build a tiny api with tests please");
   expect(started).toEqual({ runId:"run-1", sessionId:"sess-1" });
   expect(calls[0]).toEqual({ project_name:"build a tiny api with tests", description:"build a tiny api with tests please", auto_approve_interview:true });
+});
+
+test("pipeline start design pack selection is sent only when selected", async () => {
+  const calls:any[] = [];
+  const client = { startPipeline(body:any){ calls.push(body); return { run_id:"run-1", session_id:"sess-1", status:"running", stream_url:"/s", status_url:"/p" }; } } as any;
+  expect(parseNewCommand("--design-pack stripe build a polished checkout")).toEqual({ description:"build a polished checkout", designContextPack:"stripe" });
+  await startPipelineFromText(client, "build a polished checkout", "stripe");
+  await startPipelineFromText(client, "build a plain docs site", "none");
+  expect(calls[0].metadata).toEqual({ design_context_pack:"stripe" });
+  expect(calls[1].metadata).toBeUndefined();
+  expect(() => parseNewCommand("--pack brutalist build app")).toThrow("design pack must be one of");
 });
 
 test("OpenTUI is default and Pi TUI requires explicit opt-in", () => {

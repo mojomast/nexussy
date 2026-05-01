@@ -152,7 +152,7 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     html = response.text
-    for section in ["session-list", "stages", "stream-log", "interview-form", "interview-fields", "artifact-viewer"]:
+    for section in ["session-list", "stages", "stream-log", "interview-form", "interview-fields", "artifact-viewer", "pipeline-start-form", "design-context-pack"]:
         assert f'id="{section}"' in html
     for tab in ["chat", "pipeline", "sessions", "graph", "artifacts", "swarm", "devplan", "config", "secrets"]:
         assert f'id="{tab}"' in html
@@ -170,7 +170,7 @@ def test_all_required_tabs_include_static_render_targets_and_api_routes(client: 
     html = client.get("/").text
     expected = {
         "chat": ["chat-log"],
-        "pipeline": ["stages", "transitions", "interview-fields"],
+        "pipeline": ["stages", "transitions", "interview-fields", "pipeline-start-form", "design-context-pack"],
         "sessions": ["session-list", "prev-sessions", "next-sessions"],
         "graph": ["graph-viewer", "/api/graph"],
         "artifacts": ["artifact-viewer", "review-report"],
@@ -513,7 +513,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           prepend(child) { this.children.unshift(child); this.innerHTML = child.innerHTML + this.innerHTML; }
         }
 
-        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-fields','chat-log'];
+        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-fields','chat-log','pipeline-start-form','start-project-name','start-description','design-context-pack'];
         const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
         elements['artifact-kind'].value = 'devplan';
         const document = {
@@ -542,6 +542,7 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           if (url === '/api/secrets') return jsonResponse([{ name: 'OPENAI_API_KEY', configured: false, source: 'env' }]);
           if (url.startsWith('/api/secrets/')) return jsonResponse({ ok: true });
           if (url.startsWith('/api/pipeline/status')) return jsonResponse({ status: { run: { status: 'paused', current_stage: 'interview', run_id: 'run-1', session_id: 'session-1' }, stages: [{ stage: 'interview', status: 'running' }], pause_state: { paused: true, questions: [{ question_id: 'q-1', question: 'What should we build?' }, { question_id: 'q-2', question: 'What should we avoid?' }] }, workers: [{ worker_id: 'worker-status', status: 'running' }], file_locks: [{ path: 'web/app.js', worker_id: 'worker-status' }] } });
+          if (url === '/api/pipeline/start') return jsonResponse({ session_id: 'session-new', run_id: 'run-new', status: 'running' });
           if (url.startsWith('/api/swarm/workers')) return jsonResponse({ workers: [{ worker_id: 'worker-2', role: 'developer', status: 'idle' }] });
           if (url.startsWith('/api/swarm/file-locks')) return jsonResponse({ file_locks: [{ path: 'web/test.js', worker_id: 'worker-2' }] });
           if (url.startsWith('/api/graph')) return jsonResponse({ nodes: [], edges: [] });
@@ -566,6 +567,19 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
         (async () => {
           await context.refreshHealth();
           assert(elements.health.textContent === 'core: ok contract 1.0', 'health display did not render');
+
+          elements['start-description'].value = 'Build a polished checkout';
+          elements['design-context-pack'].value = 'stripe';
+          await elements['pipeline-start-form'].onsubmit(event);
+          const startCall = fetchCalls.find(c => c.url === '/api/pipeline/start');
+          assert(startCall, 'pipeline start not called');
+          const startBody = JSON.parse(startCall.options.body);
+          assert(startBody.metadata.design_context_pack === 'stripe', 'selected design pack not sent');
+          elements['start-description'].value = 'Build a plain docs site';
+          elements['design-context-pack'].value = 'none';
+          await elements['pipeline-start-form'].onsubmit(event);
+          const noPackBody = JSON.parse(fetchCalls.filter(c => c.url === '/api/pipeline/start').at(-1).options.body);
+          assert(!('metadata' in noPackBody), 'none design pack should preserve default metadata');
 
           responses.push(jsonResponse({ ok: false, error_code: 'unauthorized', message: 'bad key' }, false, 401, 'Unauthorized'));
           await context.refreshHealth();
