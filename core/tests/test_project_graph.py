@@ -21,6 +21,39 @@ def test_project_graph_contract_and_cache_metadata(tmp_path):
     assert graph_cache_path(tmp_path).exists()
 
 
+def test_project_graph_cold_start_creates_missing_cache_directory(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("import json\n", encoding="utf-8")
+    cache = graph_cache_path(tmp_path)
+
+    assert not cache.parent.exists()
+    graph = build_or_load_project_graph(tmp_path)
+
+    assert cache.exists()
+    assert set(graph["metadata"]["file_hashes"]) == {"src/app.py"}
+
+
+def test_project_graph_corrupted_cache_rebuilds_without_crashing(tmp_path):
+    (tmp_path / "README.md").write_text("# Recover\n", encoding="utf-8")
+    cache = graph_cache_path(tmp_path)
+    cache.parent.mkdir(parents=True)
+    cache.write_text("{not valid json", encoding="utf-8")
+
+    graph = build_or_load_project_graph(tmp_path)
+
+    assert graph["metadata"]["file_hashes"].keys() == {"README.md"}
+    assert json.loads(cache.read_text(encoding="utf-8"))["metadata"]["schema_version"] == 1
+
+
+def test_project_graph_empty_project_is_safe(tmp_path):
+    graph = build_or_load_project_graph(tmp_path)
+    summary = summarize_project_graph(graph)
+
+    assert graph["metadata"]["file_hashes"] == {}
+    assert graph["nodes"] == []
+    assert "files=0" in summary
+
+
 def test_project_graph_reuses_unchanged_files_and_handles_deletes(tmp_path, monkeypatch):
     (tmp_path / "a.py").write_text("import os\n", encoding="utf-8")
     (tmp_path / "b.py").write_text("import sys\n", encoding="utf-8")

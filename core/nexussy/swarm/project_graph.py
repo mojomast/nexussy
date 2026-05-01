@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from nexussy.artifacts.store import safe_write
+
 SCHEMA_VERSION = 1
 CACHE_RELATIVE_PATH = pathlib.Path(".nexussy") / "graph_cache" / "graph.json"
 MAX_FILE_BYTES = 256 * 1024
@@ -255,11 +257,7 @@ def _previous_file_nodes(graph: dict[str, Any] | None) -> dict[str, dict[str, li
 
 
 def _write_cache(root: pathlib.Path, graph: dict[str, Any]) -> None:
-    cache = graph_cache_path(root)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cache.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(graph, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(cache)
+    safe_write(str(root), CACHE_RELATIVE_PATH.as_posix(), json.dumps(graph, indent=2, sort_keys=True))
 
 
 def _dedupe_sorted(items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
