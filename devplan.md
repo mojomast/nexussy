@@ -9,6 +9,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 - 2026-05-01: Phase 1 planning completed with four sequential planning subagents and merged into this implementation devplan.
 - 2026-05-01: Shared foundations T-001/T-002 completed with role capability manifests and design context pack config schema/defaults.
 - 2026-05-01: Graphify Integration T-003 through T-006 completed with a stdlib project graph cache, compressed summary, and interview-stage prompt injection.
+- 2026-05-01: Design context packs T-007 through T-010 completed with built-in Stripe/Linear/Minimal assets, design-stage prompt injection, TUI `/new --design-pack` selection, and web dashboard start selection.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution
@@ -109,7 +110,7 @@ Estimated complexity: high.
 
 ## Design Stage Context Packs
 
-### T-007 `[PARALLEL-GROUP-A]` Add Built-In Design Pack Assets
+### T-007 `[✅ PARALLEL-GROUP-A]` Add Built-In Design Pack Assets
 
 Description: Ship built-in `DESIGN.md`-style packs for Stripe, Linear, and Minimal.
 
@@ -121,7 +122,7 @@ Dependencies: None.
 
 Estimated complexity: low.
 
-### T-008 `[PARALLEL-GROUP-A]` Inject Selected Design Pack In Design Stage
+### T-008 `[✅ PARALLEL-GROUP-A]` Inject Selected Design Pack In Design Stage
 
 Description: Resolve `metadata["design_context_pack"]` before config `stages.design.context_pack` and inject selected markdown into the design prompt.
 
@@ -133,7 +134,7 @@ Dependencies: T-002, T-007.
 
 Estimated complexity: medium.
 
-### T-009 `[PARALLEL-GROUP-A]` Add TUI Design Pack Selection
+### T-009 `[✅ PARALLEL-GROUP-A]` Add TUI Design Pack Selection
 
 Description: Add TUI pipeline-start selection for `none`, `stripe`, `linear`, and `minimal`.
 
@@ -145,7 +146,7 @@ Dependencies: T-002.
 
 Estimated complexity: medium.
 
-### T-010 `[PARALLEL-GROUP-A]` Add Web Design Pack Selection
+### T-010 `[✅ PARALLEL-GROUP-A]` Add Web Design Pack Selection
 
 Description: Add web dashboard pipeline-start selection for `none`, `stripe`, `linear`, and `minimal`.
 

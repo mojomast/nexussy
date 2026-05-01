@@ -102,6 +102,28 @@ function selectSession(sessionId, runId = '') {
   }
 }
 
+function projectNameFromDescription(description) {
+  const words = String(description || '').trim().split(/\s+/).filter(Boolean).slice(0, 6).join(' ');
+  return words || 'nexussy run';
+}
+
+async function startPipelineFromForm(event) {
+  event.preventDefault();
+  const description = $('#start-description').value.trim();
+  if (!description) return alert('Describe what nexussy should build.');
+  const pack = $('#design-context-pack').value;
+  const body = {
+    project_name: $('#start-project-name').value.trim() || projectNameFromDescription(description),
+    description,
+    auto_approve_interview: true,
+  };
+  if (pack && pack !== 'none') body.metadata = { design_context_pack: pack };
+  const started = await api('/pipeline/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  selectSession(started.session_id, started.run_id);
+  $('#pipeline-summary').textContent = `started ${started.run_id || ''}`.trim();
+  connect();
+}
+
 function stage(payload) {
   const name = payload.stage || payload.name;
   if (!name) return;
@@ -268,6 +290,7 @@ $('#connect-stream').onclick = connect;
 $('#clear-log').onclick = () => { $('#stream-log').innerHTML = ''; };
 $('#run-id').value = activeRunId;
 $('#run-id').onchange = () => selectSession(activeSessionId, $('#run-id').value.trim());
+$('#pipeline-start-form').onsubmit = (event) => startPipelineFromForm(event).catch((e) => reportError('pipeline start failed', e));
 $('#load-artifact').onclick = async () => { try { const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const kind = $('#artifact-kind').value; const body = await api('/pipeline/artifacts/' + kind + '?session_id=' + encodeURIComponent(sid)); $('#artifact-viewer').textContent = body.content_text || JSON.stringify(body, null, 2); if (kind === 'review_report') $('#review-report').textContent = $('#artifact-viewer').textContent; } catch (e) { reportError('artifact load failed', e); } };
 $('#load-devplan').onclick = async () => { const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const body = await api('/pipeline/artifacts/devplan?session_id=' + encodeURIComponent(sid)); $('#devplan-content').innerHTML = highlightAnchors(body.content_text || ''); };
 $('#load-graph').onclick = () => loadGraph().catch((e) => reportError('graph load failed', e));

@@ -196,10 +196,31 @@ export function projectNameFromDescription(description:string): string {
   return words || "nexussy run";
 }
 
-export async function startPipelineFromText(client:CoreClient, description:string): Promise<{runId:string; sessionId:string}> {
+export type DesignContextPackSelection = "none"|"stripe"|"linear"|"minimal";
+export const DESIGN_CONTEXT_PACKS: DesignContextPackSelection[] = ["none", "stripe", "linear", "minimal"];
+
+export function parseNewCommand(input:string): { description:string; designContextPack?:DesignContextPackSelection } {
+  const tokens = input.trim().split(/\s+/).filter(Boolean);
+  let designContextPack:DesignContextPackSelection|undefined;
+  const description:string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "--design-pack" || token === "--pack") {
+      const value = tokens[++i] as DesignContextPackSelection|undefined;
+      if (!value || !DESIGN_CONTEXT_PACKS.includes(value)) throw new Error("design pack must be one of: none, stripe, linear, minimal");
+      designContextPack = value;
+      continue;
+    }
+    description.push(token);
+  }
+  return { description:description.join(" "), designContextPack };
+}
+
+export async function startPipelineFromText(client:CoreClient, description:string, designContextPack?:DesignContextPackSelection): Promise<{runId:string; sessionId:string}> {
   const trimmed = description.trim();
   if (!trimmed) throw new Error("describe what you want nexussy to build");
-  const started = await client.startPipeline({ project_name:projectNameFromDescription(trimmed), description:trimmed, auto_approve_interview:true });
+  const metadata = designContextPack && designContextPack !== "none" ? { design_context_pack:designContextPack } : undefined;
+  const started = await client.startPipeline({ project_name:projectNameFromDescription(trimmed), description:trimmed, auto_approve_interview:true, ...(metadata ? { metadata } : {}) });
   return { runId:started.run_id, sessionId:started.session_id };
 }
 
@@ -227,8 +248,8 @@ export async function interactiveShell(client:CoreClient, state=createState(), i
       if (line === "/quit" || line === "/exit") return;
       try {
         if (line.startsWith("/new ")) {
-          const description = line.slice(5);
-          const started = await startPipelineFromText(client, description);
+          const { description, designContextPack } = parseNewCommand(line.slice(5));
+          const started = await startPipelineFromText(client, description, designContextPack);
           current = { ...current, runId:started.runId, sessionId:started.sessionId };
           output.write(`started run ${started.runId}\n`);
           current = await streamRunToPanels(client, current, output);

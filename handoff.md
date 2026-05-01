@@ -52,14 +52,20 @@ Conflict policy and autoskip confidence pass complete: `swarm.conflict_strategy`
 TUI steering and devplan contract pass complete: TUI `/steer` supports orchestrator messages, `@worker-id` targeting, DB-backed `/steer list`, and `/steer clear`; core now exposes `nexussy_steer_status` and validates/repairs strict `DevplanTask[]` sidecars with markdown fallback. Full verification: `python3 -m pytest -q core/tests` (107 passed), `cd tui && bun test` (70 passed), `cd tui && bun run typecheck` (clean), `python3 -m pytest -q web/tests` (52 passed).
 Shared foundations T-001/T-002 complete: core now has strict role capability manifests for every `WorkerRole` plus `DesignStageConfig.context_pack` defaults/validation for `stripe`, `linear`, `minimal`, or no pack. `python3 -m pytest core/tests/ -x -q` passes (116 passed); `python3 -m ruff check` is unavailable because the `ruff` module is not installed.
 Graphify Integration T-003/T-004/T-005/T-006 complete: core now builds a stdlib project graph cache at `.nexussy/graph_cache/graph.json`, reuses unchanged file nodes, emits bounded found/inferred summaries, and injects graph context into interview question and auto-answer prompts. `python3 -m pytest core/tests/ -x -q` passes (122 passed); `python3 -m ruff check` is unavailable because the `ruff` module is not installed.
+Design context packs T-007/T-008/T-009/T-010 complete: built-in Stripe/Linear/Minimal markdown assets are packaged in core, design prompts resolve `metadata.design_context_pack` before config and inject selected pack guidance, TUI supports `/new --design-pack <none|stripe|linear|minimal>`, and web dashboard start form sends selected pack metadata. Verification: `python3 -m pytest core/tests/ -x -q` passed (121), `cd tui && bun test` passed (71), `cd tui && bun run typecheck` passed, `python3 -m pytest web/tests/ -q` passed (52); `python3 -m ruff check` unavailable (`No module named ruff`).
 <!-- QUICK_STATUS_END -->
 
 <!-- HANDOFF_NOTES_START -->
 # Handoff
 ## Completed: T-003 Lightweight Project Graph Contract, T-004 Graph Cache Build And Reuse, T-005 Compressed Graph Summary, and T-006 Interview Graph Injection
-## Next Task: T-007 `[PARALLEL-GROUP-A]` Add Built-In Design Pack Assets
 ## Context: Graphify RAG is core-only. `core/nexussy/swarm/project_graph.py` uses only stdlib, skips binary/oversized/ignored paths, caches under `.nexussy/graph_cache/graph.json`, reuses unchanged file nodes by hash, and produces bounded summaries with `[found]`/`[inferred]` labels. Interview prompts now include the summary before both question generation and auto-answer provider calls, with a minimal fallback if graph building fails. Do not extend this into design packs, UI, permissions, or cost analytics unless assigned. `python3 -m ruff check` could not run because `ruff` is not installed; `python3 -m pytest core/tests/ -x -q` passes (122 passed).
 ## Files Modified: `core/nexussy/swarm/project_graph.py`, `core/nexussy/pipeline/stages/interview.py`, `core/tests/test_project_graph.py`, `core/tests/test_interview_graph_context.py`, `devplan.md`, `handoff.md`
+
+## Completed: T-007 Built-In Design Pack Assets, T-008 Design Stage Injection, T-009 TUI Selection, T-010 Web Selection
+## Context: Implemented exactly the design-pack tasks on top of T-002. Core pack names remain `stripe`, `linear`, `minimal`; request metadata key is `metadata.design_context_pack`, and metadata wins over config. Metadata value `none` disables a configured pack for a run. No graph RAG, permission governance, or cost analytics work was done. `bun install` was needed because TUI dependencies were absent; `node_modules` is ignored and not staged. `python3 -m ruff check` is unavailable because `ruff` is not installed.
+## Files Modified: `core/nexussy/assets/**`, `core/nexussy/pipeline/stages/design.py`, `core/pyproject.toml`, `core/tests/test_design_packs.py`, `tui/src/index.ts`, `tui/src/ui/Composer.ts`, `tui/tests/openrouter-setup.test.ts`, `web/nexussy_web/templates/index.html`, `web/nexussy_web/static/app.js`, `web/tests/test_app.py`, `devplan.md`, `handoff.md`
+
+## Next Task: T-011 `[PARALLEL-GROUP-B]` Replace Ad Hoc Role Checks With Manifests and T-015 `[PARALLEL-GROUP-B]` Add Cost Analytics DB Read Helpers
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->
