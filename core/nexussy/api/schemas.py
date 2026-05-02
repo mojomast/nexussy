@@ -50,7 +50,7 @@ class WorkerStatus(str, Enum):
 class WorkerTaskStatus(str, Enum):
     queued="queued"; assigned="assigned"; running="running"; passed="passed"; failed="failed"; skipped="skipped"; blocked="blocked"
 class ArtifactKind(str, Enum):
-    interview="interview"; complexity_profile="complexity_profile"; design_draft="design_draft"; validated_design="validated_design"; validation_report="validation_report"; devplan="devplan"; devplan_tasks="devplan_tasks"; handoff="handoff"; phase="phase"; review_report="review_report"; develop_report="develop_report"; merge_report="merge_report"; changed_files="changed_files"; conflict_report="conflict_report"
+    interview="interview"; complexity_profile="complexity_profile"; design_draft="design_draft"; validated_design="validated_design"; validation_report="validation_report"; devplan="devplan"; devplan_tasks="devplan_tasks"; handoff="handoff"; phase="phase"; review_report="review_report"; develop_report="develop_report"; merge_report="merge_report"; changed_files="changed_files"; conflict_report="conflict_report"; validate_browser_report="validate_browser_report"
 class ToolName(str, Enum):
     spawn_worker="spawn_worker"; assign_task="assign_task"; get_swarm_state="get_swarm_state"; read_file="read_file"; write_file="write_file"; edit_file="edit_file"; bash="bash"; list_files="list_files"; search_code="search_code"; claim_file="claim_file"; release_file="release_file"; add_context="add_context"
 class LockStatus(str, Enum):
@@ -221,6 +221,9 @@ class MergeReport(StrictModel):
     run_id:str; base_commit:str; merge_commit:str|None=None; merged_workers:list[str]=Field(default_factory=list); conflicts:list[str]=Field(default_factory=list); passed:bool; created_at:datetime=Field(default_factory=now_utc)
 class DevelopReport(StrictModel):
     run_id:str; passed:bool; workers:list[Worker]=Field(default_factory=list); tasks_total:int=0; tasks_passed:int=0; tasks_failed:int=0; tests_command:str|None=None; tests_passed:bool|None=None; created_at:datetime=Field(default_factory=now_utc)
+class BrowserValidationReport(StrictModel):
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+    run_id:str; passed:bool; skipped:bool=False; reason:str|None=None; command:str|None=None; target_url:str|None=None; returncode:int|None=None; stdout_tail:str=""; stderr_tail:str=""; findings:list[str]=Field(default_factory=list); created_at:datetime=Field(default_factory=now_utc)
 class DevplanTask(StrictModel):
     task_id:str; title:str; acceptance_criteria:str; files_allowed:list[str]=Field(default_factory=list); depends_on:list[str]=Field(default_factory=list); owner:str|None=None; estimated_tokens:int|None=None
 class RoleCapabilityManifest(StrictModel):
