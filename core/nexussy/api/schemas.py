@@ -235,9 +235,22 @@ class StageModelConfig(StrictModel): model:str="openai/gpt-5.5-fast"; max_retrie
 class DesignStageConfig(StageModelConfig): context_pack:Literal["stripe","linear","minimal"]|None=None
 class PlanStageConfig(StageModelConfig): devplan_task_validation:Literal["strict","repair","none"]="repair"
 class InterviewStageConfig(StageModelConfig): answer_timeout_s:int=3600; min_description_words:int=50
+class ValidateBrowserStageConfig(StrictModel):
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+    enabled:bool=False; command:str|None=None; target_url:str|None=None; timeout_s:int=60; failure_policy:Literal["skip","fail"]="skip"
+    @field_validator("command", "target_url")
+    @classmethod
+    def optional_non_blank(cls, v):
+        if v is not None and not str(v).strip(): raise ValueError("blank strings are not allowed")
+        return v
+    @field_validator("timeout_s")
+    @classmethod
+    def timeout_positive(cls, v):
+        if v < 1 or v > 600: raise ValueError("timeout_s must be between 1 and 600")
+        return v
 class DevelopStageConfig(StrictModel): model:str="openai/gpt-5.5-fast"; orchestrator_model:str="openai/gpt-5.5-fast"; max_retries:int=2
 class StagesConfig(StrictModel):
-    interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:DesignStageConfig=Field(default_factory=DesignStageConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); plan:PlanStageConfig=Field(default_factory=PlanStageConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
+    interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:DesignStageConfig=Field(default_factory=DesignStageConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); validate_browser:ValidateBrowserStageConfig=Field(default_factory=ValidateBrowserStageConfig); plan:PlanStageConfig=Field(default_factory=PlanStageConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
 class SwarmConfig(StrictModel): max_workers:int=8; default_worker_count:int=2; worker_task_timeout_s:int=900; worker_start_timeout_s:int=30; file_lock_timeout_s:int=120; file_lock_retry_ms:int=250; merge_strategy:Literal["no_ff","squash"]="no_ff"; conflict_strategy:Literal["ours","diff3","abort"]="ours"
 class PiConfig(StrictModel): command:str="nexussy-pi"; args:list[str]=Field(default_factory=list); startup_timeout_s:int=30; shutdown_timeout_s:int=10; max_stdout_line_bytes:int=1048576
 class SSEConfig(StrictModel): heartbeat_interval_s:int=15; client_queue_max_events:int=1000; replay_max_events:int=10000; retry_ms:int=3000

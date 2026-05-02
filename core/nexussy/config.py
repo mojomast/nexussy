@@ -11,10 +11,13 @@ ENV_MAP = {
  "NEXUSSY_INTERVIEW_MODEL": ("stages","interview","model"), "NEXUSSY_DESIGN_MODEL": ("stages","design","model"),
   "NEXUSSY_DESIGN_CONTEXT_PACK": ("stages","design","context_pack"),
  "NEXUSSY_VALIDATE_MODEL": ("stages","validate","model"), "NEXUSSY_PLAN_MODEL": ("stages","plan","model"),
-  "NEXUSSY_REVIEW_MODEL": ("stages","review","model"), "NEXUSSY_DEVELOP_MODEL": ("stages","develop","model"),
-  "NEXUSSY_ORCHESTRATOR_MODEL": ("stages","develop","orchestrator_model"), "NEXUSSY_PI_COMMAND": ("pi","command"), "NEXUSSY_LOG_LEVEL": ("logging","level"),
-  "NEXUSSY_SWARM_CONFLICT_STRATEGY": ("swarm","conflict_strategy"), "NEXUSSY_INTERVIEW_MIN_DESCRIPTION_WORDS": ("stages","interview","min_description_words"),
-  "NEXUSSY_PLAN_DEVPLAN_TASK_VALIDATION": ("stages","plan","devplan_task_validation"),
+   "NEXUSSY_REVIEW_MODEL": ("stages","review","model"), "NEXUSSY_DEVELOP_MODEL": ("stages","develop","model"),
+   "NEXUSSY_ORCHESTRATOR_MODEL": ("stages","develop","orchestrator_model"), "NEXUSSY_PI_COMMAND": ("pi","command"), "NEXUSSY_LOG_LEVEL": ("logging","level"),
+   "NEXUSSY_SWARM_CONFLICT_STRATEGY": ("swarm","conflict_strategy"), "NEXUSSY_INTERVIEW_MIN_DESCRIPTION_WORDS": ("stages","interview","min_description_words"),
+   "NEXUSSY_PLAN_DEVPLAN_TASK_VALIDATION": ("stages","plan","devplan_task_validation"),
+   "NEXUSSY_VALIDATE_BROWSER_ENABLED": ("stages","validate_browser","enabled"), "NEXUSSY_VALIDATE_BROWSER_COMMAND": ("stages","validate_browser","command"),
+   "NEXUSSY_VALIDATE_BROWSER_TARGET_URL": ("stages","validate_browser","target_url"), "NEXUSSY_VALIDATE_BROWSER_TIMEOUT_S": ("stages","validate_browser","timeout_s"),
+   "NEXUSSY_VALIDATE_BROWSER_FAILURE_POLICY": ("stages","validate_browser","failure_policy"),
 }
 
 def _merge(a: dict, b: dict) -> dict:
