@@ -36,7 +36,7 @@ class StrictModel(BaseModel):
 
 
 class StageName(str, Enum):
-    interview="interview"; design="design"; validate="validate"; plan="plan"; review="review"; develop="develop"
+    interview="interview"; design="design"; validate="validate"; plan="plan"; review="review"; develop="develop"; validate_browser="validate_browser"
 class StageRunStatus(str, Enum):
     pending="pending"; running="running"; passed="passed"; failed="failed"; skipped="skipped"; blocked="blocked"; paused="paused"; retrying="retrying"
 class RunStatus(str, Enum):

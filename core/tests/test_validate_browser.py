@@ -1,8 +1,13 @@
 import pytest
 from pydantic import ValidationError
+from starlette.testclient import TestClient
 
 from nexussy.api.schemas import ArtifactRef, NexussyConfig, ValidateBrowserStageConfig
+from nexussy.api import server
+from nexussy.api.server import app
 from nexussy.config import load_config
+from nexussy.db import Database
+from nexussy.pipeline.engine import Engine
 from nexussy.pipeline.stages import validate_browser
 
 
@@ -169,3 +174,70 @@ def json_dumps(value):
     import json
 
     return json.dumps(value) + "\n"
+
+
+def _wait_done(client, run_id):
+    for _ in range(100):
+        events = client.get("/events", params={"run_id": run_id}).json()
+        if events and events[-1]["type"] == "done":
+            return events
+        import time
+
+        time.sleep(0.05)
+    return events
+
+
+def test_pipeline_runs_validate_browser_after_develop_when_enabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+
+    async def fake_run_command(args, timeout_s):
+        if args[-1] == "--doctor":
+            return validate_browser.CommandResult(0, "doctor ok", "")
+        return validate_browser.CommandResult(0, json_dumps({"events": []}), "")
+
+    monkeypatch.setattr(validate_browser, "_run_command", fake_run_command)
+    server.config = load_config({"stages": {"validate_browser": {"enabled": True, "command": "/fake/browser-harness", "target_url": "http://127.0.0.1:7772/"}}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+
+    with TestClient(app) as client:
+        response = client.post("/pipeline/start", json={"project_name": "Browser Validation", "description": "small api", "auto_approve_interview": True, "metadata": {"mock_provider": True}})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        events = _wait_done(client, body["run_id"])
+
+        assert events[-1]["payload"]["final_status"] == "passed"
+        transitions = [event["payload"]["to_stage"] for event in events if event["type"] == "stage_transition"]
+        assert transitions[-2:] == ["develop", "validate_browser"]
+        status = client.get("/pipeline/status", params={"run_id": body["run_id"]}).json()
+        assert status["run"]["current_stage"] == "validate_browser"
+        assert any(stage["stage"] == "validate_browser" and stage["status"] == "passed" for stage in status["stages"])
+        report = client.get("/pipeline/artifacts/validate_browser_report", params={"session_id": body["session_id"]}).json()
+        assert report["ok"] is True
+        assert '"passed": true' in report["content_text"]
+
+
+def test_pipeline_validate_browser_failure_fails_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+
+    async def fake_run_command(args, timeout_s):
+        if args[-1] == "--doctor":
+            return validate_browser.CommandResult(0, "doctor ok", "")
+        payload = {"events": [{"method": "Runtime.consoleAPICalled", "params": {"type": "error", "args": [{"value": "boom"}]}}]}
+        return validate_browser.CommandResult(0, json_dumps(payload), "")
+
+    monkeypatch.setattr(validate_browser, "_run_command", fake_run_command)
+    server.config = load_config({"stages": {"validate_browser": {"enabled": True, "command": "/fake/browser-harness", "target_url": "http://127.0.0.1:7772/"}}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+
+    with TestClient(app) as client:
+        response = client.post("/pipeline/start", json={"project_name": "Browser Validation Fail", "description": "small api", "auto_approve_interview": True, "metadata": {"mock_provider": True}})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        events = _wait_done(client, body["run_id"])
+
+        assert events[-1]["payload"]["final_status"] == "failed"
+        assert any(event["type"] == "stage_status" and event["payload"].get("stage") == "validate_browser" and event["payload"].get("status") == "failed" for event in events)

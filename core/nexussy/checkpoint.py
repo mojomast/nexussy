@@ -7,7 +7,14 @@ from nexussy.artifacts.store import sha256_text
 from nexussy.session import now_utc
 
 
-STAGE_ORDER = [s.value for s in StageName]
+STAGE_ORDER = [
+    StageName.interview.value,
+    StageName.design.value,
+    StageName.validate.value,
+    StageName.plan.value,
+    StageName.review.value,
+    StageName.develop.value,
+]
 
 
 def _stage_value(stage: StageName | str) -> str:

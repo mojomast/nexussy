@@ -11,7 +11,7 @@ from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.swarm.roles import enforce_tool
 from nexussy.pipeline.helpers import ProviderStartError, complexity, slugify, validate_existing_repo_path
-from nexussy.pipeline.stages import design, develop, interview, plan, review, validate
+from nexussy.pipeline.stages import design, develop, interview, plan, review, validate, validate_browser
 logger = logging.getLogger(__name__); STAGES=[StageName(s) for s in STAGE_ORDER]
 def _rate_limited_error(provider: str, model: str, limited) -> ErrorResponse: return ErrorResponse(error_code=ErrorCode.rate_limited, message="provider rate limited", details={"provider":provider,"model":model,"reset_at":limited["reset_at"]}, retryable=True)
 class Engine:
@@ -164,6 +164,10 @@ class Engine:
                 await self.emit(SSEEventType.checkpoint_saved, detail.session.session_id, run.run_id, ck); prev=st; i += 1
                 if self.steer_queue.get(run.run_id): await self.consume_steer(run.run_id)
                 if st == StageName.plan: review_feedback_for_plan = ""
+            if self.config.stages.validate_browser.enabled and prev == StageName.develop:
+                browser_refs = await self._run_validate_browser(req, detail, run.run_id, cp, root, selected_models or {}, allow_mock, prev)
+                artifacts.extend(browser_refs)
+                prev = StageName.validate_browser
             usage=self._run_usage.get(run.run_id, TokenUsage())
             await self.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=?, current_stage=?, usage_json=? WHERE run_id=?",("passed",now_utc().isoformat(),prev.value if prev else None,usage.model_dump_json(),run.run_id)))
             await transition_session_status(self.db, detail.session.session_id, SessionStatus.passed)
@@ -193,6 +197,30 @@ class Engine:
         await self.emit(SSEEventType.artifact_updated, session_id, run_id, ArtifactUpdatedPayload(artifact=ref,action="created"))
         await self.db.write(lambda con: con.execute("INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?,?,?,?,?)",(run_id,kind,rel,ref.sha256,ref.bytes,ref.updated_at.isoformat(),text,phase)))
         return ref
+    async def _ensure_stage_run(self, run_id: str, stage: StageName):
+        await self.db.write(lambda con: con.execute("INSERT OR IGNORE INTO stage_runs VALUES(?,?,?,?,?,?,?)", (run_id, stage.value, "pending", 0, None, None, None)))
+    async def _run_validate_browser(self, req, detail, rid, cp, root, selected_models, allow_mock, prev):
+        st = StageName.validate_browser
+        await self._ensure_stage_run(rid, st)
+        t0=now_utc(); await self._update_stage_status(rid, st, "running", attempt=1, started_at=t0)
+        await self.emit(SSEEventType.stage_transition, detail.session.session_id, rid, StageTransitionPayload(from_stage=prev,to_stage=st,from_status=StageRunStatus.passed,to_status=StageRunStatus.running,reason="stage started"))
+        made = await validate_browser.run(self, req, detail, rid, cp, root, selected_models, allow_mock)
+        passed = await self._latest_report_passed(rid, "validate_browser_report", True)
+        report_text = await self._latest_artifact_text(rid, "validate_browser_report")
+        skipped = False
+        try:
+            skipped = bool(json.loads(report_text).get("skipped", False)) if report_text else False
+        except Exception:
+            skipped = False
+        fin=now_utc(); status = StageRunStatus.skipped if skipped else StageRunStatus.passed
+        if not passed and not skipped:
+            error=ErrorResponse(error_code=ErrorCode.stage_failed,message="browser validation failed",retryable=False)
+            await self._update_stage_status(rid, st, "failed", finished_at=fin, error=error)
+            await self.emit(SSEEventType.stage_status, detail.session.session_id, rid, StageStatusSchema(stage=st,status=StageRunStatus.failed,attempt=1,finished_at=fin,output_artifacts=made,error=error))
+            raise RuntimeError("browser validation failed")
+        await self._update_stage_status(rid, st, status, finished_at=fin)
+        await self.emit(SSEEventType.stage_status, detail.session.session_id, rid, StageStatusSchema(stage=st,status=status,attempt=1,finished_at=fin,output_artifacts=made))
+        return made
     async def execute_worker_tool(self, run_id: str, worker_id: str, tool: ToolName, arguments: dict[str, JsonValue] | None = None):
         arguments=arguments or {}
         rows=await self.db.read("SELECT worker_json FROM workers WHERE run_id=? AND worker_id=?",(run_id,worker_id))
