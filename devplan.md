@@ -14,6 +14,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 - 2026-05-01: Cost analytics T-015 through T-017 completed with read-only SQLite aggregation, `python3 -m nexussy.cli.costs`, launcher `analyze-costs`, and ops coverage.
 - 2026-05-01: Final integration verification T-019 completed; core, TUI, web, shell syntax, and available lint checks were run, CHANGELOG was updated, and SPEC_COVERAGE required no changes.
 - 2026-05-02: Sprint 5 Phase 0 browser-harness feasibility review completed; `BROWSER_HARNESS_NOTES.md` records optionality, browser requirements, detection/fallback, and minimal validation-session findings.
+- 2026-05-02: Sprint 5 T-501 through T-505 completed; optional browser validation is disabled by default, fake-tested, wired after develop when enabled, reported by doctor, and documented in CHANGELOG/SPEC_COVERAGE.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution
@@ -292,7 +293,7 @@ Dependencies: None.
 
 Estimated complexity: low.
 
-### T-501 `[SEQUENTIAL]` Add Optional Validate-Browser Config And Schemas
+### T-501 `[✅ SEQUENTIAL]` Add Optional Validate-Browser Config And Schemas
 
 Description: Add strict schema/config support for `stages.validate_browser` with safe disabled defaults.
 
@@ -304,7 +305,7 @@ Dependencies: T-500.
 
 Estimated complexity: medium.
 
-### T-502 `[SEQUENTIAL]` Implement Fakeable Validate-Browser Stage
+### T-502 `[✅ SEQUENTIAL]` Implement Fakeable Validate-Browser Stage
 
 Description: Add `validate_browser` stage logic that detects prerequisites, runs browser-harness only when enabled, and writes a bounded JSON report.
 
@@ -316,7 +317,7 @@ Dependencies: T-501.
 
 Estimated complexity: high.
 
-### T-503 `[SEQUENTIAL]` Wire Optional Post-Develop Browser Validation
+### T-503 `[✅ SEQUENTIAL]` Wire Optional Post-Develop Browser Validation
 
 Description: Run `validate_browser` after `develop` and before final completion only when enabled, without changing default six-stage behavior.
 
@@ -328,7 +329,7 @@ Dependencies: T-502.
 
 Estimated complexity: high.
 
-### T-504 `[SEQUENTIAL]` Add Launcher Doctor Browser-Harness Diagnostics
+### T-504 `[✅ SEQUENTIAL]` Add Launcher Doctor Browser-Harness Diagnostics
 
 Description: Extend launcher diagnostics to report whether optional browser validation prerequisites appear available.
 
@@ -340,7 +341,7 @@ Dependencies: T-501.
 
 Estimated complexity: medium.
 
-### T-505 `[SEQUENTIAL]` Final Browser Validation Verification And Docs
+### T-505 `[✅ SEQUENTIAL]` Final Browser Validation Verification And Docs
 
 Description: Run focused and full verification, update release docs, and add SPEC coverage for the optional browser validation feature.
 

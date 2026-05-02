@@ -53,4 +53,5 @@
 - TUI steering and devplan JSON contract pass added `/steer` orchestrator/worker/list/clear commands, DB-backed steer event status, and strict `DevplanTask[]` validation/repair with markdown fallback; core/TUI/web verification passes.
 - Cost analytics pass added read-only DB aggregation from `runs.usage_json`, cost events, and `stage_runs`, a core `nexussy.cli.costs` command, launcher `analyze-costs` wiring, and core/ops coverage; core tests, shell syntax, ops tests, and launcher smoke pass.
 - Phase 3 final verification completed: graph RAG, permission manifests, design packs, and cost analytics are summarized in CHANGELOG; SPEC_COVERAGE needed no regression updates; core, TUI, web, and shell syntax checks pass, while Ruff remains unavailable in this environment.
+- Sprint 5 browser validation pass added optional `stages.validate_browser` config, a fakeable `validate_browser` stage that writes bounded reports, post-develop pipeline wiring only when enabled, launcher `doctor` availability diagnostics, and R-101 coverage; core, TUI, web, shell syntax, and ops checks pass.
 <!-- PHASE_PROGRESS_END -->
