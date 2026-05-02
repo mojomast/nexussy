@@ -130,6 +130,7 @@ assert_contains "$doctor_text" "nexussy doctor" "doctor prints diagnostics heade
 assert_contains "$doctor_text" "pi command: missing (install Pi CLI or set NEXUSSY_PI_COMMAND)" "doctor reports missing Pi command remediation"
 assert_contains "$doctor_text" "provider keys" "doctor reports provider key readiness"
 assert_contains "$doctor_text" "mock mode only" "doctor explains missing provider key behavior"
+assert_contains "$doctor_text" "browser-harness: optional missing" "doctor reports optional browser-harness availability"
 assert_contains "$doctor_lan_text" "bundled nexussy-pi is local-dev only" "doctor warns bundled Pi on non-localhost bind"
 
 # Health-wait failures must clean up the process that was just started and its

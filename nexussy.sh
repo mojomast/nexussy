@@ -265,6 +265,14 @@ doctor() {
   if have git; then printf 'git: ok\n'; else printf 'git: missing\n'; rc=1; fi
   if have curl; then printf 'curl: ok\n'; else printf 'curl: missing\n'; rc=1; fi
   if have shellcheck; then printf 'shellcheck: optional ok\n'; else printf 'shellcheck: optional missing (install shellcheck for linting)\n'; fi
+  bh_cmd=${NEXUSSY_VALIDATE_BROWSER_COMMAND:-browser-harness}
+  bh_bin=${bh_cmd%% *}
+  if have "$bh_bin"; then
+    bh_version=$("$bh_bin" --version 2>/dev/null || true)
+    if [ -n "$bh_version" ]; then printf 'browser-harness: optional ok (%s %s)\n' "$bh_bin" "$bh_version"; else printf 'browser-harness: optional ok (%s)\n' "$bh_bin"; fi
+  else
+    printf 'browser-harness: optional missing (install browser-harness to enable stages.validate_browser)\n'
+  fi
   if [ -f "$NEXUSSY_CONFIG" ]; then
     printf 'config: present (%s)\n' "$NEXUSSY_CONFIG"
     missing_config=0
