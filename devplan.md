@@ -13,6 +13,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 - 2026-05-01: Permission governance T-011 through T-014 completed with manifest-backed runtime checks, local Pi worker denial enforcement, failed tool_output/SSE mapping, and orchestrator-only spawn/assign hardening where role context exists.
 - 2026-05-01: Cost analytics T-015 through T-017 completed with read-only SQLite aggregation, `python3 -m nexussy.cli.costs`, launcher `analyze-costs`, and ops coverage.
 - 2026-05-01: Final integration verification T-019 completed; core, TUI, web, shell syntax, and available lint checks were run, CHANGELOG was updated, and SPEC_COVERAGE required no changes.
+- 2026-05-02: Sprint 5 Phase 0 browser-harness feasibility review completed; `BROWSER_HARNESS_NOTES.md` records optionality, browser requirements, detection/fallback, and minimal validation-session findings.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution
@@ -272,6 +273,82 @@ Files to create or modify: `SPEC_COVERAGE.md` if needed, `CHANGELOG.md`.
 Acceptance criteria: `python3 -m pytest core/tests/ -v`, `cd tui && bun test`, `python3 -m pytest web/tests/ -q`, and `bash -n install.sh nexussy.sh` pass; changelog summarizes all four features.
 
 Dependencies: All feature and milestone commits.
+
+Estimated complexity: medium.
+
+## Sprint 5
+
+Scope: optional browser-based validation after develop using an already-installed `browser-harness` command. No new required Python packages are approved. The existing six core stages must behave exactly as they do today when browser validation is disabled.
+
+### T-500 `[✅ SEQUENTIAL]` Browser-Harness Feasibility Notes
+
+Description: Read browser-harness README/source and document feasibility for nexussy.
+
+Files created or modified: `BROWSER_HARNESS_NOTES.md`.
+
+Acceptance criteria: Notes answer whether Chrome/Chromium is required, whether browser-harness is Python/Node/binary packaging, what a minimal HTML/console-error collection session looks like, and whether the integration can be skipped gracefully.
+
+Dependencies: None.
+
+Estimated complexity: low.
+
+### T-501 `[SEQUENTIAL]` Add Optional Validate-Browser Config And Schemas
+
+Description: Add strict schema/config support for `stages.validate_browser` with safe disabled defaults.
+
+Files to create or modify: `core/nexussy/api/schemas.py`, `core/nexussy/config.py`, `core/tests/test_validate_browser.py`.
+
+Acceptance criteria: New Pydantic models use `ConfigDict(extra="forbid")`; defaults keep browser validation disabled; command/path/url/timeout/failure-policy fields are nullable or safe; config validation rejects unsafe values; no browser-harness dependency is added.
+
+Dependencies: T-500.
+
+Estimated complexity: medium.
+
+### T-502 `[SEQUENTIAL]` Implement Fakeable Validate-Browser Stage
+
+Description: Add `validate_browser` stage logic that detects prerequisites, runs browser-harness only when enabled, and writes a bounded JSON report.
+
+Files to create or modify: `core/nexussy/pipeline/stages/validate_browser.py`, `core/tests/test_validate_browser.py`.
+
+Acceptance criteria: Disabled config returns a skipped result without invoking subprocesses; missing command or failed doctor produces deterministic skipped/failed output according to config; enabled runs use bounded timeout/output capture; tests use fakes/mocks and do not require real Chrome.
+
+Dependencies: T-501.
+
+Estimated complexity: high.
+
+### T-503 `[SEQUENTIAL]` Wire Optional Post-Develop Browser Validation
+
+Description: Run `validate_browser` after `develop` and before final completion only when enabled, without changing default six-stage behavior.
+
+Files to create or modify: `core/nexussy/pipeline/engine.py`, `core/nexussy/api/schemas.py`, `core/tests/test_validate_browser.py`.
+
+Acceptance criteria: Existing default pipeline order remains `interview -> design -> validate -> plan -> review -> develop`; when enabled, browser validation runs after develop and emits stage/artifact events; disabled runs preserve existing tests and artifacts.
+
+Dependencies: T-502.
+
+Estimated complexity: high.
+
+### T-504 `[SEQUENTIAL]` Add Launcher Doctor Browser-Harness Diagnostics
+
+Description: Extend launcher diagnostics to report whether optional browser validation prerequisites appear available.
+
+Files to create or modify: `nexussy.sh`, `ops_tests.sh`.
+
+Acceptance criteria: `./nexussy.sh doctor` reports browser-harness availability without requiring Chrome; no secrets are printed; shell syntax and ops tests cover the new wording.
+
+Dependencies: T-501.
+
+Estimated complexity: medium.
+
+### T-505 `[SEQUENTIAL]` Final Browser Validation Verification And Docs
+
+Description: Run focused and full verification, update release docs, and add SPEC coverage for the optional browser validation feature.
+
+Files to create or modify: `CHANGELOG.md`, `SPEC_COVERAGE.md`, `devplan.md`, `phase001.md`, `handoff.md`.
+
+Acceptance criteria: `python3 -m pytest core/tests/ -v`, `cd tui && bun test`, `python3 -m pytest web/tests/ -q`, and `bash -n install.sh nexussy.sh` pass or environment limitations are recorded; `SPEC_COVERAGE.md` includes R-101; changelog summarizes Sprint 5.
+
+Dependencies: T-501 through T-504.
 
 Estimated complexity: medium.
 
