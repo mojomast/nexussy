@@ -1,12 +1,13 @@
 from __future__ import annotations
-import asyncio, json, logging, pathlib, shutil, hashlib, subprocess
+import asyncio, json, logging, pathlib, shutil, hashlib, subprocess, os, shlex, signal
 from datetime import datetime, timedelta; from uuid import uuid4
-from nexussy.api.schemas import ArtifactRef, ArtifactUpdatedPayload, DonePayload, ErrorCode, ErrorResponse, EventEnvelope, InterviewArtifact, InterviewQuestionAnswer, JsonValue, PausePayload, PipelineStartRequest, RunStartResponse, RunStatus, RunSummary, SSEEventType, SessionCreateRequest, SessionDetail, SessionSummary, StageName, StageRunStatus, StageStatusSchema, StageTransitionPayload, TokenUsage, ToolCallPayload, ToolName, ToolOutputPayload, Worker, WorkerTaskStatus
+from nexussy.api.schemas import ArtifactRef, ArtifactUpdatedPayload, DonePayload, ErrorCode, ErrorResponse, EventEnvelope, InterviewArtifact, InterviewQuestionAnswer, JsonValue, PausePayload, PipelineStartRequest, RunStartResponse, RunStatus, RunSummary, SSEEventType, SessionCreateRequest, SessionDetail, SessionSummary, StageName, StageRunStatus, StageStatusSchema, StageTransitionPayload, TokenUsage, ToolCallPayload, ToolDisplay, ToolName, ToolOutputPayload, Worker, WorkerTaskStatus
 from nexussy.artifacts.store import safe_write, artifact_path
 from nexussy.audit import write_audit
 from nexussy.checkpoint import STAGE_ORDER, latest_checkpoint, resume_from_checkpoint, save_checkpoint
 from nexussy.providers import active_rate_limit, complete, effective_secret_env, mock_requested, model_available, provider_error_for_model, provider_for_model, select_stage_model
 from nexussy.session import SessionStatus, now_utc, transition_session_status
+from nexussy.security import sanitize_relative_path, scrub_log
 from nexussy.swarm.locks import write_requires_lock
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 from nexussy.swarm.roles import enforce_tool
@@ -45,10 +46,9 @@ class Engine:
     async def _persist_event(self, env: EventEnvelope):
         typ = env.type.value if hasattr(env.type, "value") else env.type
         def tx(con):
-            row=con.execute("INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) VALUES(?, ?, (SELECT COALESCE(MAX(sequence),0)+1 FROM events WHERE run_id=?), ?, ?, ?) RETURNING sequence", (env.event_id, env.run_id, env.run_id, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat())).fetchone()
-            if row:
-                env.sequence=row["sequence"]
-                con.execute("UPDATE events SET payload_json=? WHERE event_id=?",(json.dumps(env.model_dump(mode="json")),env.event_id))
+            row=con.execute("SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM events WHERE run_id=?", (env.run_id,)).fetchone()
+            env.sequence=int(row["sequence"] if row else 1)
+            con.execute("INSERT INTO events(event_id, run_id, sequence, type, payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?)", (env.event_id, env.run_id, env.sequence, typ, json.dumps(env.model_dump(mode="json")), env.ts.isoformat()))
         await self.db.write(tx)
     async def emit(self, typ:SSEEventType, session_id:str, run_id:str, payload):
         env=EventEnvelope(sequence=0,type=typ,session_id=session_id,run_id=run_id,payload=payload.model_dump(mode="json") if hasattr(payload,"model_dump") else payload)
@@ -56,13 +56,13 @@ class Engine:
         for q in list(self.queues.get(run_id,set())):
             try: q.put_nowait(env)
             except asyncio.QueueFull:
-                self.queues.get(run_id,set()).discard(q)
                 slow=EventEnvelope(sequence=0,type=SSEEventType.pipeline_error,session_id=session_id,run_id=run_id,payload=ErrorResponse(error_code=ErrorCode.sse_client_slow,message="SSE client queue exceeded",retryable=True).model_dump(mode="json"))
                 await self._persist_event(slow)
                 try: q.get_nowait()
                 except asyncio.QueueEmpty: pass
                 try: q.put_nowait(slow)
                 except asyncio.QueueFull: pass
+                self.queues.get(run_id,set()).discard(q)
         return env
     async def replay(self, run_id, last_event_id=None, after_sequence=0, limit=10000):
         if last_event_id:
@@ -78,8 +78,13 @@ class Engine:
         await self.db.init_project(str(root), self.config.database.project_relative_path)
         if req.existing_repo_path:
             src=validate_existing_repo_path(req.existing_repo_path)
-            result=subprocess.run(["git", "-C", str(src), "rev-parse", "--git-dir"], capture_output=True, text=True)
+            try:
+                result=subprocess.run(["git", "-C", str(src), "rev-parse", "--git-dir"], capture_output=True, text=True)
+            except FileNotFoundError as e:
+                raise RuntimeError("git is not installed or not in PATH") from e
             if result.returncode == 0:
+                if any(main.iterdir()):
+                    raise RuntimeError("main worktree is not empty; refusing to overwrite existing files")
                 shutil.copytree(src, main, dirs_exist_ok=True, symlinks=False)
         detail=SessionDetail(session=SessionSummary(session_id=sid,project_name=req.project_name,project_slug=slug,created_at=now,updated_at=now),project_root=str(root),main_worktree=str(main),artifacts=[],runs=[])
         await self.db.write(lambda con: con.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?)",(sid,slug,req.project_name,"created",now.isoformat(),now.isoformat(),detail.model_dump_json())))
@@ -111,6 +116,8 @@ class Engine:
                 if STAGES.index(candidate) > STAGES.index(req.start_stage): start_stage=candidate
         effective_req=req.model_copy(update={"start_stage":start_stage})
         detail=await self.create_session(effective_req); rid=effective_req.resume_run_id or str(uuid4()); now=now_utc();
+        if rid in self.tasks and not self.tasks[rid].done():
+            raise RuntimeError("Run already active")
         self._run_usage[rid]=TokenUsage()
         run=RunSummary(run_id=rid,session_id=detail.session.session_id,status=RunStatus.running,current_stage=effective_req.start_stage,started_at=now)
         await self.db.write(lambda con: (con.execute("INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?,?)",(rid,detail.session.session_id,"running",effective_req.start_stage.value,now.isoformat(),None,run.usage.model_dump_json())), con.execute("UPDATE sessions SET status=?, updated_at=?, detail_json=? WHERE session_id=?",("running",now.isoformat(),detail.model_dump_json(),detail.session.session_id))))
@@ -237,11 +244,92 @@ class Engine:
             enforce_tool(worker.role, tool, path)
             if tool in {ToolName.write_file, ToolName.edit_file} and path:
                 await write_requires_lock(self.db, run_id, str(path), worker_id)
-            payload=ToolOutputPayload(call_id=call_id,stage=stage,success=True,result_text="{}",worker_id=worker_id)
+            result=await self._execute_local_worker_tool(worker, tool, arguments, sid, run_id, call_id)
+            text=json.dumps(result, ensure_ascii=False, sort_keys=True)
+            payload=ToolOutputPayload(call_id=call_id,stage=stage,success=True,result_text=text,display=ToolDisplay(kind="json",json=result),worker_id=worker_id)
         except PermissionError as e:
             payload=ToolOutputPayload(call_id=call_id,stage=stage,success=False,error=str(e) or "forbidden",worker_id=worker_id)
+        except Exception as e:
+            payload=ToolOutputPayload(call_id=call_id,stage=stage,success=False,error=str(e) or "tool failed",worker_id=worker_id)
         await self.emit(SSEEventType.tool_output,sid,run_id,payload)
         return payload.model_dump(mode="json")
+
+    def _worker_path(self, worker: Worker, path: str) -> pathlib.Path:
+        rel=sanitize_relative_path(path)
+        root=pathlib.Path(worker.worktree_path).expanduser().resolve(strict=False)
+        target=(root/rel).resolve(strict=False)
+        if target != root and root not in target.parents:
+            raise ValueError("path_rejected")
+        return target
+
+    async def _execute_local_worker_tool(self, worker: Worker, tool: ToolName, arguments: dict[str, JsonValue], sid: str, run_id: str, call_id: str) -> dict[str, JsonValue]:
+        name=tool.value if hasattr(tool,"value") else str(tool)
+        if name == ToolName.read_file.value:
+            path=self._worker_path(worker, str(arguments.get("path") or ""))
+            max_bytes=min(int(arguments.get("max_bytes") or 131_072), 1_048_576)
+            data=path.read_bytes()
+            return {"path": str(path.relative_to(pathlib.Path(worker.worktree_path).resolve(strict=False))), "content": data[:max_bytes].decode(errors="replace"), "truncated": len(data) > max_bytes}
+        if name == ToolName.write_file.value:
+            path=self._worker_path(worker, str(arguments.get("path") or ""))
+            content=str(arguments.get("content") or "")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            return {"path": str(path.relative_to(pathlib.Path(worker.worktree_path).resolve(strict=False))), "bytes": len(content.encode())}
+        if name == ToolName.edit_file.value:
+            path=self._worker_path(worker, str(arguments.get("path") or ""))
+            old=str(arguments.get("old") or arguments.get("old_string") or "")
+            new=str(arguments.get("new") or arguments.get("new_string") or "")
+            if not old:
+                raise ValueError("old_required")
+            count=int(arguments.get("count") or 1)
+            text=path.read_text()
+            updated=text.replace(old, new, count)
+            if updated == text:
+                raise ValueError("old_not_found")
+            path.write_text(updated)
+            replacements=text.count(old) if count == 0 else min(text.count(old), count)
+            return {"path": str(path.relative_to(pathlib.Path(worker.worktree_path).resolve(strict=False))), "replacements": replacements}
+        if name == ToolName.list_files.value:
+            path=self._worker_path(worker, str(arguments.get("path") or "."))
+            limit=min(int(arguments.get("limit") or 200), 1000)
+            entries=[]
+            for child in sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))[:limit]:
+                entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file"})
+            return {"path": str(path.relative_to(pathlib.Path(worker.worktree_path).resolve(strict=False))), "entries": entries}
+        if name == ToolName.search_code.value:
+            needle=str(arguments.get("query") or arguments.get("pattern") or "")
+            if not needle:
+                raise ValueError("query_required")
+            root=pathlib.Path(worker.worktree_path).expanduser().resolve(strict=False)
+            limit=min(int(arguments.get("limit") or 50), 200)
+            matches=[]
+            for p in root.rglob("*"):
+                if len(matches) >= limit: break
+                if not p.is_file() or any(part in {".git", ".nexussy"} for part in p.parts): continue
+                try: text=p.read_text(errors="replace")
+                except OSError: continue
+                for no, line in enumerate(text.splitlines(), start=1):
+                    if needle in line:
+                        matches.append({"path": str(p.relative_to(root)), "line": no, "text": line[:500]})
+                        break
+            return {"query": needle, "matches": matches, "truncated": len(matches) >= limit}
+        if name == ToolName.bash.value:
+            command=str(arguments.get("command") or "")
+            if not command.strip(): raise ValueError("command_empty")
+            if "\x00" in command or len(command) > 8000: raise ValueError("command_rejected")
+            await self.emit(SSEEventType.tool_progress,sid,run_id,{"call_id":call_id,"stage":StageName.develop.value,"worker_id":worker.worker_id,"message":"command started","percent":0})
+            argv=shlex.split(command, posix=True)
+            proc=await asyncio.create_subprocess_exec(*argv,cwd=worker.worktree_path,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env={"HOME":worker.worktree_path,"PATH":"/usr/local/bin:/usr/bin:/bin","SHELL":"/bin/sh","TERM":"dumb","LANG":os.environ.get("LANG","en_US.UTF-8"),"NEXUSSY_WORKTREE":worker.worktree_path},start_new_session=True)
+            try:
+                out,err=await asyncio.wait_for(proc.communicate(), timeout=min(float(arguments.get("timeout_s") or 30),120.0))
+            except asyncio.TimeoutError:
+                try: os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+                await proc.wait(); raise TimeoutError("command_timeout")
+            await self.emit(SSEEventType.tool_progress,sid,run_id,{"call_id":call_id,"stage":StageName.develop.value,"worker_id":worker.worker_id,"message":"command finished","percent":100})
+            cap=65_536
+            return {"exit_code":proc.returncode,"stdout":scrub_log(out[:cap].decode(errors="replace")),"stderr":scrub_log(err[:cap].decode(errors="replace")),"truncated":len(out)>cap or len(err)>cap}
+        raise ValueError(f"Unknown tool: {name}")
     async def _provider_text(self, st: StageName, sid: str, rid: str, prompt: str, selected_models, allow_mock: bool) -> str:
         model = (selected_models or {}).get(st.value) or self.config.providers.default_model
         stage_cfg = getattr(self.config.stages, st.value, None)

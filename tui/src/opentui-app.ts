@@ -58,6 +58,15 @@ function renderSidePanel(state:ChatUiState, width:number): string {
     "Activity",
     latest?.text ?? "idle",
     "",
+    "DevPlan",
+    ...(state.app.devplan.length ? state.app.devplan.slice(-3) : ["no anchors yet"]),
+    "",
+    "Usage",
+    `${state.app.usage.total_tokens} tok  $${state.app.usage.cost_usd.toFixed(4)}`,
+    "",
+    "Files",
+    ...(state.app.locks.length ? state.app.locks.slice(-3).map(lock => `${lock.worker_id}: ${lock.path}`) : ["no file activity"]),
+    "",
     ...overlay,
   ];
   return lines.map(line => clampLine(line, width)).join("\n");
@@ -89,6 +98,14 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
 
   let state = createInitialChatState(initial);
   let stopped = false;
+  const disposers: Array<() => void> = [];
+
+  const trackListener = (target:any, event:unknown, listener:unknown) => {
+    disposers.push(() => {
+      if (typeof target.off === "function") target.off(event, listener);
+      else if (typeof target.removeListener === "function") target.removeListener(event, listener);
+    });
+  };
 
   const root = renderer.root;
   root.flexDirection = "column";
@@ -199,6 +216,9 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    while (disposers.length) {
+      try { disposers.pop()?.(); } catch {}
+    }
     renderer.stop();
     renderer.destroy();
   };
@@ -223,12 +243,16 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
 
   async function streamCurrentRun() {
     if (!state.app.runId) return;
-    for await (const env of client.streamRun(state.app.runId)) {
-      state = reduceChatEvent(state, env);
-      render();
-      if (env.type === "done") break;
+    try {
+      for await (const env of client.streamRun(state.app.runId)) {
+        state = reduceChatEvent(state, env);
+        render();
+        if (env.type === "done") break;
+      }
+      setStatus(`run ${state.app.finalStatus ?? "finished"}`);
+    } catch (e) {
+      setStatus(`stream error: ${e instanceof Error ? e.message : String(e)}`);
     }
-    setStatus(`run ${state.app.finalStatus ?? "finished"}`);
   }
 
   const submit = (text:string) => {
@@ -251,8 +275,12 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
     })();
   };
 
-  input.on(InputRenderableEvents.INPUT, () => render());
-  input.on(InputRenderableEvents.ENTER, (value:string) => submit(value));
+  const onInput = () => render();
+  const onEnter = (value:string) => submit(value);
+  input.on(InputRenderableEvents.INPUT, onInput);
+  input.on(InputRenderableEvents.ENTER, onEnter);
+  trackListener(input, InputRenderableEvents.INPUT, onInput);
+  trackListener(input, InputRenderableEvents.ENTER, onEnter);
   input.onKeyDown = key => {
     if (key.name === "escape" && state.overlay !== "none") {
       state = closeOverlay(state);
@@ -267,20 +295,28 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
     }
   };
 
-  renderer.addInputHandler(sequence => {
+  const inputHandler = (sequence:string) => {
     if (sequence.includes("\u0003") || sequence.includes("\u0004")) {
       stop();
       return true;
     }
     return false;
-  });
+  };
+  renderer.addInputHandler(inputHandler);
+  disposers.push(() => { if (typeof (renderer as any).removeInputHandler === "function") (renderer as any).removeInputHandler(inputHandler); });
 
   renderer.on(CliRenderEvents.RESIZE, render);
-  renderer.on(CliRenderEvents.DESTROY, () => { stopped = true; });
+  trackListener(renderer, CliRenderEvents.RESIZE, render);
+  const onDestroy = () => { stopped = true; while (disposers.length) { try { disposers.pop()?.(); } catch {} } };
+  renderer.on(CliRenderEvents.DESTROY, onDestroy);
+  trackListener(renderer, CliRenderEvents.DESTROY, onDestroy);
   input.focus();
   render();
   renderer.start();
   input.focus();
 
-  await new Promise<void>(resolve => renderer.on(CliRenderEvents.DESTROY, resolve));
+  await new Promise<void>(resolve => {
+    renderer.on(CliRenderEvents.DESTROY, resolve);
+    trackListener(renderer, CliRenderEvents.DESTROY, resolve);
+  });
 }

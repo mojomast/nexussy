@@ -898,11 +898,15 @@ async def test_complete_persists_litellm_429(monkeypatch, tmp_path):
 async def test_git_worktree_lifecycle(tmp_path):
     repo = tmp_path / "repo"; base = await init_repo(str(repo))
     wt1, br1 = await create_worktree(str(repo), str(tmp_path / "workers"), "w1")
+    wt2, br2 = await create_worktree(str(repo), str(tmp_path / "workers"), "w2")
     Path(wt1, "a.txt").write_text("a")
+    Path(wt2, "b.txt").write_text("b")
     await commit_worker(wt1, "w1")
+    await commit_worker(wt2, "w2")
     assert (await merge_no_ff(str(repo), br1)).passed
+    assert (await merge_no_ff(str(repo), br2)).passed
     manifest = await extract_changed_files(str(repo), base, str(repo / ".nexussy" / "artifacts" / "changed-files"))
-    assert [f.path for f in manifest.files] == ["a.txt"]
+    assert [f.path for f in manifest.files] == ["a.txt", "b.txt"]
     await prune_worktrees(str(repo))
 
 
@@ -1548,6 +1552,33 @@ async def test_devplan_tasks_sidecar(tmp_path):
     assert "Build API" in tasks[0]["title"]
     sidecar = json.dumps([{"task_id":"T-999","title":"Sidecar wins","acceptance_criteria":"ok","files_allowed":["core/x.py"],"depends_on":[],"owner":"A","estimated_tokens":100}])
     assert _slice_devplan_tasks("# No tasks", sidecar)[0]["task_id"] == "T-999"
+
+
+@pytest.mark.asyncio
+async def test_phase_artifacts_use_devplan_task_content(tmp_path):
+    from nexussy.pipeline.stages import plan
+
+    db = Database(str(tmp_path / "state.db"))
+    await db.init()
+    engine = Engine(db, load_config())
+    root = tmp_path / "project"
+    root.mkdir()
+
+    async def provider_text(st, sid, run_id, prompt, selected_models, allow_mock):
+        return json.dumps([
+            {"task_id":"T-001","title":"Build API","acceptance_criteria":"passes tests","files_allowed":["core/nexussy/api/server.py"],"depends_on":[],"owner":"A","estimated_tokens":100},
+            {"task_id":"T-002","title":"Build UI","acceptance_criteria":"renders status","files_allowed":["tui/src/index.ts"],"depends_on":["T-001"],"owner":"B","estimated_tokens":100},
+        ])
+
+    engine._provider_text = provider_text
+    detail = types.SimpleNamespace(session=types.SimpleNamespace(session_id="sid"))
+    req = types.SimpleNamespace(description="build a service")
+    cp = types.SimpleNamespace(phase_count=2)
+    await plan.run(engine, req, detail, "run-phases", cp, str(root), {}, True)
+    rows = await db.read("SELECT phase_number, content_text FROM artifacts WHERE run_id=? AND kind='phase' ORDER BY phase_number", ("run-phases",))
+    assert "Build API" in rows[0]["content_text"]
+    assert "passes tests" in rows[0]["content_text"]
+    assert "Build UI" in rows[1]["content_text"]
 
 
 @pytest.mark.asyncio

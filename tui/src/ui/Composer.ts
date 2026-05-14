@@ -84,10 +84,18 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/new") return startNewRun(client, withHistory, rest.join(" "));
   if (cmd === "/resume" && rest[0]) { const app = await hydrateRunStatus(client, { ...withHistory.app, runId:rest[0], finalStatus:undefined }); return [{ ...withHistory, app, statusMessage:`resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }]; }
   if (cmd === "/secrets") { const secrets = await client.secrets() as any; return [{ ...withHistory, app:reduceSecrets(withHistory.app, secrets), overlay:"secrets" }, { message:"provider key status refreshed" }]; }
+  if (cmd === "/memory") return dataOverlay(withHistory, "Memory", await requireClientMethod(client.memory, "/memory").call(client, withHistory.app.sessionId), "memory loaded");
+  if (cmd === "/graph") return dataOverlay(withHistory, "Graph", await requireClientMethod(client.graph, "/graph").call(client, withHistory.app.sessionId, withHistory.app.runId), "graph loaded");
+  if (cmd === "/config") return dataOverlay(withHistory, "Config", await requireClientMethod(client.config, "/config").call(client), "config loaded");
+  if (cmd === "/events") {
+    if (!withHistory.app.runId) throw new Error("run_id is required for /events");
+    return dataOverlay(withHistory, "Events", await requireClientMethod(client.events, "/events").call(client, withHistory.app.runId, 0, 50), "events loaded");
+  }
   if (cmd === "/export") return [withHistory, { message:"exported displayed session data", html:renderPanels(withHistory.app).html }];
   if (!withHistory.app.runId) throw new Error("start a run first with plain text or /new DESCRIPTION");
   if (cmd === "/pause") { await client.pause(withHistory.app.runId, rest.join(" ") || "user"); return [{ ...withHistory, app:{ ...withHistory.app, paused:true }, statusMessage:"paused" }, { message:"paused" }]; }
   if (cmd === "/resume-run" || cmd === "/resume") { await client.resume(withHistory.app.runId); return [{ ...withHistory, app:{ ...withHistory.app, paused:false }, statusMessage:"resumed" }, { message:"resumed" }]; }
+  if (cmd === "/cancel") { const reason = rest.join(" ") || "user"; await requireClientMethod(client.cancel, "/cancel").call(client, withHistory.app.runId, reason); return [{ ...withHistory, app:{ ...withHistory.app, finalStatus:"cancelled" }, statusMessage:"cancelled" }, { message:`cancelled: ${reason}` }]; }
   if (cmd === "/stage") { const stage = rest[0] as StageName; if (!stages.has(stage)) throw new Error("invalid stage"); return [{ ...withHistory, overlay:"stages", statusMessage:`viewing ${stage}` }, { message:`viewing ${stage}; use /skip ${stage} <reason> to mutate the run` }]; }
   if (cmd === "/skip") { const stage = rest.shift() as StageName; const reason = rest.join(" "); if (!stage || !reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(withHistory.app.runId, stage, reason); return [{ ...withHistory, statusMessage:`skipped ${stage}` }, { message:`skipped ${stage}` }]; }
   if (cmd === "/spawn") { const role = rest.shift() as WorkerRole; if (!role || !roles.has(role)) throw new Error("invalid role"); const task = rest.join(" "); if (!task) throw new Error("task required"); await client.spawn({ run_id:withHistory.app.runId, role, task }); return [{ ...withHistory, statusMessage:"spawned" }, { message:"spawned" }]; }
@@ -95,6 +103,20 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/steer") return handleSteerCommand(client, withHistory, rest);
   if (cmd === "/escape") return [closeOverlay(withHistory), { message:"overlay closed" }];
   throw new Error(`unknown command ${cmd}`);
+}
+
+function requireClientMethod<T extends (...args:any[]) => unknown>(method:T|undefined, command:string): T {
+  if (!method) throw new Error(`core client does not support ${command}`);
+  return method;
+}
+
+function dataOverlay(state:ChatUiState, title:string, value:unknown, message:string): [ChatUiState, CommandOutcome] {
+  return [{ ...state, overlay:"data", dataPanel:{ title, lines:formatData(value) }, statusMessage:message }, { message }];
+}
+
+function formatData(value:unknown): string[] {
+  const json = JSON.stringify(value, null, 2) ?? "null";
+  return json.split("\n").slice(0, 120);
 }
 
 async function handleSteerCommand(client:ClientLike, state:ChatUiState, args:string[]): Promise<[ChatUiState, CommandOutcome]> {

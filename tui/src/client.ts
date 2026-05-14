@@ -66,20 +66,24 @@ export class CoreClient {
         const reader=(r.body as ReadableStream<Uint8Array>).getReader();
         const decoder=new TextDecoder();
         let buffer="";
-        while (true) {
-          const {done,value}=await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream:true });
-          const split = buffer.split(/\n\n+/);
-          buffer = split.pop() ?? "";
-          for (const raw of split) {
-            for (const frame of parseSSEFrames(raw + "\n\n")) {
-              const env=parseEnvelope(frame); reconnect=applyReconnect(reconnect, env, frame.retry ?? retryHeader); yield env; if(env.type==="done") sawDone=true;
+        try {
+          while (true) {
+            const {done,value}=await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream:true });
+            const split = buffer.split(/\n\n+/);
+            buffer = split.pop() ?? "";
+            for (const raw of split) {
+              for (const frame of parseSSEFrames(raw + "\n\n")) {
+                const env=parseEnvelope(frame); reconnect=applyReconnect(reconnect, env, frame.retry ?? retryHeader); yield env; if(env.type==="done") sawDone=true;
+              }
             }
           }
+          buffer += decoder.decode();
+          for (const frame of parseSSEFrames(buffer)) { const env=parseEnvelope(frame); reconnect=applyReconnect(reconnect, env, frame.retry ?? retryHeader); yield env; if(env.type==="done") sawDone=true; }
+        } finally {
+          reader.releaseLock();
         }
-        buffer += decoder.decode();
-        for (const frame of parseSSEFrames(buffer)) { const env=parseEnvelope(frame); reconnect=applyReconnect(reconnect, env, frame.retry ?? retryHeader); yield env; if(env.type==="done") sawDone=true; }
       } else {
         const text=await r.text();
         for(const f of parseSSEFrames(text)) { const env=parseEnvelope(f); reconnect=applyReconnect(reconnect, env, f.retry ?? retryHeader); yield env; if(env.type==="done") sawDone=true; }

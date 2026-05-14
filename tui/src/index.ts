@@ -1,6 +1,6 @@
 import { CoreClient, FixtureCoreClient } from "./client";
 import { CONTRACT_EVENT_FIXTURES, FIXTURE_RUN_ID } from "./fixtures";
-import { createState, reduceEvent, reduceStatusSnapshot } from "./state";
+import { createState, reduceConnectionError, reduceEvent, reduceStatusSnapshot } from "./state";
 import { loadOptionalPiRuntime, renderPanels } from "./renderer";
 import { createInterface } from "node:readline/promises";
 import { runSlash } from "./commands";
@@ -47,7 +47,7 @@ export function createPromptSession(input:NodeJS.ReadStream=process.stdin, outpu
     const waiters:Array<(value:string)=>void> = [];
     let buffer = "";
     input.setEncoding("utf8");
-    input.on("data", chunk => {
+    const onData = (chunk:Buffer|string) => {
       buffer += String(chunk);
       const parts = buffer.split(/\r?\n/);
       buffer = parts.pop() ?? "";
@@ -55,14 +55,15 @@ export function createPromptSession(input:NodeJS.ReadStream=process.stdin, outpu
         const waiter = waiters.shift();
         if (waiter) waiter(line); else lines.push(line);
       }
-    });
+    };
+    input.on("data", onData);
     input.resume();
     const nextLine = (prompt:string) => {
       output.write(prompt);
       if (lines.length) return Promise.resolve(lines.shift()!);
       return new Promise<string>(resolve => waiters.push(resolve));
     };
-    return { readLine:nextLine, readSecret:nextLine, close() { input.pause(); } };
+    return { readLine:nextLine, readSecret:nextLine, close() { input.off("data", onData); input.pause(); while (waiters.length) waiters.shift()?.(buffer); } };
   }
   const rl = createInterface({ input, output, terminal:Boolean(input.isTTY) });
   const originalWrite = (rl as any)._writeToOutput;
@@ -227,11 +228,16 @@ export async function startPipelineFromText(client:CoreClient, description:strin
 export async function streamRunToPanels(client:CoreClient, state:ReturnType<typeof createState>, output:NodeJS.WriteStream=process.stdout): Promise<ReturnType<typeof createState>> {
   let current = state;
   if (!current.runId) throw new Error("run_id is required to stream");
-  for await (const env of client.streamRun(current.runId)) {
-    current = reduceEvent(current, env);
-    const p = renderPanels(current);
-    output.write(`${p.left}\n---\n${p.center}\n---\n${p.right}\n`);
-    if (env.type === "done") break;
+  try {
+    for await (const env of client.streamRun(current.runId)) {
+      current = reduceEvent(current, env);
+      const p = renderPanels(current);
+      output.write(`${p.left}\n---\n${p.center}\n---\n${p.right}\n`);
+      if (env.type === "done") break;
+    }
+  } catch (e) {
+    current = reduceConnectionError(current, e);
+    output.write(`stream error: ${e instanceof Error ? e.message : String(e)}\n`);
   }
   return current;
 }
@@ -314,6 +320,11 @@ export async function main() {
     try { current = reduceStatusSnapshot(current, await client.status(runId)); }
     catch (e) { console.error(`warning: failed to fetch run status before streaming: ${e instanceof Error ? e.message : String(e)}`); }
   }
-  for await (const env of client.streamRun(runId)) { current = reduceEvent(current, env); console.clear(); const p=renderPanels(current); console.log(`${p.left}\n---\n${p.center}\n---\n${p.right}`); if(env.type==="done") break; }
+  try {
+    for await (const env of client.streamRun(runId)) { current = reduceEvent(current, env); console.clear(); const p=renderPanels(current); console.log(`${p.left}\n---\n${p.center}\n---\n${p.right}`); if(env.type==="done") break; }
+  } catch (e) {
+    current = reduceConnectionError(current, e);
+    console.error(`stream error: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 if (import.meta.main) main().catch(e => { console.error(e); process.exit(1); });

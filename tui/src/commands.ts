@@ -15,6 +15,9 @@ export async function runSlash(input:string, client:CoreClient, state:TuiState):
   if (cmd === "/export") return { local:true, message:"exported displayed session data", html:renderPanels(state).html };
   if (cmd === "/handoff") return { local:true, message:"handoff triggered by user" };
   if (cmd === "/secrets" || cmd === "/keys") { state.secrets = await client.secrets(); return { endpoint:"/secrets", method:"GET", message:"provider key status refreshed" }; }
+  if (cmd === "/config") { await client.config(); return { endpoint:"/config", method:"GET", message:"config loaded" }; }
+  if (cmd === "/memory") { await client.memory(state.sessionId); return { endpoint:"/memory", method:"GET", message:"memory loaded" }; }
+  if (cmd === "/graph") { await client.graph(state.sessionId, state.runId); return { endpoint:"/graph", method:"GET", message:"graph loaded" }; }
   if (cmd === "/set-key") {
     const name=rest[0];
     if(!name || !providerSecrets.has(name)) throw new Error("invalid provider key name");
@@ -26,6 +29,8 @@ export async function runSlash(input:string, client:CoreClient, state:TuiState):
   if (!run_id) throw new Error("run_id is required for remote slash commands");
   if (cmd === "/pause") { const reason=rest.join(" ")||"user"; await client.pause(run_id, reason); return {endpoint:"/pipeline/pause",method:"POST",message:reason}; }
   if (cmd === "/resume") { await client.resume(run_id); return {endpoint:"/pipeline/resume",method:"POST",message:"resumed"}; }
+  if (cmd === "/cancel") { const reason=rest.join(" ")||"user"; await client.cancel(run_id, reason); return {endpoint:"/pipeline/cancel",method:"POST",message:`cancelled: ${reason}`}; }
+  if (cmd === "/events") { await client.events(run_id); return {endpoint:"/events",method:"GET",message:"events loaded"}; }
   if (cmd === "/stage") { const stage=rest[0]; if(!stages.has(stage)) throw new Error("invalid stage"); return {local:true,message:`current stage view: ${stage}. Use /skip ${stage} <reason> to mutate the run.`}; }
   if (cmd === "/skip") { const stage=rest.shift(); const reason=rest.join(" "); if(!stage || !stages.has(stage)) throw new Error("invalid stage"); if(!reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(run_id, stage as StageName, reason); return {endpoint:"/pipeline/skip",method:"POST",message:`skipped ${stage}`}; }
   if (cmd === "/spawn") { const role=rest.shift(); if(!role||!roles.has(role)) throw new Error("invalid role"); const task=rest.join(" "); if(!task) throw new Error("task required"); await client.spawn({run_id, role:role as WorkerRole, task}); return {endpoint:"/swarm/spawn",method:"POST",message:task}; }

@@ -152,7 +152,7 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     html = response.text
-    for section in ["session-list", "stages", "stream-log", "interview-form", "interview-fields", "artifact-viewer", "pipeline-start-form", "design-context-pack"]:
+    for section in ["session-list", "stages", "stream-log", "interview-form", "interview-fields", "artifact-viewer", "pipeline-start-form", "design-context-pack", "auto-approve-interview", "start-new-session", "pause-run", "resume-run", "skip-stage", "cancel-run", "inject-run", "chat-cost"]:
         assert f'id="{section}"' in html
     for tab in ["chat", "pipeline", "sessions", "graph", "artifacts", "swarm", "devplan", "config", "secrets"]:
         assert f'id="{tab}"' in html
@@ -170,7 +170,7 @@ def test_all_required_tabs_include_static_render_targets_and_api_routes(client: 
     html = client.get("/").text
     expected = {
         "chat": ["chat-log"],
-        "pipeline": ["stages", "transitions", "interview-fields", "pipeline-start-form", "design-context-pack"],
+        "pipeline": ["stages", "transitions", "interview-fields", "pipeline-start-form", "design-context-pack", "pause-run", "resume-run", "skip-stage", "cancel-run", "inject-run"],
         "sessions": ["session-list", "prev-sessions", "next-sessions"],
         "graph": ["graph-viewer", "/api/graph"],
         "artifacts": ["artifact-viewer", "review-report"],
@@ -211,6 +211,9 @@ def test_zero_build_static_assets_are_served(client: TestClient) -> None:
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("application/javascript")
     assert "EventSource('/api/pipeline/runs/'" in script.text
+    assert "AbortController" in script.text
+    assert "renderGraph" in script.text
+    assert "injectWorker" in script.text
     assert "/pipeline/' + encodeURIComponent(sid) + '/interview/answer" in script.text
     assert style.status_code == 200
     assert style.headers["content-type"].startswith("text/css")
@@ -261,6 +264,38 @@ def test_api_proxy_injects_configured_api_key_when_client_header_absent() -> Non
     client = TestClient(create_app(core_base_url="http://core", core_transport=transport, core_api_key="configured-key"))
     payload = client.get("/api/echo").json()
     assert payload["x_api_key"] == "configured-key"
+
+
+def test_api_proxy_rejects_declared_oversized_body_without_reading() -> None:
+    core = Starlette(routes=[Route("/echo", echo, methods=["POST"])])
+    transport = httpx.ASGITransport(app=core)
+    client = TestClient(create_app(core_base_url="http://core", core_transport=transport))
+    response = client.post(
+        "/api/echo",
+        content=b"{}",
+        headers={"content-length": str(11 * 1024 * 1024)},
+    )
+    assert response.status_code == 413
+    assert response.json()["error_code"] == "payload_too_large"
+
+
+def test_api_proxy_handles_non_ascii_query_safely(client: TestClient) -> None:
+    response = client.get("/api/echo?name=%E2%9C%93&emoji=%F0%9F%9A%80")
+    assert response.status_code == 207
+    assert "name=" in response.json()["query"]
+
+
+def test_api_proxy_timeout_returns_retryable_gateway_error() -> None:
+    def raise_timeout(_: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("hung core")
+
+    client = TestClient(create_app(core_base_url="http://core", core_transport=httpx.MockTransport(raise_timeout)))
+    response = client.get("/api/health")
+    assert response.status_code == 504
+    payload = response.json()
+    assert payload["error_code"] == "provider_unavailable"
+    assert payload["retryable"] is True
+    assert "timed out" in payload["message"]
 
 
 def test_api_proxy_does_not_override_client_api_key() -> None:
@@ -513,9 +548,10 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           prepend(child) { this.children.unshift(child); this.innerHTML = child.innerHTML + this.innerHTML; }
         }
 
-        const ids = ['health','run-id','error-banner','stream-log','cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-fields','chat-log','pipeline-start-form','start-project-name','start-description','design-context-pack'];
+        const ids = ['health','run-id','error-banner','stream-log','cost','chat-cost','tool-rows','stages','transitions','worker-grid','file-lock-feed','worktree-status','devplan-content','config-editor','secret-list','secret-name','secret-value','load-config','save-config','load-secrets','set-secret','delete-secret','load-devplan','load-graph','graph-viewer','connect-stream','clear-log','load-artifact','artifact-kind','artifact-viewer','review-report','prev-sessions','next-sessions','session-list','pipeline-summary','interview-form','interview-fields','chat-log','pipeline-start-form','start-project-name','start-description','design-context-pack','auto-approve-interview','start-new-session','pause-run','resume-run','skip-stage','cancel-run','inject-message','inject-run'];
         const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
         elements['artifact-kind'].value = 'devplan';
+        elements['start-new-session'].checked = true;
         const document = {
           querySelector(selector) { if (!selector.startsWith('#')) return new Element(); const id = selector.slice(1); return elements[id] || (elements[id] = new Element(id)); },
           getElementById(id) { return elements[id] || null; },
@@ -575,6 +611,8 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
           assert(startCall, 'pipeline start not called');
           const startBody = JSON.parse(startCall.options.body);
           assert(startBody.metadata.design_context_pack === 'stripe', 'selected design pack not sent');
+          assert(startBody.auto_approve_interview === false, 'auto approve should default false');
+          assert(startBody.start_new_session === true, 'new session toggle not sent');
           elements['start-description'].value = 'Build a plain docs site';
           elements['design-context-pack'].value = 'none';
           await elements['pipeline-start-form'].onsubmit(event);

@@ -121,16 +121,26 @@ stages:
   interview:
     model: "openai/gpt-5.5-fast"
     max_retries: 3
+    answer_timeout_s: 3600
+    min_description_words: 50
   design:
     model: "openai/gpt-5.5-fast"
     max_retries: 3
+    context_pack: null
   validate:
     model: "openai/gpt-5.5-fast"
     max_iterations: 3
     max_retries: 2
+  validate_browser:
+    enabled: false
+    command: null
+    target_url: null
+    timeout_s: 60
+    failure_policy: "skip"
   plan:
     model: "openai/gpt-5.5-fast"
     max_retries: 3
+    devplan_task_validation: "repair"
   review:
     model: "openai/gpt-5.5-fast"
     max_iterations: 2
@@ -147,6 +157,7 @@ swarm:
   file_lock_timeout_s: 120
   file_lock_retry_ms: 250
   merge_strategy: "no_ff"
+  conflict_strategy: "ours"
 pi:
   command: "nexussy-pi"
   args: []

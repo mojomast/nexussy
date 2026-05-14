@@ -37,6 +37,35 @@ def _devplan_tasks_json(provider_text: str, devplan: str, validation: str) -> st
     return json.dumps([DevplanTask.model_validate(task).model_dump(mode="json") for task in fallback], indent=2)
 
 
+def _phase_body(phase_number: int, phase_count: int, devplan_tasks_json: str) -> str:
+    try:
+        tasks = [DevplanTask.model_validate(task) for task in json.loads(devplan_tasks_json)]
+    except Exception:
+        tasks = []
+    selected = [task for index, task in enumerate(tasks) if index % max(phase_count, 1) == phase_number - 1]
+    if not selected and tasks:
+        selected = tasks[:1]
+    task_lines = []
+    for task in selected:
+        task_lines.append(f"- [ ] {task.title} (`{task.task_id}`)")
+        if task.acceptance_criteria:
+            task_lines.append(f"  Acceptance: {task.acceptance_criteria}")
+        if task.files_allowed:
+            task_lines.append(f"  Files: {', '.join(task.files_allowed)}")
+    if not task_lines:
+        task_lines.append(f"- [ ] Complete phase {phase_number:03d} implementation tasks from devplan.md")
+    return "\n".join([
+        f"# Phase {phase_number:03d}",
+        "<!-- PHASE_TASKS_START -->",
+        *task_lines,
+        "<!-- PHASE_TASKS_END -->",
+        "<!-- PHASE_PROGRESS_START -->",
+        "- pending",
+        "<!-- PHASE_PROGRESS_END -->",
+        "",
+    ])
+
+
 async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, **kwargs) -> list[ArtifactRef]:
     sid = detail.session.session_id
     st = StageName.plan
@@ -80,5 +109,5 @@ Own ops.
 """
     refs = [await engine._save_art(rid, sid, root, "devplan", devplan), await engine._save_art(rid, sid, root, "devplan_tasks", devplan_tasks_json), await engine._save_art(rid, sid, root, "handoff", handoff)]
     for i in range(1, cp.phase_count + 1):
-        refs.append(await engine._save_art(rid, sid, root, "phase", f"# Phase {i:03d}\n<!-- PHASE_TASKS_START -->\n- [ ] Task {i}\n<!-- PHASE_TASKS_END -->\n<!-- PHASE_PROGRESS_START -->\n- pending\n<!-- PHASE_PROGRESS_END -->\n", i))
+        refs.append(await engine._save_art(rid, sid, root, "phase", _phase_body(i, cp.phase_count, devplan_tasks_json), i))
     return refs

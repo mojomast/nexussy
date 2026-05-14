@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, hashlib, shutil, subprocess
+import asyncio, hashlib, os, shutil, signal, subprocess
 from pathlib import Path
 
 from nexussy.api.schemas import ChangedFile, ChangedFilesManifest, MergeReport
@@ -12,11 +12,15 @@ async def _git(repo: Path, *args: str, timeout: float = 60.0) -> str:
         cwd=repo,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await proc.wait()
         raise TimeoutError(f"git {' '.join(args)} timed out after {timeout}s")
     if proc.returncode != 0:

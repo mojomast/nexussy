@@ -50,6 +50,12 @@ cfg_text=$(tr '\n' ' ' < "$CFG_HOME/nexussy.yaml")
 env_text=$(tr '\n' ' ' < "$CFG_HOME/.env")
 assert_contains "$cfg_text" "# user edit" "config rerun preserves edits"
 assert_contains "$env_text" "USER_SENTINEL=kept" "env rerun preserves edits"
+assert_contains "$cfg_text" "answer_timeout_s: 3600" "config includes interview timeout key"
+assert_contains "$cfg_text" "min_description_words: 50" "config includes autoskip confidence key"
+assert_contains "$cfg_text" "context_pack: null" "config includes design context pack key"
+assert_contains "$cfg_text" "validate_browser:" "config includes optional browser validation section"
+assert_contains "$cfg_text" "devplan_task_validation: \"repair\"" "config includes devplan task validation key"
+assert_contains "$cfg_text" "conflict_strategy: \"ours\"" "config includes merge conflict strategy key"
 
 # Systemd user units are generated only for --systemd-user and reruns preserve
 # local edits instead of overwriting operator customizations.

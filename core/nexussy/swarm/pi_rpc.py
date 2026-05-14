@@ -99,6 +99,9 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     command_parts = _command_parts(config.pi.command)
     command = command_parts[0]
     args = command_parts[1:] + list(config.pi.args)
+    bundled_disabled = os.environ.get("NEXUSSY_DISABLE_BUNDLED_PI") == "1"
+    if bundled_disabled and command in {"nexussy-pi", "local-pi-worker"}:
+        raise RuntimeError(f"missing Pi CLI: {config.pi.command}")
     default_model = getattr(config.providers, "default_model", None) or getattr(config.stages.develop, "model", "openai/gpt-5.5-fast")
     env.setdefault("PI_DEFAULT_MODEL", default_model)
     if command == "pi":
@@ -111,7 +114,7 @@ async def spawn_pi_worker(config, run_id: str, worker_id: str, role: str, projec
     try:
         proc = await asyncio.create_subprocess_exec(command, *args, cwd=worktree, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
     except FileNotFoundError as e:
-        if command in {"pi", "nexussy-pi", "local-pi-worker"} and os.environ.get("NEXUSSY_DISABLE_BUNDLED_PI") != "1":
+        if command in {"pi", "nexussy-pi", "local-pi-worker"} and not bundled_disabled:
             command = sys.executable
             args = ["-m", "nexussy.swarm.local_pi_worker"]
             package_root = str(pathlib.Path(__file__).resolve().parents[2])

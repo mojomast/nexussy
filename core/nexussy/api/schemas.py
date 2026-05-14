@@ -78,12 +78,14 @@ class ArtifactRef(StrictModel):
         return sanitize_relative_path(v)
 class ToolDisplay(StrictModel):
     kind:Literal["text","json","diff","table","tree","markdown"]="text"; title:str|None=None; text:str|None=None; language:str|None=None; json:JsonValue|None=None; truncated:bool=False
+class ContentDeltaPayload(StrictModel):
+    message_id:str; stage:StageName; worker_id:str|None=None; role:str; delta:str; final:bool=False
 class ToolCallPayload(StrictModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True, strict=True)
     call_id:str; stage:StageName; tool_name:str; arguments:dict[str,JsonValue]=Field(default_factory=dict); worker_id:str|None=None
 class ToolOutputPayload(StrictModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True, strict=True)
-    call_id:str; stage:StageName; success:bool; result_text:str|None=None; error:str|None=None; worker_id:str|None=None
+    call_id:str; stage:StageName; success:bool; result_text:str|None=None; error:str|ErrorResponse|None=None; display:ToolDisplay|None=None; worker_id:str|None=None
     @model_validator(mode="after")
     def result_or_error(self):
         if self.success and self.result_text is None:

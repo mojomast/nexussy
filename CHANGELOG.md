@@ -5,6 +5,8 @@
 ### Added
 
 - Sprint 5 adds optional browser validation after `develop` via an externally installed `browser-harness` command. It is disabled by default, adds no required Python packages, writes bounded `validate_browser_report` artifacts, preserves the six-stage default pipeline, and includes fake-only core coverage plus launcher `doctor` diagnostics.
+- Deep code review fixes close the critical/high pass across core, TUI, web, and root docs: worker tool execution, shell-safe local worker bash, graph data, interview/SSE robustness, TUI stream cleanup and commands, web proxy limits/timeouts, dashboard chat/graph/control surfaces, generated phase task content, installer config defaults, and regression coverage.
+- Installer-generated `nexussy.yaml` now includes the newer safe-default feature keys for manual interview timeouts, auto-skip confidence, design context packs, devplan task validation, merge conflict policy, and optional browser validation.
 - Graphify-style interview RAG now builds and reuses a lightweight stdlib project graph cache, injects compressed found/inferred context into interview prompts, and keeps prompt payloads bounded.
 - Permission manifests now govern worker role capabilities across core, local Pi tools, SSE tool-output denials, and role-aware API/MCP spawn paths.
 - Design context packs add built-in Stripe, Linear, and Minimal guidance with per-run selection from core config, TUI `/new --design-pack`, and the web dashboard start form.

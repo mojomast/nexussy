@@ -37,6 +37,21 @@ HOP_BY_HOP_HEADERS = {
     "host",
     "content-length",
 }
+MAX_PROXY_BODY_BYTES = int(os.getenv("NEXUSSY_WEB_MAX_BODY_BYTES", str(10 * 1024 * 1024)))
+PROXY_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+BODY_METHODS = {"POST", "PUT", "PATCH"}
+CSP = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+    ]
+)
 
 
 def _core_base_url() -> str:
@@ -82,6 +97,21 @@ def _response_headers(response: httpx.Response) -> dict[str, str]:
     }
 
 
+def _security_headers() -> dict[str, str]:
+    """Browser mitigations for the trusted local dashboard proxy.
+
+    The web proxy intentionally injects a configured core API key when browser
+    requests lack one so EventSource can reach authenticated core SSE routes.
+    Keep the dashboard zero-build and same-origin only, and block framing/base
+    URI abuse to reduce the blast radius of any future DOM bug.
+    """
+    return {
+        "Content-Security-Policy": CSP,
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
+
+
 def _json_error(status_code: int, code: str, message: str, *, retryable: bool = False) -> Response:
     """Return public ErrorResponse JSON for proxy-layer failures only."""
     return Response(
@@ -109,20 +139,36 @@ def _client_for(request: Request) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         base_url=request.app.state.core_base_url,
         transport=transport,
-        timeout=None,
+        timeout=PROXY_TIMEOUT,
         follow_redirects=False,
     )
 
 
 def _upstream_path(request: Request, path: str) -> str:
     """Build upstream path while preserving duplicate query keys and ordering."""
-    query = request.scope.get("query_string", b"").decode("ascii")
+    query = request.url.query
     return f"/{path}?{query}" if query else f"/{path}"
+
+
+async def _bounded_body(request: Request) -> bytes:
+    if request.method.upper() not in BODY_METHODS:
+        return b""
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_PROXY_BODY_BYTES:
+                raise ValueError
+        except ValueError as exc:
+            raise RuntimeError("Payload too large") from exc
+    body = await request.body()
+    if len(body) > MAX_PROXY_BODY_BYTES:
+        raise RuntimeError("Payload too large")
+    return body
 
 
 async def dashboard(_: Request) -> HTMLResponse:
     template = resources.files("nexussy_web").joinpath("templates/index.html")
-    return HTMLResponse(template.read_text(encoding="utf-8"))
+    return HTMLResponse(template.read_text(encoding="utf-8"), headers=_security_headers())
 
 
 async def static_asset(request: Request) -> Response:
@@ -132,33 +178,58 @@ async def static_asset(request: Request) -> Response:
     if filename not in allowed:
         return _json_error(404, "not_found", "Static asset not found")
     asset = resources.files("nexussy_web").joinpath("static", filename)
-    return Response(asset.read_bytes(), media_type=allowed[filename])
+    return Response(asset.read_bytes(), media_type=allowed[filename], headers=_security_headers())
 
 
 async def proxy_api(request: Request) -> Response:
     """Proxy every non-SSE `/api/*` request to core unchanged."""
     path = request.path_params["path"]
-    body = await request.body()
     try:
-        async with _client_for(request) as client:
-            upstream = await client.request(
-                request.method,
-                _upstream_path(request, path),
-                content=body,
-                headers=_forward_headers(request),
-            )
+        body = await _bounded_body(request)
+    except RuntimeError:
+        return _json_error(413, "payload_too_large", "Payload too large")
+    try:
+        client = _client_for(request)
+        upstream_request = client.build_request(
+            request.method,
+            _upstream_path(request, path),
+            content=body,
+            headers=_forward_headers(request),
+        )
+        upstream = await client.send(upstream_request, stream=True)
+    except httpx.TimeoutException as exc:
+        if "client" in locals():
+            await client.aclose()
+        return _json_error(
+            504,
+            "provider_unavailable",
+            f"Core API timed out: {exc.__class__.__name__}",
+            retryable=True,
+        )
     except httpx.RequestError as exc:
+        if "client" in locals():
+            await client.aclose()
         return _json_error(
             502,
             "provider_unavailable",
             f"Core API unavailable: {exc.__class__.__name__}",
             retryable=True,
         )
-    return Response(
-        upstream.content,
+    async def stream() -> AsyncIterator[bytes]:
+        async for chunk in upstream.aiter_raw():
+            if chunk:
+                yield chunk
+
+    async def cleanup() -> None:
+        await upstream.aclose()
+        await client.aclose()
+
+    return StreamingResponse(
+        stream(),
         status_code=upstream.status_code,
         headers=_response_headers(upstream),
         media_type=upstream.headers.get("content-type"),
+        background=BackgroundTask(cleanup),
     )
 
 
@@ -173,6 +244,14 @@ async def proxy_sse(request: Request) -> Response:
     )
     try:
         upstream = await client.send(upstream_request, stream=True)
+    except httpx.TimeoutException as exc:
+        await client.aclose()
+        return _json_error(
+            504,
+            "provider_unavailable",
+            f"Core SSE timed out: {exc.__class__.__name__}",
+            retryable=True,
+        )
     except httpx.RequestError as exc:
         await client.aclose()
         return _json_error(

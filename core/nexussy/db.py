@@ -13,6 +13,7 @@ upgrades, so each migration must be safe after `CREATE TABLE IF NOT EXISTS`.
 
 import asyncio, json, pathlib, sqlite3, threading
 from datetime import datetime, timezone
+from typing import Any
 
 CURRENT_SCHEMA_VERSION = 3
 
@@ -193,7 +194,13 @@ class _ReadPool:
     def acquire(self):
         with self._lock:
             if self._pool:
-                return self._pool.pop()
+                con = self._pool.pop()
+                try:
+                    con.execute("SELECT 1").fetchone()
+                    return con
+                except sqlite3.Error:
+                    try: con.close()
+                    except Exception: pass
         return self._new_conn()
 
     def release(self, con):
@@ -259,6 +266,10 @@ class Database:
                     try: con.rollback()
                     except Exception: pass
                     await asyncio.sleep(self.retry*(2**i))
+                except sqlite3.DatabaseError:
+                    try: con.rollback()
+                    except Exception: pass
+                    raise
                 finally:
                     try:
                         if con is not None: con.close()
@@ -302,7 +313,7 @@ class Database:
             _add_usage(totals, item["run_total"])
         return {"runs": result_runs, "totals": totals}
 
-    async def _cost_analytics_for_run(self, run: dict) -> dict:
+    async def _cost_analytics_for_run(self, run: dict) -> dict[str, Any]:
         rid = run["run_id"]
         stages = await self.read("SELECT stage, status, attempt, started_at, finished_at FROM stage_runs WHERE run_id=?", (rid,))
         stages = sorted(stages, key=lambda row: _stage_sort_key(row["stage"]))

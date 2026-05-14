@@ -187,12 +187,15 @@ projects_dir: "~/nexussy-projects"
 core:
   host: "127.0.0.1"
   port: 7771
+  cors_allow_origins: ["http://127.0.0.1:7772"]
 web:
   host: "127.0.0.1"
   port: 7772
+  core_base_url: "http://127.0.0.1:7771"
 auth:
   enabled: false
   api_key_env: "NEXUSSY_API_KEY"
+  header_name: "X-API-Key"
 database:
   global_path: "~/.nexussy/state.db"
   project_relative_path: ".nexussy/state.db"
@@ -210,16 +213,26 @@ stages:
   interview:
     model: "openai/gpt-5.5-fast"
     max_retries: 3
+    answer_timeout_s: 3600
+    min_description_words: 50
   design:
     model: "openai/gpt-5.5-fast"
     max_retries: 3
+    context_pack: null
   validate:
     model: "openai/gpt-5.5-fast"
     max_iterations: 3
     max_retries: 2
+  validate_browser:
+    enabled: false
+    command: null
+    target_url: null
+    timeout_s: 60
+    failure_policy: "skip"
   plan:
     model: "openai/gpt-5.5-fast"
     max_retries: 3
+    devplan_task_validation: "repair"
   review:
     model: "openai/gpt-5.5-fast"
     max_iterations: 2
@@ -236,9 +249,10 @@ swarm:
   file_lock_timeout_s: 120
   file_lock_retry_ms: 250
   merge_strategy: "no_ff"
+  conflict_strategy: "ours"
 pi:
-  command: "pi"
-  args: ["--rpc"]
+  command: "nexussy-pi"
+  args: []
   startup_timeout_s: 30
   shutdown_timeout_s: 10
   max_stdout_line_bytes: 1048576
@@ -794,14 +808,50 @@ Every schema in this section MUST be implemented in `core/nexussy/api/schemas.py
 | `max_retries` | int | yes | `3` |
 | `max_iterations` | int | no | `null` |
 
+#### `InterviewStageConfig`
+
+| Field | Type | Required | Default |
+|---|---|---:|---|
+| `model` | `ModelString` | yes | providers default |
+| `max_retries` | int | yes | `3` |
+| `answer_timeout_s` | int | yes | `3600` |
+| `min_description_words` | int | yes | `50` |
+
+#### `DesignStageConfig`
+
+| Field | Type | Required | Default |
+|---|---|---:|---|
+| `model` | `ModelString` | yes | providers default |
+| `max_retries` | int | yes | `3` |
+| `context_pack` | enum `stripe|linear|minimal` or null | no | `null` |
+
+#### `ValidateBrowserStageConfig`
+
+| Field | Type | Required | Default |
+|---|---|---:|---|
+| `enabled` | bool | yes | `false` |
+| `command` | string or null | no | `null` |
+| `target_url` | string or null | no | `null` |
+| `timeout_s` | int | yes | `60` |
+| `failure_policy` | enum `skip|fail` | yes | `skip` |
+
+#### `PlanStageConfig`
+
+| Field | Type | Required | Default |
+|---|---|---:|---|
+| `model` | `ModelString` | yes | providers default |
+| `max_retries` | int | yes | `3` |
+| `devplan_task_validation` | enum `strict|repair|none` | yes | `repair` |
+
 #### `StagesConfig`
 
 | Field | Type | Required | Default |
 |---|---|---:|---|
-| `interview` | `StageModelConfig` | yes | default model, 3 retries |
-| `design` | `StageModelConfig` | yes | default model, 3 retries |
+| `interview` | `InterviewStageConfig` | yes | default model, 3 retries, 3600s answer timeout, 50-word auto-skip confidence threshold |
+| `design` | `DesignStageConfig` | yes | default model, 3 retries, no design pack |
 | `validate` | `StageModelConfig` | yes | default model, 2 retries, 3 iterations |
-| `plan` | `StageModelConfig` | yes | default model, 3 retries |
+| `validate_browser` | `ValidateBrowserStageConfig` | yes | disabled optional browser validation |
+| `plan` | `PlanStageConfig` | yes | default model, 3 retries, repair task sidecar validation |
 | `review` | `StageModelConfig` | yes | default model, 2 retries, 2 iterations |
 | `develop` | `DevelopStageConfig` | yes | defaults |
 
@@ -824,13 +874,14 @@ Every schema in this section MUST be implemented in `core/nexussy/api/schemas.py
 | `file_lock_timeout_s` | int | yes | `120` |
 | `file_lock_retry_ms` | int | yes | `250` |
 | `merge_strategy` | enum `no_ff|squash` | yes | `no_ff` |
+| `conflict_strategy` | enum `ours|diff3|abort` | yes | `ours` |
 
 #### `PiConfig`
 
 | Field | Type | Required | Default |
 |---|---|---:|---|
-| `command` | string | yes | `pi` |
-| `args` | list[string] | yes | `["--rpc"]` |
+| `command` | string | yes | `nexussy-pi` |
+| `args` | list[string] | yes | `[]` |
 | `startup_timeout_s` | int | yes | `30` |
 | `shutdown_timeout_s` | int | yes | `10` |
 | `max_stdout_line_bytes` | int | yes | `1048576` |
@@ -1579,7 +1630,7 @@ D is done only when all criteria pass:
 
 ### 27.2 Config Keys
 
-`version`, `home_dir`, `projects_dir`, `core.host`, `core.port`, `core.cors_allow_origins`, `web.host`, `web.port`, `web.core_base_url`, `auth.enabled`, `auth.api_key_env`, `auth.header_name`, `database.global_path`, `database.project_relative_path`, `database.wal_enabled`, `database.busy_timeout_ms`, `database.write_retry_count`, `database.write_retry_base_ms`, `providers.default_model`, `providers.allow_fallback`, `providers.request_timeout_s`, `providers.max_retries`, `providers.retry_base_ms`, `stages.interview.model`, `stages.interview.max_retries`, `stages.design.model`, `stages.design.max_retries`, `stages.validate.model`, `stages.validate.max_iterations`, `stages.validate.max_retries`, `stages.plan.model`, `stages.plan.max_retries`, `stages.review.model`, `stages.review.max_iterations`, `stages.review.max_retries`, `stages.develop.model`, `stages.develop.orchestrator_model`, `stages.develop.max_retries`, `swarm.max_workers`, `swarm.default_worker_count`, `swarm.worker_task_timeout_s`, `swarm.worker_start_timeout_s`, `swarm.file_lock_timeout_s`, `swarm.file_lock_retry_ms`, `swarm.merge_strategy`, `pi.command`, `pi.args`, `pi.startup_timeout_s`, `pi.shutdown_timeout_s`, `pi.max_stdout_line_bytes`, `sse.heartbeat_interval_s`, `sse.client_queue_max_events`, `sse.replay_max_events`, `sse.retry_ms`, `security.scrub_logs`, `security.reject_symlink_escape`, `security.keyring_service`, `logging.level`, `logging.core_log_file`, `logging.web_log_file`, `logging.tui_log_file`.
+`version`, `home_dir`, `projects_dir`, `core.host`, `core.port`, `core.cors_allow_origins`, `web.host`, `web.port`, `web.core_base_url`, `auth.enabled`, `auth.api_key_env`, `auth.header_name`, `database.global_path`, `database.project_relative_path`, `database.wal_enabled`, `database.busy_timeout_ms`, `database.write_retry_count`, `database.write_retry_base_ms`, `providers.default_model`, `providers.allow_fallback`, `providers.request_timeout_s`, `providers.max_retries`, `providers.retry_base_ms`, `stages.interview.model`, `stages.interview.max_retries`, `stages.interview.answer_timeout_s`, `stages.interview.min_description_words`, `stages.design.model`, `stages.design.max_retries`, `stages.design.context_pack`, `stages.validate.model`, `stages.validate.max_iterations`, `stages.validate.max_retries`, `stages.validate_browser.enabled`, `stages.validate_browser.command`, `stages.validate_browser.target_url`, `stages.validate_browser.timeout_s`, `stages.validate_browser.failure_policy`, `stages.plan.model`, `stages.plan.max_retries`, `stages.plan.devplan_task_validation`, `stages.review.model`, `stages.review.max_iterations`, `stages.review.max_retries`, `stages.develop.model`, `stages.develop.orchestrator_model`, `stages.develop.max_retries`, `swarm.max_workers`, `swarm.default_worker_count`, `swarm.worker_task_timeout_s`, `swarm.worker_start_timeout_s`, `swarm.file_lock_timeout_s`, `swarm.file_lock_retry_ms`, `swarm.merge_strategy`, `swarm.conflict_strategy`, `pi.command`, `pi.args`, `pi.startup_timeout_s`, `pi.shutdown_timeout_s`, `pi.max_stdout_line_bytes`, `sse.heartbeat_interval_s`, `sse.client_queue_max_events`, `sse.replay_max_events`, `sse.retry_ms`, `security.scrub_logs`, `security.reject_symlink_escape`, `security.keyring_service`, `logging.level`, `logging.core_log_file`, `logging.web_log_file`, `logging.tui_log_file`.
 
 ### 27.3 Ports
 

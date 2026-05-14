@@ -29,8 +29,18 @@ def sanitize_relative_path(path: str) -> str:
 
 def sanitize_path(path: str, allowed_roots: list[str], reject_symlink_escape: bool = True) -> pathlib.Path:
     raw = pathlib.Path(path).expanduser()
-    resolved = raw.resolve(strict=False)
     roots = [pathlib.Path(r).expanduser().resolve(strict=False) for r in allowed_roots]
+    if reject_symlink_escape:
+        cur = raw if raw.is_absolute() else pathlib.Path.cwd() / raw
+        existing_parts = []
+        for part in cur.parts:
+            existing_parts.append(part)
+            candidate = pathlib.Path(*existing_parts)
+            if candidate.exists() and candidate.is_symlink():
+                real = candidate.resolve(strict=True)
+                if not any(real == root or root in real.parents for root in roots):
+                    raise ValueError("path_rejected")
+    resolved = raw.resolve(strict=False)
     if not any(resolved == root or root in resolved.parents for root in roots):
         raise ValueError("path_rejected")
     if reject_symlink_escape and raw.exists():

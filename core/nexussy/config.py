@@ -30,6 +30,9 @@ def _set(d, path, val):
     cur=d
     for p in path[:-1]: cur=cur.setdefault(p,{})
     raw = str(val)
+    stripped = raw.strip()
+    if raw != stripped and (stripped.lower() in ("true", "false") or stripped.replace(".", "", 1).isdigit()):
+        raise ValueError("environment value contains surrounding whitespace")
     if path == ("core", "cors_allow_origins"):
         val = [item.strip() for item in raw.split(",") if item.strip()]
     elif raw.lower() in ("true", "false"):

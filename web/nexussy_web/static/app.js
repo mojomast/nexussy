@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const POLL_MS = 5000;
+const API_TIMEOUT_MS = 10000;
 let source = null;
 let sessionOffset = 0;
 let activeRunId = localStorage.getItem('nexussy.runId') || '';
@@ -13,8 +14,23 @@ function escapeHtml(value) {
 function append(id, html) {
   const el = document.createElement('div');
   el.className = 'event';
-  el.innerHTML = html;
+  const text = String(html ?? '');
+  el.textContent = text;
+  // Keep older DOM smoke fakes observable while never appending raw markup.
+  el.innerHTML = escapeHtml(text);
   $(id).prepend(el);
+}
+
+function clear(el) {
+  if (typeof el.replaceChildren === 'function') {
+    el.replaceChildren();
+  } else if (typeof el.removeChild === 'function') {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  } else if (Array.isArray(el.children)) {
+    el.children.length = 0;
+  }
+  el.textContent = '';
+  el.innerHTML = '';
 }
 
 function reportError(scope, error) {
@@ -24,7 +40,19 @@ function reportError(scope, error) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch('/api' + path, options);
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const canTimeout = typeof setTimeout === 'function' && typeof clearTimeout === 'function';
+  const timeoutId = canTimeout && controller ? setTimeout(() => controller.abort(), API_TIMEOUT_MS) : null;
+  let response;
+  try {
+    const fetchOptions = controller ? { ...options, signal: options.signal || controller.signal } : options;
+    response = await fetch('/api' + path, fetchOptions);
+  } catch (error) {
+    if (error && error.name === 'AbortError') throw new Error('request timed out');
+    throw error;
+  } finally {
+    if (canTimeout) clearTimeout(timeoutId);
+  }
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
@@ -78,7 +106,7 @@ function normalizeStatus(body) {
 
 async function loadSessions() {
   const rows = normalizeSessions(await api(`/sessions?limit=12&offset=${sessionOffset}`));
-  $('#session-list').innerHTML = '';
+  clear($('#session-list'));
   rows.forEach((session) => {
     const id = session.session_id || session.id || '';
     const runId = session.last_run_id || session.run_id || session.latest_run_id || '';
@@ -110,12 +138,13 @@ function projectNameFromDescription(description) {
 async function startPipelineFromForm(event) {
   event.preventDefault();
   const description = $('#start-description').value.trim();
-  if (!description) return alert('Describe what nexussy should build.');
+  if (!description) return reportError('pipeline start failed', 'Describe what nexussy should build.');
   const pack = $('#design-context-pack').value;
   const body = {
     project_name: $('#start-project-name').value.trim() || projectNameFromDescription(description),
     description,
-    auto_approve_interview: true,
+    auto_approve_interview: $('#auto-approve-interview').checked === true,
+    start_new_session: $('#start-new-session').checked !== false,
   };
   if (pack && pack !== 'none') body.metadata = { design_context_pack: pack };
   const started = await api('/pipeline/start', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -153,6 +182,17 @@ function worker(payload) {
   }
   el.className = 'card worker';
   el.innerHTML = `<b>${escapeHtml(id)}</b><p>${escapeHtml(payload.role || '')} / ${escapeHtml(payload.status || '')}</p><p>${escapeHtml(payload.task_title || 'idle')}</p><small>${escapeHtml(payload.worktree_path || '')}</small>`;
+  const controls = document.createElement('div');
+  controls.className = 'row';
+  const inject = document.createElement('button');
+  inject.textContent = 'Inject';
+  inject.onclick = () => injectWorker(id);
+  const stop = document.createElement('button');
+  stop.textContent = 'Stop';
+  stop.onclick = () => stopWorker(id);
+  controls.append(inject);
+  controls.append(stop);
+  el.append(controls);
 }
 
 function toolRow(type, payload) {
@@ -216,9 +256,14 @@ function handleEvent(ev) {
   const type = ev.type || data.type;
   const payload = data.payload || data;
   append('#stream-log', `<b>${escapeHtml(type)}</b> <span class="muted">${escapeHtml(ev.lastEventId || '')}</span><pre>${escapeHtml(ev.data || '')}</pre>`);
+  renderChatEvent(type, payload, ev.lastEventId || '');
   if (payload.session_id) selectSession(payload.session_id, payload.run_id || data.run_id || activeRunId);
   if (data.run_id || payload.run_id) selectSession(activeSessionId, data.run_id || payload.run_id);
-  if (type === 'cost_update') $('#cost').textContent = '$' + Number(payload.cost_usd || 0).toFixed(4);
+  if (type === 'cost_update') {
+    const total = '$' + Number(payload.cost_usd || payload.total_cost_usd || 0).toFixed(4);
+    $('#cost').textContent = total;
+    $('#chat-cost').textContent = total;
+  }
   if (['tool_call', 'tool_output', 'tool_progress'].includes(type)) toolRow(type, payload);
   if (type === 'stage_transition') transition(payload);
   if (type === 'stage_status') stage(payload);
@@ -230,12 +275,32 @@ function handleEvent(ev) {
 
 function connect() {
   const runId = $('#run-id').value.trim() || activeRunId;
-  if (!runId) return alert('enter run id');
+  if (!runId) return reportError('stream connect failed', 'enter run id');
   selectSession(activeSessionId, runId);
   if (source) source.close();
   source = new EventSource('/api/pipeline/runs/' + encodeURIComponent(runId) + '/stream');
   ['heartbeat','run_started','content_delta','tool_call','tool_output','tool_progress','stage_transition','stage_status','checkpoint_saved','artifact_updated','worker_spawned','worker_status','worker_task','worker_stream','file_claimed','file_released','file_lock_waiting','git_event','blocker_created','blocker_resolved','cost_update','pause_state_changed','pipeline_error','done'].forEach((type) => source.addEventListener(type, handleEvent));
+  source.onmessage = handleEvent;
+  source.addEventListener('done', () => source.close());
   source.onerror = () => reportError('stream unavailable/auth/malformed SSE', 'EventSource reconnecting; core will replay according to browser Last-Event-ID handling.');
+}
+
+function renderChatEvent(type, payload, eventId) {
+  const important = ['content_delta', 'tool_call', 'tool_output', 'tool_progress', 'artifact_updated', 'pipeline_error', 'cost_update', 'worker_stream'];
+  if (!important.includes(type)) return;
+  const row = document.createElement('div');
+  row.className = 'event chat-event ' + type;
+  const label = document.createElement('b');
+  label.textContent = type;
+  const meta = document.createElement('span');
+  meta.className = 'muted';
+  meta.textContent = eventId ? ' ' + eventId : '';
+  const body = document.createElement('pre');
+  body.textContent = payload.delta || payload.text || payload.message || payload.tool_name || JSON.stringify(payload, null, 2);
+  row.append(label);
+  row.append(meta);
+  row.append(body);
+  $('#chat-log').prepend(row);
 }
 
 async function refreshPipelineStatus() {
@@ -259,7 +324,8 @@ async function refreshSwarmState(runId = activeRunId) {
   if (!runId) return;
   try {
     const workersBody = await api('/swarm/workers?run_id=' + encodeURIComponent(runId));
-    (workersBody.workers || workersBody.items || workersBody.rows || workersBody || []).forEach(worker);
+    const workerRows = workersBody.workers || workersBody.items || workersBody.rows || workersBody || [];
+    (Array.isArray(workerRows) ? workerRows : []).forEach(worker);
   } catch (_) {}
   try {
     const locksBody = await api('/swarm/file-locks?run_id=' + encodeURIComponent(runId));
@@ -274,7 +340,77 @@ async function loadGraph() {
   const query = new URLSearchParams();
   if (sid) query.set('session_id', sid);
   if (rid) query.set('run_id', rid);
-  $('#graph-viewer').textContent = JSON.stringify(await api('/graph' + (query.toString() ? '?' + query.toString() : '')), null, 2);
+  renderGraph(await api('/graph' + (query.toString() ? '?' + query.toString() : '')));
+}
+
+function renderGraph(data) {
+  const viewer = $('#graph-viewer');
+  clear(viewer);
+  const svgEl = (name) => (typeof document.createElementNS === 'function' ? document.createElementNS('http://www.w3.org/2000/svg', name) : document.createElement(name));
+  const attr = (el, key, value) => { if (typeof el.setAttribute === 'function') el.setAttribute(key, String(value)); else el[key] = String(value); };
+  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  const edges = Array.isArray(data.edges) ? data.edges : [];
+  const width = Math.max(640, viewer.clientWidth || 800);
+  const height = 480;
+  const svg = svgEl('svg');
+  attr(svg, 'viewBox', `0 0 ${width} ${height}`);
+  attr(svg, 'width', '100%');
+  attr(svg, 'height', String(height));
+  const summary = document.createElement('p');
+  summary.className = 'muted';
+  summary.textContent = `nodes:${nodes.length} edges:${edges.length}`;
+  viewer.textContent = summary.textContent;
+  viewer.append(summary);
+  const positions = new Map();
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) * 0.36;
+  nodes.forEach((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1);
+    positions.set(node.id, { x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius });
+  });
+  edges.forEach((edge) => {
+    const from = positions.get(edge.source || edge.from);
+    const to = positions.get(edge.target || edge.to);
+    if (!from || !to) return;
+    const line = svgEl('line');
+    attr(line, 'x1', from.x); attr(line, 'y1', from.y); attr(line, 'x2', to.x); attr(line, 'y2', to.y);
+    attr(line, 'stroke', '#58a6ff'); attr(line, 'stroke-opacity', '0.55');
+    svg.append(line);
+  });
+  nodes.forEach((node) => {
+    const pos = positions.get(node.id) || { x: cx, y: cy };
+    const group = svgEl('g');
+    const circle = svgEl('circle');
+    attr(circle, 'cx', pos.x); attr(circle, 'cy', pos.y); attr(circle, 'r', '14'); attr(circle, 'fill', '#7ee787');
+    const label = svgEl('text');
+    attr(label, 'x', pos.x + 18); attr(label, 'y', pos.y + 4); attr(label, 'fill', '#e6edf3');
+    label.textContent = node.label || node.id || node.type || 'node';
+    group.append(circle); group.append(label); svg.append(group);
+  });
+  viewer.append(svg);
+}
+
+function currentRunId() { return $('#run-id').value.trim() || activeRunId; }
+
+async function controlRun(action, extra = {}) {
+  const runId = currentRunId();
+  if (!runId) return reportError(action + ' failed', 'enter run id');
+  const body = { run_id: runId, ...extra };
+  return api('/pipeline/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+async function injectWorker(workerId) {
+  const runId = currentRunId();
+  const message = prompt('Message for ' + workerId + '?');
+  if (!runId || !message) return;
+  await api('/swarm/workers/' + encodeURIComponent(workerId) + '/inject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: runId, message }) });
+}
+
+async function stopWorker(workerId) {
+  const runId = currentRunId();
+  if (!runId) return;
+  await api('/swarm/workers/' + encodeURIComponent(workerId) + '/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: runId, reason: 'stopped from web dashboard' }) });
 }
 
 const anchors = ['PROGRESS_LOG_START','PROGRESS_LOG_END','NEXT_TASK_GROUP_START','NEXT_TASK_GROUP_END','PHASE_TASKS_START','PHASE_TASKS_END','PHASE_PROGRESS_START','PHASE_PROGRESS_END','QUICK_STATUS_START','QUICK_STATUS_END','HANDOFF_NOTES_START','HANDOFF_NOTES_END','SUBAGENT_A_ASSIGNMENT_START','SUBAGENT_A_ASSIGNMENT_END','SUBAGENT_B_ASSIGNMENT_START','SUBAGENT_B_ASSIGNMENT_END','SUBAGENT_C_ASSIGNMENT_START','SUBAGENT_C_ASSIGNMENT_END','SUBAGENT_D_ASSIGNMENT_START','SUBAGENT_D_ASSIGNMENT_END'];
@@ -291,6 +427,11 @@ $('#clear-log').onclick = () => { $('#stream-log').innerHTML = ''; };
 $('#run-id').value = activeRunId;
 $('#run-id').onchange = () => selectSession(activeSessionId, $('#run-id').value.trim());
 $('#pipeline-start-form').onsubmit = (event) => startPipelineFromForm(event).catch((e) => reportError('pipeline start failed', e));
+$('#pause-run').onclick = () => controlRun('pause', { reason: 'paused from web dashboard' }).catch((e) => reportError('pause failed', e));
+$('#resume-run').onclick = () => controlRun('resume').catch((e) => reportError('resume failed', e));
+$('#skip-stage').onclick = () => controlRun('skip', { stage: prompt('Stage to skip?') || '' }).catch((e) => reportError('skip failed', e));
+$('#cancel-run').onclick = () => controlRun('cancel', { reason: prompt('Cancel reason?') || 'cancelled from web dashboard' }).catch((e) => reportError('cancel failed', e));
+$('#inject-run').onclick = () => controlRun('inject', { message: $('#inject-message').value.trim() }).catch((e) => reportError('inject failed', e));
 $('#load-artifact').onclick = async () => { try { const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const kind = $('#artifact-kind').value; const body = await api('/pipeline/artifacts/' + kind + '?session_id=' + encodeURIComponent(sid)); $('#artifact-viewer').textContent = body.content_text || JSON.stringify(body, null, 2); if (kind === 'review_report') $('#review-report').textContent = $('#artifact-viewer').textContent; } catch (e) { reportError('artifact load failed', e); } };
 $('#load-devplan').onclick = async () => { const sid = activeSessionId || prompt('session_id?'); if (!sid) return; const body = await api('/pipeline/artifacts/devplan?session_id=' + encodeURIComponent(sid)); $('#devplan-content').innerHTML = highlightAnchors(body.content_text || ''); };
 $('#load-graph').onclick = () => loadGraph().catch((e) => reportError('graph load failed', e));

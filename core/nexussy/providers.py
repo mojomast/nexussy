@@ -114,7 +114,6 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None, service: 
     target_path = env_path or env_file_path()
     logger.warning("keyring unavailable; secret %s will be stored as plaintext in %s", name, target_path)
     _write_env_file_value(target_path, name, value)
-    os.environ[name] = value
     return SecretSummary(name=name, source="config", configured=True, updated_at=datetime.now(timezone.utc))
 
 def delete_secret(name: str, *, env_path: Path | None = None, service: str = "nexussy") -> bool:

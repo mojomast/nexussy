@@ -62,3 +62,20 @@ test("SSE auth failure surfaces unauthorized error", async () => {
     for await (const _ of client.streamRun("r")) { /* unreachable */ }
   }).toThrow("unauthorized");
 });
+
+test("SSE reader lock is released when stream read fails", async () => {
+  let released = false;
+  const body = {
+    getReader() {
+      return {
+        async read() { throw new Error("network hiccup"); },
+        releaseLock() { released = true; },
+      };
+    },
+  };
+  const client = new CoreClient({ fetchImpl: (async () => ({ ok:true, status:200, body, headers:{ get:() => null } })) as unknown as typeof fetch });
+  await expect(async () => {
+    for await (const _ of client.streamRun("r")) { /* unreachable */ }
+  }).toThrow("network hiccup");
+  expect(released).toBe(true);
+});

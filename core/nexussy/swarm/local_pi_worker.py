@@ -5,6 +5,8 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import signal
 import sys
 from typing import Any
 
@@ -128,18 +130,22 @@ async def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         "NEXUSSY_WORKTREE": str(_root()),
     }
 
-    proc = await asyncio.create_subprocess_shell(
-        command,
+    argv = shlex.split(command, posix=True)
+    if not argv:
+        raise ValueError("command_empty")
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
         cwd=str(_root()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=safe_env,
+        start_new_session=True,
     )
     try:
         out_bytes, err_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         try:
-            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         await proc.wait()

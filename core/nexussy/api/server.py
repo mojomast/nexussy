@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, logging, multiprocessing, os, pathlib, shutil, yaml
+import asyncio, ipaddress, json, logging, multiprocessing, os, pathlib, shutil, yaml
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from starlette.applications import Starlette
@@ -124,6 +124,15 @@ def retry_after_header(error: ErrorResponse) -> dict[str, str]:
     except (TypeError, ValueError, OverflowError):
         return {}
 
+def _client_ip(request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    if forwarded:
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return request.client.host if request.client else "unknown"
+
 def _merge_config_patch(base: dict, patch: dict) -> dict:
     out = dict(base)
     for key, value in patch.items():
@@ -195,7 +204,7 @@ async def auth(request):
         env_path = pathlib.Path(os.environ.get("NEXUSSY_ENV_FILE", "~/.nexussy/.env")).expanduser()
         expected = os.environ.get(config.auth.api_key_env) or read_env_file(env_path).get(config.auth.api_key_env)
         if not expected or request.headers.get(config.auth.header_name) != expected:
-            client = request.client.host if request.client else "unknown"
+            client = _client_ip(request)
             limited = await active_rate_limit(db, "auth", client)
             write_audit(config.home_dir, "auth_failure", ip=client, path=request.url.path)
             if limited:
@@ -320,6 +329,8 @@ async def stream(request):
         q=asyncio.Queue(maxsize=config.sse.client_queue_max_events); engine.queues.setdefault(rid,set()).add(q)
         try:
             while True:
+                if await request.is_disconnected():
+                    break
                 try:
                     e=await asyncio.wait_for(q.get(), timeout=config.sse.heartbeat_interval_s)
                     if event_for_worker(e):
@@ -334,9 +345,12 @@ async def stream(request):
 
 async def control_pause(request):
     async def inner(r):
-        data=await r.json(); rid=data["run_id"]; reason=data.get("reason","user"); engine.paused[rid]=True
+        data=await r.json(); rid=data["run_id"]; reason=data.get("reason","user")
         rows=await db.read("SELECT session_id FROM runs WHERE run_id=?",(rid,));
         if not rows: raise KeyError("run")
+        if engine.paused.get(rid):
+            return JSONResponse(dump(ControlResponse(run_id=rid,status=RunStatus.paused,message="already_paused")))
+        engine.paused[rid]=True
         for rpc in list(engine.active_worker_rpcs.get(rid,[])):
             await rpc.stop(config.pi.shutdown_timeout_s)
         if rows: await engine.emit(SSEEventType.pause_state_changed,rows[0]["session_id"],rid,PausePayload(paused=True,reason=reason))
@@ -643,9 +657,31 @@ async def memory_delete(request):
     return await endpoint(request, inner)
 async def graph(request):
     async def inner(r):
-        nodes=[]; edges=[]
-        for s in await db.read("SELECT session_id,project_name,status FROM sessions",()): nodes.append(GraphNode(id=s["session_id"],label=s["project_name"],kind="session",status=s["status"]))
-        for x in await db.read("SELECT run_id,session_id,status FROM runs",()): nodes.append(GraphNode(id=x["run_id"],label=x["run_id"],kind="run",status=x["status"])); edges.append(GraphEdge(source=x["session_id"],target=x["run_id"],kind="has_run"))
+        sid_filter=r.query_params.get("session_id"); rid_filter=r.query_params.get("run_id")
+        nodes=[]; edges=[]; seen=set()
+        def add(node):
+            if node.id not in seen:
+                seen.add(node.id); nodes.append(node)
+        sessions=await db.read("SELECT session_id,project_name,status FROM sessions WHERE (? IS NULL OR session_id=?)",(sid_filter,sid_filter))
+        for s in sessions: add(GraphNode(id=s["session_id"],label=s["project_name"],kind="session",status=s["status"]))
+        runs=await db.read("SELECT run_id,session_id,status,current_stage FROM runs WHERE (? IS NULL OR session_id=?) AND (? IS NULL OR run_id=?)",(sid_filter,sid_filter,rid_filter,rid_filter))
+        run_ids=[x["run_id"] for x in runs]
+        for x in runs:
+            add(GraphNode(id=x["run_id"],label=x["run_id"],kind="run",status=x["status"],metadata={"current_stage":x["current_stage"]}))
+            edges.append(GraphEdge(source=x["session_id"],target=x["run_id"],kind="has_run"))
+            for st in await db.read("SELECT stage,status,attempt FROM stage_runs WHERE run_id=?",(x["run_id"],)):
+                nid=f"{x['run_id']}:stage:{st['stage']}"; add(GraphNode(id=nid,label=st["stage"],kind="stage",status=st["status"],metadata={"attempt":st["attempt"] or 0})); edges.append(GraphEdge(source=x["run_id"],target=nid,kind="has_stage"))
+        for rid in run_ids:
+            for wrow in await db.read("SELECT worker_json FROM workers WHERE run_id=?",(rid,)):
+                w=Worker.model_validate_json(wrow["worker_json"]); add(GraphNode(id=w.worker_id,label=w.worker_id,kind="worker",status=w.status,metadata={"role":w.role,"task_id":w.task_id})); edges.append(GraphEdge(source=rid,target=w.worker_id,kind="has_worker"))
+                if w.task_id:
+                    tid=w.task_id; add(GraphNode(id=tid,label=w.task_title or tid,kind="task",status=None,metadata={"worker_id":w.worker_id})); edges.append(GraphEdge(source=w.worker_id,target=tid,kind="assigned_task"))
+            for t in await db.read("SELECT task_id,worker_id,title,status FROM worker_tasks WHERE run_id=?",(rid,)):
+                add(GraphNode(id=t["task_id"],label=t["title"],kind="task",status=t["status"],metadata={"worker_id":t["worker_id"]})); edges.append(GraphEdge(source=t["worker_id"],target=t["task_id"],kind="assigned_task"))
+            for a in await db.read("SELECT kind,path,sha256,bytes FROM artifacts WHERE run_id=?",(rid,)):
+                aid=f"{rid}:artifact:{a['kind']}:{a['path']}"; add(GraphNode(id=aid,label=a["path"],kind="artifact",status=None,metadata={"kind":a["kind"],"sha256":a["sha256"],"bytes":a["bytes"]})); edges.append(GraphEdge(source=rid,target=aid,kind="produced_artifact"))
+            for fl in await db.read("SELECT path,worker_id,status FROM file_locks WHERE run_id=?",(rid,)):
+                fid=f"{rid}:file:{fl['path']}"; add(GraphNode(id=fid,label=fl["path"],kind="file",status=fl["status"])); edges.append(GraphEdge(source=fl["worker_id"],target=fid,kind="locked_by"))
         return JSONResponse(dump(GraphResponse(nodes=nodes,edges=edges)))
     return await endpoint(request, inner)
 async def events(request):

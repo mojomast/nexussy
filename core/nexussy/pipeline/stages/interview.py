@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 
-from nexussy.api.schemas import ArtifactRef, InterviewArtifact, InterviewQuestionAnswer, PausePayload, SSEEventType, StageName
+from nexussy.api.schemas import ArtifactRef, ErrorCode, ErrorResponse, InterviewArtifact, InterviewQuestionAnswer, PausePayload, SSEEventType, StageName
 from nexussy.checkpoint import save_checkpoint
 from nexussy.pipeline.helpers import parse_auto_answers, parse_interview_questions
-from nexussy.session import SessionStatus, transition_session_status
+from nexussy.session import SessionStatus, now_utc, transition_session_status
 from nexussy.swarm.project_graph import graph_summary_for_worktree
 
 
@@ -71,6 +71,9 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
             engine.interview_waiters.pop(sid, None)
             engine.interview_questions.pop(sid, None)
             engine.paused.pop(rid, None)
+            await engine.db.write(lambda con: con.execute("UPDATE runs SET status=?, finished_at=? WHERE run_id=?", ("failed", now_utc().isoformat(), rid)))
+            await transition_session_status(engine.db, sid, SessionStatus.failed)
+            await engine.emit(SSEEventType.pipeline_error, sid, rid, ErrorResponse(error_code=ErrorCode.stage_failed, message="interview answer timeout", retryable=False))
             raise RuntimeError("interview answer timeout - user did not respond in time")
         engine.interview_waiters.pop(sid, None)
         engine.interview_questions.pop(sid, None)

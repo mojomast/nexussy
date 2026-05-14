@@ -34,8 +34,18 @@
           <option value="linear">linear</option>
           <option value="minimal">minimal</option>
         </select>
+        <label><input id="auto-approve-interview" type="checkbox"> Auto-approve interview (skip manual pause)</label>
+        <label><input id="start-new-session" type="checkbox" checked> Start new session</label>
         <button type="submit">Start</button>
       </form>
+      <div class="row controls" aria-label="Pipeline controls">
+        <button id="pause-run">Pause</button>
+        <button id="resume-run">Resume</button>
+        <button id="skip-stage">Skip Stage</button>
+        <button id="cancel-run">Cancel</button>
+        <input id="inject-message" placeholder="inject message / steering note">
+        <button id="inject-run">Inject</button>
+      </div>
       <div id="stages" class="grid"></div>
       <h3>Transitions</h3><div id="transitions" class="list compact"></div>
       <form id="interview-form" class="interview hidden">
@@ -53,8 +63,8 @@
 
     <section class="panel details-panel">
       <nav id="tabs"><a href="#chat">Chat</a><a href="#pipeline">Pipeline</a><a href="#sessions">Sessions</a><a href="#graph">Graph</a><a href="#artifacts">Artifacts</a><a href="#swarm">Swarm</a><a href="#devplan">DevPlan</a><a href="#config">Config</a><a href="#secrets">Secrets</a></nav>
-      <section id="chat" class="tab"><h2>Chat</h2><p class="muted">Use the TUI or pipeline inject endpoint for active conversations.</p><div id="chat-log" class="list compact"></div></section>
-      <section id="graph" class="tab" data-api-route="/api/graph"><h2>Graph</h2><button id="load-graph">Load Graph</button><pre id="graph-viewer"></pre></section>
+      <section id="chat" class="tab"><h2>Chat</h2><div class="row"><span id="chat-cost" class="badge">$0.0000</span><span class="muted">live stream log, tools, artifacts, and costs</span></div><div id="chat-log" class="list compact"></div></section>
+      <section id="graph" class="tab" data-api-route="/api/graph"><h2>Graph</h2><button id="load-graph">Load Graph</button><div id="graph-viewer" class="graph-viewer" role="img" aria-label="Pipeline graph visualization"></div></section>
       <section id="artifacts" class="tab"><h2>Artifacts</h2><select id="artifact-kind"><option>devplan</option><option>handoff</option><option>review_report</option><option>develop_report</option></select><button id="load-artifact">Load</button><pre id="artifact-viewer"></pre><h3>Review report</h3><pre id="review-report"></pre></section>
       <section id="swarm" class="tab"><h2>Swarm</h2><div id="worker-grid" class="grid"></div><h3>File locks</h3><div id="file-lock-feed" class="list compact"></div><h3>Worktree</h3><div id="worktree-status" class="list compact"></div><h3>Tool rows</h3><div id="tool-rows" class="list compact"></div></section>
       <section id="devplan" class="tab"><h2>Live devplan.md</h2><button id="load-devplan">Load DevPlan</button><pre id="devplan-content"></pre></section>

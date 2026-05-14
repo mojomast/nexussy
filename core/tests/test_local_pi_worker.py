@@ -82,6 +82,15 @@ async def test_bash_valid_echo(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bash_does_not_invoke_shell_metacharacters(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUSSY_WORKTREE", str(tmp_path))
+    result = await run_tool("bash", {"command": "printf safe ; touch injected"})
+
+    assert result["exit_code"] == 0
+    assert not (tmp_path / "injected").exists()
+
+
+@pytest.mark.asyncio
 async def test_handle_run_sends_json_rpc_error_when_agent_raises(monkeypatch, capsys):
     async def fail_agent(task, context):
         raise RuntimeError("no api key")

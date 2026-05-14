@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -337,11 +338,15 @@ async def _git_proc(cwd: pathlib.Path, *args: str, timeout: float = 60.0) -> tup
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await proc.wait()
         raise TimeoutError(f"git {' '.join(args)} timed out after {timeout}s")
     return proc.returncode, stdout.decode(errors="replace")
