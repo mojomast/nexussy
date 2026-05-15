@@ -68,6 +68,8 @@ def _rate_limited_error(provider: str, model: str, limited) -> ErrorResponse:
 
 
 class Engine:
+    _STEER_CONTEXT_MAX = 50
+
     _STAGE_HANDLERS = {
         StageName.interview: lambda engine, *a, **kw: interview.run(engine, *a, **kw),
         StageName.design: lambda engine, *a, **kw: design.run(engine, *a, **kw),
@@ -100,6 +102,9 @@ class Engine:
         msgs = self.steer_queue.pop(run_id, [])
         if msgs:
             self.steer_context.setdefault(run_id, []).extend(m.get("message", "") for m in msgs)
+            ctx = self.steer_context[run_id]
+            if len(ctx) > self._STEER_CONTEXT_MAX:
+                self.steer_context[run_id] = ctx[-self._STEER_CONTEXT_MAX :]
             consumed_at = now_utc().isoformat()
             ids = [m.get("id") for m in msgs if m.get("id") is not None]
             if ids:
