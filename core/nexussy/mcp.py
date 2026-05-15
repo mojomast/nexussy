@@ -32,6 +32,7 @@ from nexussy.api.schemas import (
     WorkerTaskPayload,
     WorkerTaskStatus,
 )
+from nexussy.checkpoint import STAGE_ORDER
 from nexussy.session import now_utc
 from nexussy.api.schemas import WorkerRole
 from nexussy.swarm.roles import check_tool_permission
@@ -73,8 +74,10 @@ async def _get_status(arguments: dict[str, Any], *, engine, db):
         started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
         finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
     )
+    case_expr = " ".join(f"WHEN '{s}' THEN {i + 1}" for i, s in enumerate(STAGE_ORDER))
+    order_clause = f"ORDER BY CASE stage {case_expr} ELSE {len(STAGE_ORDER) + 1} END"
     srows = await db.read(
-        "SELECT * FROM stage_runs WHERE run_id=? ORDER BY CASE stage WHEN 'interview' THEN 1 WHEN 'design' THEN 2 WHEN 'validate' THEN 3 WHEN 'plan' THEN 4 WHEN 'review' THEN 5 ELSE 6 END",
+        f"SELECT * FROM stage_runs WHERE run_id=? {order_clause}",
         (run_id,),
     )
     stages = [
