@@ -151,7 +151,13 @@ start_web() {
 start_tui() {
   cleanup_stale_pid "$TUI_PID"
   if is_running "$TUI_PID"; then info "tui already running"; return 0; fi
-  curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)" || { warn "core health check failed; run ./nexussy.sh start first"; return 1; }
+  if ! curl_ok "$(health_url "$CORE_HOST" "$CORE_PORT" health)"; then
+    info "core is not healthy; starting core and web first"
+    start_core && start_web || return 1
+  elif ! curl_ok "$(health_url "$WEB_HOST" "$WEB_PORT" api/health)"; then
+    info "web is not healthy; starting web"
+    start_web || return 1
+  fi
   have bun || { warn "bun not found"; return 1; }
   ensure_dirs
   prepare_log "$TUI_LOG" || fail "cannot write tui log: $TUI_LOG"
@@ -162,7 +168,11 @@ start_tui() {
   old_pwd=$(pwd)
   cd "$ROOT_DIR/tui" || { rm -f "$TUI_PID"; return 1; }
   set +e
-  bun run start
+  if [ "$#" -gt 0 ]; then
+    bun run start -- "$@"
+  else
+    bun run start
+  fi
   rc=$?
   set -e
   cd "$old_pwd" || { rm -f "$TUI_PID"; return 1; }
@@ -314,7 +324,14 @@ PY
 
 usage() {
   cat <<'USAGE'
-Usage: ./nexussy.sh start|start-tui|stop|status|logs [--no-follow] core|web|tui|--audit|update|rotate-key|analyze-costs [run_id] [--json] [--all]|doctor
+Usage: ./nexussy.sh cli [tui-args...]|tui [tui-args...]|start|start-tui [tui-args...]|stop|status|logs [--no-follow] core|web|tui|--audit|update|rotate-key|analyze-costs [run_id] [--json] [--all]|doctor
+
+Common:
+  ./nexussy.sh cli                 Start services if needed, then open the TUI.
+  ./nexussy.sh cli --setup         Guided provider/model setup.
+  ./nexussy.sh cli --set-key NAME  Hidden provider-key input.
+  /new DESCRIPTION                 Start the full build pipeline inside the TUI.
+  ordinary text                    Use TUI Ask mode without starting a pipeline.
 USAGE
 }
 
@@ -326,7 +343,7 @@ fi
 cmd=${1:-}
 case "$cmd" in
   start) start_core && start_web ;;
-  start-tui) start_tui ;;
+  cli|tui|start-tui) shift; start_tui "$@" ;;
   stop) stop_one tui "$TUI_PID"; stop_one web "$WEB_PID"; stop_one core "$CORE_PID" ;;
   status) status ;;
   logs) shift; show_logs "$@" ;;

@@ -192,6 +192,7 @@ chmod +x "$FAKE_BIN/bun" "$FAKE_BIN/git" "$FAKE_BIN/python3"
   curl_ok() { return 0; }
   python_cmd() { printf '%s\n' "$FAKE_BIN/python3"; }
   start_tui >"$OUT_DIR/start-tui.out" 2>&1
+  start_tui --mock-fixture >"$OUT_DIR/start-tui-args.out" 2>&1
   update >"$OUT_DIR/update.out" 2>&1
   analyze_costs run-123 --json >"$OUT_DIR/analyze-costs.out" 2>&1
   usage >"$OUT_DIR/usage.out" 2>&1
@@ -202,6 +203,7 @@ tui_log_text=$(tr '\n' ' ' < "$LAUNCH_HOME/logs/tui.log" 2>/dev/null || true)
 usage_text=$(tr '\n' ' ' < "$OUT_DIR/usage.out" 2>/dev/null || true)
 assert_contains "$start_tui_text" "starting tui interactively" "start-tui verifies core and starts TUI command"
 assert_contains "$tool_text" "bun:$ROOT_DIR/tui:run start" "start-tui runs bun start from tui directory"
+assert_contains "$tool_text" "bun:$ROOT_DIR/tui:run start -- --mock-fixture" "start-tui forwards TUI arguments"
 assert_no_file "$LAUNCH_HOME/run/tui.pid" "start-tui removes PID file after foreground exit"
 assert_contains "$tui_log_text" "tui started" "start-tui writes lifecycle log"
 assert_contains "$tui_log_text" "tui exited" "start-tui logs foreground exit status"
@@ -212,6 +214,7 @@ assert_contains "$tool_text" "bun:$ROOT_DIR/tui:install" "update runs bun instal
 assert_contains "$tool_text" "python:$ROOT_DIR:-m nexussy.cli.costs run-123 --json" "analyze-costs forwards arguments to core CLI"
 assert_contains "$tool_text" "pythonpath:$ROOT_DIR/core" "analyze-costs sets core PYTHONPATH"
 assert_contains "$usage_text" "analyze-costs [run_id] [--json] [--all]" "usage lists analyze-costs command"
+assert_contains "$usage_text" "./nexussy.sh cli" "usage lists one-command CLI entrypoint"
 
 ROTATE_HOME="$TMP_ROOT/rotate-home"
 mkdir -p "$ROTATE_HOME" || exit 1

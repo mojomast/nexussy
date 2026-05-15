@@ -159,6 +159,7 @@ Reruns preserve existing config, env, and generated systemd user unit files.
 > run state. Use the provided `Dockerfile` which enforces this constraint.
 
 ```bash
+./nexussy.sh cli        # start services if needed and open the TUI
 ./nexussy.sh start      # start core and web
 ./nexussy.sh status     # show config path, ports, PID files, and health
 ./nexussy.sh stop       # stop TUI, web, and core from PID files
@@ -183,9 +184,16 @@ Logs:
 
 ## TUI
 
-Start the interactive terminal UI after core is healthy:
+Start the interactive terminal UI, automatically starting core/web if needed:
 
 ```bash
+./nexussy.sh cli
+```
+
+`tui` and `start-tui` are compatibility aliases for the same launcher path:
+
+```bash
+./nexussy.sh tui
 ./nexussy.sh start-tui
 ```
 
@@ -209,7 +217,7 @@ Inside the TUI:
 - `/memory`, `/graph`, `/config`, and `/events` open data overlays backed by the core API.
 - `/steer`, `/steer @worker-id`, `/steer list`, and `/steer clear` manage orchestrator/worker steering.
 
-Ordinary chat-like text stays in local Ask mode unless an explicit action command is used.
+Ordinary chat-like text stays in Ask mode unless an explicit action command is used, so the same CLI can be used as a regular coding assistant for questions and tradeoffs or as the full build pipeline when you type `/new DESCRIPTION`.
 
 ## Web UI
 
