@@ -100,6 +100,14 @@ Residual deep-review closure complete: core removed Pydantic shadow-field warnin
 ## Completed: Product Promise Documentation Alignment
 ## Context: README now says the primary deliverable is completed code in the project worktree, not just artifacts. It includes a simple idea-to-`/new` example, the staged path through interview/design/validate/plan/review/develop, the supporting artifacts, the `scripts/smoke_integration.sh` proof path, and honest limits: output quality depends on model/provider, Pi-compatible worker executor, project constraints, tests, and requirement clarity.
 ## Files Modified: `README.md`, `devplan.md`, `phase001.md`, `handoff.md`
+
+## Completed: CLI Launch UX Alignment
+## Context: `./nexussy.sh cli` is now the intended launch path. Before entering OpenTUI, normal launch checks `/secrets` and prompts for provider/model setup when no API key is configured. In OpenTUI, onboarding still shows setup/doctor guidance; plain questions use provider-backed Ask mode through core `/assistant/reply` when ready; build-like text does not auto-run but offers `Yes, run it` confirmation into `/new`; and the side rail distinguishes `ask mode` from an active pipeline. Verification: `cd tui && bun test` and `cd tui && bun run typecheck` pass.
+## Files Modified: `tui/src/index.ts`, `tui/src/ui/Composer.ts`, `tui/src/ui/Onboarding.ts`, `tui/src/opentui-app.ts`, `tui/src/commands.ts`, `tui/tests/chat-ux.test.ts`, `tui/tests/openrouter-setup.test.ts`, `README.md`, `devplan.md`, `phase001.md`, `handoff.md`
+
+## Completed: GitHub README Polish
+## Context: README now opens with a GitHub-friendly quick start, integrated provider/model onboarding flow, Ask mode versus build mode examples, the confirmation path to `/new`, output/artifact locations, and a common-use table before architecture/install/security details. The install section still documents dry-run, systemd-user, launcher commands, and verification.
+## Files Modified: `README.md`, `devplan.md`, `phase001.md`, `handoff.md`
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->

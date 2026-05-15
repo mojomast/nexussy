@@ -35,10 +35,10 @@ export function classifyInteraction(input:string, state:ChatUiState): Interactio
 }
 
 export function idleAssistantText(input:string): string {
-  if (greetingPattern.test(input.trim())) return "Hi. Tell me what you want to build, or use `/new <description>` to start the pipeline. Try: `Create a tiny CLI with tests`.";
+  if (greetingPattern.test(input.trim())) return "Hi. Ask for help, describe what you want to build, or run `./nexussy.sh cli --setup` if providers are not configured yet. To build for real, use `/new <description>`.";
   if (wantsInterviewFirst(input)) return "Ask mode: I can help clarify scope here without starting the pipeline. Answer one question: what outcome do you want, and what platform should it target? Use `/new <description>` only when you want nexussy to start a pipeline run.";
-  if (looksLikeProjectRequest(input)) return "Ask mode only. I will not start a pipeline from plain text. Use `/new <description>` to start, or ask a question if you want tradeoffs first.";
-  return "Ask mode. I can answer questions and explain options here. Use slash commands such as `/new <description>`, `/status`, `/plan`, or `/secrets` when you want an action.";
+  if (looksLikeProjectRequest(input)) return "This looks buildable. Reply `Yes, run it` to start the full pipeline, or keep asking questions here if you want to shape the idea first.";
+  return "Ask mode. I can answer questions and explain options here. Use `/new <description>` only when you want interview/design/plan/review/develop to run.";
 }
 
 export function createChatUiState(appFactory:()=>ChatUiState["app"]): ChatUiState {
@@ -63,7 +63,15 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (bucket !== "command") {
     if ((bucket === "choice-selection" || bucket === "confirmation") && withHistory.pendingAction) return handleComposerSubmit(client, { ...withHistory, pendingAction:undefined }, withHistory.pendingAction.command);
     const projectRequest = looksLikeProjectRequest(line);
-    const text = bucket === "ambiguous" ? "I will not act on that without a specific command. Choose: `1` ask a question here, or `2` use a slash command such as `/new <description>`." : projectRequest ? `${idleAssistantText(line)} Reply \`1\` or \`Yes, run it\` to execute \`/new ${line}\`.` : idleAssistantText(line);
+    let text = bucket === "ambiguous" ? "I will not act on that without a specific command. Choose: `1` ask a question here, or `2` use `/new <description>` to build." : projectRequest ? `${idleAssistantText(line)} Command preview: \`/new ${line}\`.` : idleAssistantText(line);
+    if (!projectRequest && bucket === "ask" && !greetingPattern.test(line) && !wantsInterviewFirst(line)) {
+      try {
+        const reply = await client.chat({ message:line });
+        text = reply.message;
+      } catch (e) {
+        text = `${idleAssistantText(line)} Provider chat is not ready: ${e instanceof Error ? e.message : String(e)}. Run \`./nexussy.sh cli --setup\` to configure API access.`;
+      }
+    }
     const pendingAction = projectRequest ? { description:`start pipeline for: ${line}`, command:`/new ${line}` } : withHistory.pendingAction;
     return [{ ...withHistory, pendingAction, transcript:[...withHistory.transcript, { kind:"assistant", id:`local-${Date.now()}`, role:"assistant", text }], statusMessage:"ask mode" }, { message:"ask mode" }];
   }
@@ -81,6 +89,7 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/workers") return hydrateWorkersOverlay(client, withHistory);
   if (cmd === "/worker") { const workerId = rest[0]; if (workerId && !WORKER_ID_PATTERN.test(workerId)) throw new Error("invalid worker_id"); return [{ ...withHistory, overlay:"worker", selectedWorkerId:workerId }, { message:"worker" }]; }
   if (cmd === "/doctor") return [{ ...withHistory, overlay:"doctor" }, { message:"doctor fallback" }];
+  if (cmd === "/setup" || cmd === "/setup-openrouter") return [{ ...withHistory, overlay:"secrets" }, { message:"Run `./nexussy.sh cli --setup` for guided provider setup, or `./nexussy.sh cli --setup-openrouter` for OpenRouter." }];
   if (cmd === "/new") return startNewRun(client, withHistory, rest.join(" "));
   if (cmd === "/resume" && rest[0]) { const app = await hydrateRunStatus(client, { ...withHistory.app, runId:rest[0], finalStatus:undefined }); return [{ ...withHistory, app, statusMessage:`resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }]; }
   if (cmd === "/secrets") { const secrets = await client.secrets() as any; return [{ ...withHistory, app:reduceSecrets(withHistory.app, secrets), overlay:"secrets" }, { message:"provider key status refreshed" }]; }

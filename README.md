@@ -10,6 +10,99 @@ It is the fifth-generation Ussyverse coding harness lineage:
 
 `devussy -> swarmussy -> ralphussy -> geoffrussy -> nexussy`
 
+## Quick Start
+
+Prerequisites: Python 3.11+, Bun 1.x+, git, and curl.
+
+```bash
+git clone https://github.com/mojomast/nexussy.git
+cd nexussy
+./install.sh --non-interactive
+./nexussy.sh cli
+```
+
+On first launch, the CLI checks whether a provider API key is configured. If not, it offers guided setup inside the launch flow:
+
+```text
+No provider API key is configured yet. nexussy needs one for Ask mode and pipeline stages.
+Run provider setup now? [Y/n]:
+```
+
+The setup flow lets you choose a provider, enter the API key with hidden input, choose a model, and then drops you into the TUI.
+
+Useful explicit setup commands:
+
+```bash
+./nexussy.sh cli --setup              # choose provider, key, and model
+./nexussy.sh cli --setup-openrouter   # OpenRouter shortcut
+./nexussy.sh cli --set-key OPENAI_API_KEY
+./nexussy.sh doctor                   # verify config, provider keys, ports, Pi worker
+```
+
+## Use It
+
+Use the same CLI for lightweight help or a full build pipeline.
+
+Ask a normal question:
+
+```text
+How should I structure a tiny FastAPI app with SQLite?
+```
+
+That stays in Ask mode and uses the configured provider through core `/assistant/reply`.
+
+Describe something buildable:
+
+```text
+Build a tiny FastAPI app with SQLite and pytest tests
+```
+
+nexussy will not silently start expensive work. It offers a confirmation path:
+
+```text
+This looks buildable. Reply `Yes, run it` to start the full pipeline...
+```
+
+Then:
+
+```text
+Yes, run it
+```
+
+Or start deliberately:
+
+```text
+/new Build a tiny FastAPI app with SQLite and pytest tests
+```
+
+The full pipeline then runs interview, design, validate, plan, review, and develop, streams progress into the TUI/web UI, merges worker output, and writes artifacts.
+
+## What You Get
+
+For a successful run, the primary deliverable is the updated project worktree:
+
+```text
+~/nexussy-projects/<project_slug>/main/
+```
+
+The trace lives beside it:
+
+```text
+~/nexussy-projects/<project_slug>/main/.nexussy/artifacts/
+```
+
+Key artifacts include `design_draft.md`, `devplan.md`, `review_report.json`, `develop_report.json`, `merge_report.json`, and `changed_files.json`.
+
+What nexussy is good at:
+
+| Need | Use |
+|---|---|
+| Ask architecture or implementation questions | Plain text in `./nexussy.sh cli` |
+| Shape a vague idea before building | Ask mode, then confirm when ready |
+| Build a full project or feature | `/new <description>` or `Yes, run it` |
+| Watch/steer a running build | `/status`, `/workers`, `/artifacts`, `/steer ...` |
+| Continue later without chat history | Anchored `devplan.md`, phase files, and `handoff.md` |
+
 ## What It Does
 
 nexussy is not a chat app. It is a local control plane for staged software delivery.
@@ -111,9 +204,7 @@ SPEC.md    Authoritative implementation contract
 
 `SPEC.md` is the source of truth for contracts. `SPEC_COVERAGE.md` tracks implementation evidence and remaining gaps.
 
-Current deep-review residual cleanup is tracked in `DEEP_CODE_REVIEW.md` and status docs. The residual bucket is closed: Pydantic shadow-field aliases, strict ID validation, renderer harness tests, and shared web anchor constants all have focused verification.
-
-## Install
+## Install Details
 
 Prerequisites:
 
@@ -199,18 +290,18 @@ Start the interactive terminal UI, automatically starting core/web if needed:
 
 The TUI is a control surface over the core API. It does not own provider secrets or pipeline state.
 
-Useful TUI setup commands:
+On first launch, if no provider key is configured, the CLI prompts to run provider setup before opening the TUI. Setup is still available explicitly:
 
 ```bash
-cd tui
-bun run start -- --setup
-bun run start -- --setup-openrouter
-bun run start -- --set-key OPENAI_API_KEY
+./nexussy.sh cli --setup
+./nexussy.sh cli --setup-openrouter
+./nexussy.sh cli --set-key OPENAI_API_KEY
 ```
 
 Inside the TUI:
 
 - `/secrets` refreshes provider-key status.
+- `/setup` prints the guided setup command if you skipped first-run setup.
 - `/delete-key NAME` deletes a configured provider key.
 - `/new DESCRIPTION` starts an explicit pipeline run.
 - `/pause`, `/resume`, `/cancel`, `/skip`, `/stage`, `/spawn`, `/inject`, and `/export` control active runs.

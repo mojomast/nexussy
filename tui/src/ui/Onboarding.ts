@@ -1,6 +1,10 @@
 export function renderOnboarding(): string[] {
   return [
-    "Welcome to nexussy. Plain chat stays in Ask mode and will not run the pipeline.",
+    "Welcome to nexussy. One CLI, two speeds: ask for help or launch the build pipeline.",
+    "",
+    "First-time setup:",
+    "  ./nexussy.sh cli --setup          choose provider, hidden API key, model",
+    "  ./nexussy.sh doctor               check provider, Pi worker, ports, config",
     "",
     "What it can do:",
     "  ● Interview  clarify requirements and complexity",
@@ -10,7 +14,10 @@ export function renderOnboarding(): string[] {
     "  ● Review     review the plan before implementation",
     "  ● Develop    spawn workers, use worktrees, merge changes, report results",
     "",
-    "Start deliberately with a slash command:",
+    "How to use it:",
+    "  Ask normal questions to shape the idea without starting work",
+    "  Type a build request and confirm when nexussy offers to run it",
+    "  Or start deliberately with a slash command:",
     "  /new Create a FastAPI todo app with SQLite and tests",
     "",
     "Useful commands:",

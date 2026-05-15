@@ -6,6 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { runSlash } from "./commands";
 import { runPiTui } from "./pi-app";
 import { runOpenTui } from "./opentui-app";
+import type { SecretSummary } from "./types";
 
 export const OPENROUTER_MODEL_OPTIONS = [
   "openrouter/openai/gpt-4o-mini",
@@ -192,6 +193,26 @@ export async function setupWizard(client:CoreClient, input:NodeJS.ReadStream=pro
   }
 }
 
+export function hasConfiguredProviderSecret(secrets:SecretSummary[]|unknown): boolean {
+  return Array.isArray(secrets) && secrets.some(secret => Boolean((secret as SecretSummary).configured));
+}
+
+export async function promptProviderSetupIfNeeded(client:CoreClient, input:NodeJS.ReadStream=process.stdin, output:NodeJS.WriteStream=process.stdout, readSecret=readSecretNoEcho, readText=readLine): Promise<boolean> {
+  let secrets:unknown;
+  try { secrets = await client.secrets(); }
+  catch (e) { output.write(`Provider setup check skipped: ${e instanceof Error ? e.message : String(e)}\n`); return false; }
+  if (hasConfiguredProviderSecret(secrets)) return false;
+  output.write("No provider API key is configured yet. nexussy needs one for Ask mode and pipeline stages.\n");
+  const choice = (await readText("Run provider setup now? [Y/n]: ")).trim().toLowerCase();
+  if (choice === "n" || choice === "no") {
+    output.write("Continuing without provider setup. Run `/setup` or `./nexussy.sh cli --setup` when ready.\n");
+    return false;
+  }
+  const provider = await selectProvider(readText, output);
+  await setupProvider(client, provider, input, output, readSecret, readText);
+  return true;
+}
+
 export function projectNameFromDescription(description:string): string {
   const words = description.trim().split(/\s+/).filter(Boolean).slice(0, 6).join(" ");
   return words || "nexussy run";
@@ -311,6 +332,11 @@ export async function main() {
   const state = createState();
   const runId = mockMode ? FIXTURE_RUN_ID : process.argv[2];
   if (!runId) {
+    if (!mockMode) {
+      const prompts = createPromptSession();
+      try { await promptProviderSetupIfNeeded(client, process.stdin, process.stdout, prompts.readSecret, prompts.readLine); }
+      finally { prompts.close(); }
+    }
     if (shouldUseOpenTuiRenderer()) await runOpenTui(client, state);
     else await runPiTui(client, state);
     return;

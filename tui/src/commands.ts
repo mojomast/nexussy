@@ -24,7 +24,7 @@ export async function runSlash(input:string, client:CoreClient, state:TuiState):
     if(rest.length > 1) throw new Error("do not type secrets into slash commands; run `bun run start -- --set-key NAME` for hidden input");
     return { local:true, message:`run hidden setup: bun run start -- --set-key ${name}` };
   }
-  if (cmd === "/setup" || cmd === "/setup-openrouter") return { local:true, message:"run guided setup: bun run start -- --setup" };
+  if (cmd === "/setup" || cmd === "/setup-openrouter") return { local:true, message:"run guided setup: ./nexussy.sh cli --setup" };
   if (cmd === "/delete-key") { const name=rest[0]; if(!name || !providerSecrets.has(name)) throw new Error("invalid provider key name"); await client.deleteSecret(name); state.secrets = await client.secrets(); return { endpoint:`/secrets/${name}`, method:"DELETE", message:`deleted ${name}` }; }
   if (!run_id) throw new Error("run_id is required for remote slash commands");
   if (cmd === "/pause") { const reason=rest.join(" ")||"user"; await client.pause(run_id, reason); return {endpoint:"/pipeline/pause",method:"POST",message:reason}; }

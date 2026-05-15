@@ -30,6 +30,7 @@ test("default render is chat transcript, not dashboard columns", () => {
   const out = renderApp(state, 120);
   expect(out).toContain("nexussy  session ready");
   expect(out).toContain("nexussy ›");
+  expect(out).toContain("One CLI, two speeds");
   expect(out).toContain("What it can do:");
   expect(out).toContain("● Plan");
   expect(out).toContain("● Develop");
@@ -54,7 +55,7 @@ test("plain text stays in ask mode and slash new starts idle run", async () => {
   [state, result] = await handleComposerSubmit(client, state, "Create a tiny CLI with tests");
   expect(result.message).toBe("ask mode");
   expect(client.calls).toEqual([]);
-  expect(renderChat(state)).toContain("Ask mode only");
+  expect(renderChat(state)).toContain("This looks buildable");
   expect(state.pendingAction?.command).toBe("/new Create a tiny CLI with tests");
   [state, result] = await handleComposerSubmit(client, state, "Yes, run it");
   expect(result.stream).toBe(true);
@@ -66,7 +67,17 @@ test("plain text stays in ask mode and slash new starts idle run", async () => {
   [state, result] = await handleComposerSubmit(client, state, "add sqlite support");
   expect(result.message).toBe("ask mode");
   expect(client.calls.length).toBe(2);
-  expect(renderChat(state)).toContain("Use `/new <description>`");
+  expect(renderChat(state)).toContain("This looks buildable");
+});
+
+test("plain questions use provider-backed Ask mode", async () => {
+  const client = new MockClient() as any;
+  let state = createDefaultChatState();
+  const [next, result] = await handleComposerSubmit(client, state, "What tradeoffs matter for deployment?");
+  state = next;
+  expect(result.message).toBe("ask mode");
+  expect(client.calls[0]).toEqual(["chat", { message:"What tradeoffs matter for deployment?" }]);
+  expect(renderChat(state)).toContain("provider says: What tradeoffs matter for deployment?");
 });
 
 test("greetings do not start expensive pipeline runs", async () => {
@@ -76,7 +87,7 @@ test("greetings do not start expensive pipeline runs", async () => {
   [state, result] = await handleComposerSubmit(client, state, "hi");
   expect(result.message).toBe("ask mode");
   expect(client.calls).toEqual([]);
-  expect(renderChat(state)).toContain("use `/new <description>`");
+  expect(renderChat(state)).toContain("Ask for help");
   expect(looksLikeProjectRequest("Create a tiny CLI with tests")).toBe(true);
   expect(looksLikeProjectRequest("hi")).toBe(false);
 });

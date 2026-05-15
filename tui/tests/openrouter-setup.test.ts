@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyOpenRouterModel, ensureCoreForSetup, normalizeOpenRouterModel, parseNewCommand, projectNameFromDescription, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
+import { applyOpenRouterModel, ensureCoreForSetup, hasConfiguredProviderSecret, normalizeOpenRouterModel, parseNewCommand, projectNameFromDescription, promptProviderSetupIfNeeded, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
 
 class Output { text=""; write(s:string){ this.text += s; return true; } }
 
@@ -90,6 +90,36 @@ test("setup uses isolated core URL unless explicitly configured", () => {
   expect(process.env.NEXUSSY_CORE_PORT).toBeTruthy();
   if (oldUrl === undefined) delete process.env.NEXUSSY_CORE_URL; else process.env.NEXUSSY_CORE_URL = oldUrl;
   if (oldPort === undefined) delete process.env.NEXUSSY_CORE_PORT; else process.env.NEXUSSY_CORE_PORT = oldPort;
+});
+
+test("normal TUI launch can prompt for provider setup when no key is configured", async () => {
+  const out = new Output() as any;
+  const calls:any[] = [];
+  const client = {
+    secrets(){ calls.push(["secrets"]); return [{ name:"OPENROUTER_API_KEY", source:"config", configured:false }]; },
+    setSecret(name:string, value:string){ calls.push(["setSecret", name, value]); return { name, source:"config", configured:true }; },
+    config(){ return { providers:{}, stages:{ interview:{}, design:{}, validate:{}, plan:{}, review:{}, develop:{} } }; },
+    updateConfig(cfg:any){ calls.push(["updateConfig", cfg]); return cfg; },
+  } as any;
+  const answers = ["", "", "1"];
+  const ran = await promptProviderSetupIfNeeded(client, undefined as any, out, async () => "sk-test-secret", async () => answers.shift()!);
+  expect(ran).toBe(true);
+  expect(calls[0]).toEqual(["secrets"]);
+  expect(calls[1]).toEqual(["setSecret", "OPENROUTER_API_KEY", "sk-test-secret"]);
+  expect(calls[2][1].providers.default_model).toBe("openrouter/openai/gpt-4o-mini");
+  expect(out.text).toContain("No provider API key");
+  expect(out.text).not.toContain("sk-test-secret");
+});
+
+test("normal TUI launch skips provider prompt when a key exists or user declines", async () => {
+  const out = new Output() as any;
+  expect(hasConfiguredProviderSecret([{ name:"OPENAI_API_KEY", source:"config", configured:true }])).toBe(true);
+  expect(hasConfiguredProviderSecret([{ name:"OPENAI_API_KEY", source:"config", configured:false }])).toBe(false);
+  const configuredClient = { secrets(){ return [{ name:"OPENAI_API_KEY", source:"config", configured:true }]; } } as any;
+  expect(await promptProviderSetupIfNeeded(configuredClient, undefined as any, out, async () => "unused", async () => { throw new Error("should not prompt"); })).toBe(false);
+  const declinedClient = { secrets(){ return []; } } as any;
+  expect(await promptProviderSetupIfNeeded(declinedClient, undefined as any, out, async () => "unused", async () => "n")).toBe(false);
+  expect(out.text).toContain("Continuing without provider setup");
 });
 
 test("explicit new helper can start a pipeline run", async () => {
