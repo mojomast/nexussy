@@ -1,4 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
+const ANCHORS = Object.freeze(Array.isArray(globalThis.NEXUSSY_ANCHORS) ? [...globalThis.NEXUSSY_ANCHORS] : []);
 const POLL_MS = 5000;
 const API_TIMEOUT_MS = 10000;
 let source = null;
@@ -413,10 +414,9 @@ async function stopWorker(workerId) {
   await api('/swarm/workers/' + encodeURIComponent(workerId) + '/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run_id: runId, reason: 'stopped from web dashboard' }) });
 }
 
-const anchors = ['PROGRESS_LOG_START','PROGRESS_LOG_END','NEXT_TASK_GROUP_START','NEXT_TASK_GROUP_END','PHASE_TASKS_START','PHASE_TASKS_END','PHASE_PROGRESS_START','PHASE_PROGRESS_END','QUICK_STATUS_START','QUICK_STATUS_END','HANDOFF_NOTES_START','HANDOFF_NOTES_END','SUBAGENT_A_ASSIGNMENT_START','SUBAGENT_A_ASSIGNMENT_END','SUBAGENT_B_ASSIGNMENT_START','SUBAGENT_B_ASSIGNMENT_END','SUBAGENT_C_ASSIGNMENT_START','SUBAGENT_C_ASSIGNMENT_END','SUBAGENT_D_ASSIGNMENT_START','SUBAGENT_D_ASSIGNMENT_END'];
 function highlightAnchors(text) {
   let safe = escapeHtml(text);
-  anchors.forEach((anchor) => { safe = safe.replaceAll('&lt;!-- ' + anchor + ' --&gt;', `<span class="anchor">&lt;!-- ${anchor} --&gt;</span>`); });
+  ANCHORS.forEach((anchor) => { safe = safe.replaceAll('&lt;!-- ' + anchor + ' --&gt;', `<span class="anchor">&lt;!-- ${anchor} --&gt;</span>`); });
   return safe;
 }
 

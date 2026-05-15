@@ -14,8 +14,8 @@
 - Resolved: orchestrator and worker steering is wired through the `nexussy_steer` MCP tool and the `steer_events` SQLite table; orchestrator-target messages drain into `engine.steer_context[run_id]` at each stage boundary; worker-target messages flow through the existing inject path.
 - Resolved: interview stage auto-skips human gating when `metadata.skip_interview == "true"`, synthesizing all answers via the configured provider and marking each `InterviewQuestionAnswer.source = "auto"`.
 - Resolved: develop merge conflicts are now recovered automatically — `merge_single_worker` saves a `conflict_report` artifact, runs `git checkout --ours` + `git add` for each conflicting path, attempts `git commit --no-edit`, and only raises if the second commit also fails.
-- Core regression suite is green: `python3 -m pytest -q core/tests` passed with 157 tests and 3 existing warnings.
-- TUI regression suite is green: `bun test && bun run typecheck` passed with 73 tests.
+- Core regression suite is green: `python3 -m pytest -q core/tests` passed with 159 tests and 1 existing warning.
+- TUI regression suite is green: `bun test && bun run typecheck` passed with 75 tests.
 - Web regression suite is green: `python3 -m pytest -q web/tests` passed with 55 tests.
 - Root operations checks are green: shell syntax, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run` pass.
 - `scripts/smoke_integration.sh` syntax and parser harness pass: `bash -n scripts/smoke_integration.sh`; `bash scripts/test_smoke_parser.sh`.
@@ -28,7 +28,8 @@
 
 ## What is unproven
 
-- None. All SPEC rows are covered by deterministic tests, live evidence, or operational evidence files.
+- No SPEC coverage blocker is currently unproven. All SPEC rows are covered by deterministic tests, live evidence, or operational evidence files.
+- Deep-review residual closure is complete: schema shadow-field aliases, strict ID validation, renderer harness tests, and shared web anchor constants all have focused test evidence.
 
 ## What is broken or risky
 
@@ -36,7 +37,7 @@
 
 ## Recommended next action
 
-No remaining SPEC coverage action is required. Keep rerunning the standard verification matrix before future releases.
+No remaining SPEC coverage or deep-review action is required. Keep rerunning the standard verification matrix before future releases.
 
 ## Effort estimate
 

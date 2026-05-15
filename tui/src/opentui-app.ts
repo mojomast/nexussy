@@ -99,6 +99,8 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   let state = createInitialChatState(initial);
   let stopped = false;
   const disposers: Array<() => void> = [];
+  let resolveDone: () => void = () => {};
+  const done = new Promise<void>(resolve => { resolveDone = resolve; });
 
   const trackListener = (target:any, event:unknown, listener:unknown) => {
     disposers.push(() => {
@@ -221,6 +223,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
     }
     renderer.stop();
     renderer.destroy();
+    resolveDone();
   };
 
   const setStatus = (message:string) => {
@@ -307,7 +310,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
 
   renderer.on(CliRenderEvents.RESIZE, render);
   trackListener(renderer, CliRenderEvents.RESIZE, render);
-  const onDestroy = () => { stopped = true; while (disposers.length) { try { disposers.pop()?.(); } catch {} } };
+  const onDestroy = () => { stopped = true; while (disposers.length) { try { disposers.pop()?.(); } catch {} } resolveDone(); };
   renderer.on(CliRenderEvents.DESTROY, onDestroy);
   trackListener(renderer, CliRenderEvents.DESTROY, onDestroy);
   input.focus();
@@ -315,8 +318,5 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   renderer.start();
   input.focus();
 
-  await new Promise<void>(resolve => {
-    renderer.on(CliRenderEvents.DESTROY, resolve);
-    trackListener(renderer, CliRenderEvents.DESTROY, resolve);
-  });
+  await done;
 }

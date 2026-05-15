@@ -158,7 +158,7 @@ def test_index_is_single_html_with_required_tabs(client: TestClient) -> None:
         assert f'id="{tab}"' in html
         assert f'href="#{tab}"' in html
     assert '<link rel="stylesheet" href="/style.css">' in html
-    assert '<script src="/app.js" defer></script>' in html
+    assert html.index('<script src="/anchors.js" defer></script>') < html.index('<script src="/app.js" defer></script>')
     assert "/api/config" in html
     assert "/api/secrets" in html
     assert 'id="error-banner"' in html
@@ -206,8 +206,13 @@ def test_health_proxies_to_core(client: TestClient) -> None:
 
 
 def test_zero_build_static_assets_are_served(client: TestClient) -> None:
+    anchors = client.get("/anchors.js")
     script = client.get("/app.js")
     style = client.get("/style.css")
+    assert anchors.status_code == 200
+    assert anchors.headers["content-type"].startswith("application/javascript")
+    assert "globalThis.NEXUSSY_ANCHORS" in anchors.text
+    assert "PROGRESS_LOG_START" in anchors.text
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("application/javascript")
     assert "EventSource('/api/pipeline/runs/'" in script.text
@@ -523,13 +528,15 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
         pytest.skip("node is unavailable for DOM execution smoke")
 
     html = client.get("/").text
+    anchors_js = client.get("/anchors.js").text
     app_js = client.get("/app.js").text
     script = textwrap.dedent(
         r'''
         const fs = require('fs');
         const vm = require('vm');
         const html = fs.readFileSync(process.argv[2], 'utf8');
-        const appScript = fs.readFileSync(process.argv[3], 'utf8');
+        const anchorScript = fs.readFileSync(process.argv[3], 'utf8');
+        const appScript = fs.readFileSync(process.argv[4], 'utf8');
         const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
 
         class Element {
@@ -598,7 +605,9 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
         const event = { preventDefault() {} };
         const context = { document, localStorage, location, addEventListener, setInterval, alert, prompt, fetch, EventSource, d3, console, Number, JSON, URLSearchParams, encodeURIComponent, String };
         vm.createContext(context);
+        vm.runInContext(anchorScript, context);
         vm.runInContext(appScript, context);
+        assert(Array.isArray(context.NEXUSSY_ANCHORS), 'shared anchors did not load');
 
         (async () => {
           await context.refreshHealth();
@@ -676,16 +685,21 @@ def test_dashboard_dom_behaviors_execute_without_build_step(client: TestClient) 
     )
     tmp_html = Path("/tmp/nexussy-dashboard-dom.html")
     tmp_js = Path("/tmp/nexussy-dashboard-dom.js")
+    tmp_anchors = Path("/tmp/nexussy-dashboard-anchors.js")
     tmp_app = Path("/tmp/nexussy-dashboard-app.js")
     tmp_html.write_text(html, encoding="utf-8")
+    tmp_anchors.write_text(anchors_js, encoding="utf-8")
     tmp_app.write_text(app_js, encoding="utf-8")
     tmp_js.write_text(script, encoding="utf-8")
-    result = subprocess.run(["node", str(tmp_js), str(tmp_html), str(tmp_app)], text=True, capture_output=True, check=False)
+    result = subprocess.run(["node", str(tmp_js), str(tmp_html), str(tmp_anchors), str(tmp_app)], text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
 
 
-def test_devplan_anchor_highlighting_script_includes_all_anchor_names(client: TestClient) -> None:
-    html = client.get("/app.js").text
+def test_devplan_anchor_highlighting_uses_shared_anchor_asset(client: TestClient) -> None:
+    app_js = client.get("/app.js").text
+    anchors_js = client.get("/anchors.js").text
+    assert "globalThis.NEXUSSY_ANCHORS" in app_js
+    assert "PROGRESS_LOG_START" not in app_js
     for anchor in [
         "PROGRESS_LOG_START",
         "PROGRESS_LOG_END",
@@ -708,7 +722,7 @@ def test_devplan_anchor_highlighting_script_includes_all_anchor_names(client: Te
         "SUBAGENT_D_ASSIGNMENT_START",
         "SUBAGENT_D_ASSIGNMENT_END",
     ]:
-        assert anchor in html
+        assert anchor in anchors_js
 
 
 def test_web_requires_no_npm_node_modules_or_build_output() -> None:

@@ -936,7 +936,7 @@ async def test_pi_rpc_fake_child_and_scrubbing(tmp_path):
     child = tmp_path / "fake_pi.py"
     child.write_text('import sys,json\nprint(json.dumps({"jsonrpc":"2.0","method":"agent.event","params":{"type":"x"}}), flush=True)\nprint("password=secret", file=sys.stderr, flush=True)\n')
     cfg = load_config({"pi":{"command":sys.executable,"args":[str(child)],"max_stdout_line_bytes":200,"shutdown_timeout_s":0}})
-    rpc = await spawn_pi_worker(cfg, "run", "worker", "backend", str(tmp_path), str(tmp_path))
+    rpc = await spawn_pi_worker(cfg, "run", "backend-abc123", "backend", str(tmp_path), str(tmp_path))
     await asyncio.sleep(.2)
     await rpc.stop(timeout_s=.1)
     lines = [f.payload.line for f in rpc.frames]
@@ -1059,13 +1059,13 @@ def test_task_skip_emits_worker_task_and_updates_handoff(monkeypatch, tmp_path):
         r = c.post("/pipeline/start", json={"project_name":"Skip Task","description":"small api","auto_approve_interview":True,"stop_after_stage":"plan","metadata":{"mock_provider":True}}).json()
         ev = _wait_done(c, r["run_id"])
         assert ev[-1]["payload"]["final_status"] == "passed"
-        asyncio.run(server.engine._persist_worker_task(r["run_id"], "backend-123", "task-123", 1, "Build backend", WorkerTaskStatus.running))
-        skipped = c.post("/pipeline/skip", json={"run_id":r["run_id"],"stage":"develop","task_id":"task-123","reason":"user chose alternate path"})
+        asyncio.run(server.engine._persist_worker_task(r["run_id"], "backend-abc123", "task-abc123", 1, "Build backend", WorkerTaskStatus.running))
+        skipped = c.post("/pipeline/skip", json={"run_id":r["run_id"],"stage":"develop","task_id":"task-abc123","reason":"user chose alternate path"})
         assert skipped.status_code == 200, skipped.text
         ev = c.get("/events", params={"run_id": r["run_id"]}).json()
-        assert any(e["type"] == "worker_task" and e["payload"].get("task_id") == "task-123" and e["payload"].get("status") == "skipped" for e in ev)
+        assert any(e["type"] == "worker_task" and e["payload"].get("task_id") == "task-abc123" and e["payload"].get("status") == "skipped" for e in ev)
         handoff = c.get("/pipeline/artifacts/handoff", params={"session_id":r["session_id"]}).json()["content_text"]
-        assert "Skipped task task-123: user chose alternate path" in handoff
+        assert "Skipped task task-abc123: user chose alternate path" in handoff
 
 
 def test_blocker_resolution_restores_previous_status(monkeypatch, tmp_path):
@@ -1179,6 +1179,53 @@ def test_public_path_schemas_reject_escape_paths():
         ChangedFile(path="a/../../x", status="modified")
 
 
+def test_shadow_field_aliases_keep_external_json_keys():
+    from nexussy.api.schemas import StagesConfig, ToolDisplay
+
+    display = ToolDisplay(json={"rows": [1, 2, 3]})
+    assert "json" not in ToolDisplay.model_fields
+    assert display.json_data == {"rows": [1, 2, 3]}
+    assert display.model_dump()["json"] == {"rows": [1, 2, 3]}
+    assert "json_data" not in display.model_dump()
+
+    stages = StagesConfig.model_validate({"validate": {"model": "openai/gpt-5.5-fast", "max_retries": 4, "max_iterations": 5}})
+    assert "validate" not in StagesConfig.model_fields
+    assert stages.validate.max_retries == 4
+    assert stages.validation.max_iterations == 5
+    assert stages.model_dump()["validate"]["max_iterations"] == 5
+    assert "validation" not in stages.model_dump()
+
+
+def test_strict_public_ids_and_legacy_event_replay_compatibility():
+    from pydantic import ValidationError
+    from nexussy.api.schemas import (
+        EVENT_ID_PATTERN,
+        TASK_ID_PATTERN,
+        WORKER_ID_PATTERN,
+        WorkerAssignRequest,
+        WorkerStreamPayload,
+    )
+    import re
+
+    env = EventEnvelope(sequence=0, type=SSEEventType.heartbeat, session_id="sid", run_id="rid", payload={})
+    assert re.fullmatch(EVENT_ID_PATTERN, env.event_id)
+    assert re.fullmatch(WORKER_ID_PATTERN, "backend-abc123")
+    assert re.fullmatch(TASK_ID_PATTERN, "task-abc123")
+
+    # Old persisted event rows used UUIDs; replay remains compatible.
+    legacy = EventEnvelope(event_id="123e4567-e89b-12d3-a456-426614174000", sequence=1, type=SSEEventType.heartbeat, session_id="sid", run_id="rid", payload={})
+    assert legacy.event_id.startswith("123e4567")
+
+    with pytest.raises(ValidationError):
+        EventEnvelope(event_id="not-an-event-id", sequence=1, type=SSEEventType.heartbeat, session_id="sid", run_id="rid", payload={})
+    with pytest.raises(ValidationError):
+        WorkerAssignRequest(run_id="rid", worker_id="backend-1", task_id="task-abc123", task="Build")
+    with pytest.raises(ValidationError):
+        WorkerStreamPayload(worker_id="backend-1", stream_kind="rpc", line="bad")
+    with pytest.raises(ValidationError):
+        WorkerAssignRequest(run_id="rid", worker_id="backend-abc123", task_id="T-001", task="Build")
+
+
 def test_safe_write_keeps_tmp_on_validation_failure(tmp_path):
     (tmp_path / "handoff.md").write_text("original")
     with pytest.raises(ValueError):
@@ -1282,24 +1329,24 @@ def test_worker_stream_filters_replay_to_requested_worker(monkeypatch, tmp_path)
         await server.db.init()
         now = datetime.now(timezone.utc).isoformat()
         await server.db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
-        for wid in ("backend-1", "frontend-1"):
+        for wid in ("backend-abc123", "frontend-abc123"):
             worker = Worker(worker_id=wid, run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, worktree_path=str(tmp_path), branch_name=f"worker/{wid}", model="openai/gpt-5.5-fast")
             await server.db.write(lambda con, worker=worker: con.execute("INSERT INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",(worker.worker_id,worker.run_id,worker.role,worker.status,worker.task_id,worker.worktree_path,worker.branch_name,worker.pid,worker.usage.model_dump_json(),None,worker.model_dump_json())))
-        await server.engine.emit(SSEEventType.worker_stream, "sid", "rid", server.WorkerStreamPayload(worker_id="frontend-1", stream_kind="rpc", line="front"))
-        await server.engine.emit(SSEEventType.worker_stream, "sid", "rid", server.WorkerStreamPayload(worker_id="backend-1", stream_kind="rpc", line="back"))
+        await server.engine.emit(SSEEventType.worker_stream, "sid", "rid", server.WorkerStreamPayload(worker_id="frontend-abc123", stream_kind="rpc", line="front"))
+        await server.engine.emit(SSEEventType.worker_stream, "sid", "rid", server.WorkerStreamPayload(worker_id="backend-abc123", stream_kind="rpc", line="back"))
     asyncio.run(seed())
     class Req:
         headers = {}
         query_params = {}
-        path_params = {"worker_id":"backend-1"}
-        url = types.SimpleNamespace(path="/swarm/workers/backend-1/stream")
+        path_params = {"worker_id":"backend-abc123"}
+        url = types.SimpleNamespace(path="/swarm/workers/backend-abc123/stream")
     async def first_frame():
         resp = await server.stream(Req())
         frame = await anext(resp.body_iterator)
         await resp.body_iterator.aclose()
         return frame
     body = json.loads(asyncio.run(first_frame()).split("data: ", 1)[1].split("\n", 1)[0])
-    assert body["payload"]["worker_id"] == "backend-1"
+    assert body["payload"]["worker_id"] == "backend-abc123"
     assert body["payload"]["line"] == "back"
     with TestClient(app) as c:
         assert c.get("/swarm/workers/missing/stream").status_code == 404
@@ -1323,10 +1370,10 @@ async def test_worker_rpc_timeout_uses_pause_state_captured_at_timeout(monkeypat
     engine = Engine(db, cfg)
     now = datetime.now(timezone.utc).isoformat()
     await db.write(lambda con: con.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?)",("rid","sid","running","develop",now,None,"{}")))
-    worker = Worker(worker_id="backend-1", run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, task_id="task-1", task_title="Build backend", worktree_path=str(tmp_path), branch_name="worker/backend-1", model="openai/gpt-5.5-fast")
+    worker = Worker(worker_id="backend-abc123", run_id="rid", role=WorkerRole.backend, status=WorkerStatus.running, task_id="task-abc123", task_title="Build backend", worktree_path=str(tmp_path), branch_name="worker/backend-abc123", model="openai/gpt-5.5-fast")
     engine.paused["rid"] = True
     await engine._run_worker_rpc("rid", "sid", worker, 1, cfg, WorkerRole.backend, tmp_path, tmp_path, spawn_fn=fake_spawn)
-    rows = await db.read("SELECT status FROM worker_tasks WHERE task_id=?", ("task-1",))
+    rows = await db.read("SELECT status FROM worker_tasks WHERE task_id=?", ("task-abc123",))
     assert rows[-1]["status"] == WorkerTaskStatus.running.value
 
 
@@ -1683,7 +1730,7 @@ async def _make_conflicting_worker_repo(tmp_path):
     commit = await commit_worker(wt, "worker edit")
     worker = Worker(
         worker_id=wid, run_id="rid-test", role=WorkerRole.backend,
-        status=WorkerStatus.running, task_id="task-test", task_title="Test conflict",
+        status=WorkerStatus.running, task_id="task-test01", task_title="Test conflict",
         worktree_path=wt, branch_name=branch, model="fake",
     )
     return main, base, wid, wt, branch, commit, worker, WorkerRole

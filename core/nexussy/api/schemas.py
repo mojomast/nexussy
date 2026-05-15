@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from enum import Enum
+import re
+import secrets
+import time
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -13,6 +16,52 @@ from nexussy.session import now_utc
 
 def new_id() -> str:
     return str(uuid4())
+
+
+WORKER_ID_PATTERN = r"^(orchestrator|backend|frontend|qa|devops|writer|analyst)-[a-z0-9]{6,12}$"
+TASK_ID_PATTERN = r"^task-[a-z0-9]{6,12}$"
+EVENT_ID_PATTERN = r"^[0-9A-HJKMNP-TV-Z]{26}$"
+_LEGACY_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+_ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def _crockford_base32(value: int, length: int) -> str:
+    chars: list[str] = []
+    for _ in range(length):
+        chars.append(_ULID_ALPHABET[value & 31])
+        value >>= 5
+    return "".join(reversed(chars))
+
+
+def new_event_id() -> str:
+    """Generate a dependency-free ULID-compatible event id."""
+    timestamp_ms = int(time.time() * 1000) & ((1 << 48) - 1)
+    randomness = secrets.randbits(80)
+    return _crockford_base32(timestamp_ms, 10) + _crockford_base32(randomness, 16)
+
+
+def _matches(pattern: str, value: str) -> bool:
+    return re.fullmatch(pattern, value) is not None
+
+
+def validate_worker_id(value: str | None) -> str | None:
+    if value is not None and not _matches(WORKER_ID_PATTERN, value):
+        raise ValueError("invalid worker_id")
+    return value
+
+
+def validate_task_id(value: str | None) -> str | None:
+    if value is not None and not _matches(TASK_ID_PATTERN, value):
+        raise ValueError("invalid task_id")
+    return value
+
+
+def validate_event_id(value: str) -> str:
+    # Persisted events from older builds used UUIDs. Keep replay compatible while
+    # all newly generated event ids use ULIDs.
+    if not (_matches(EVENT_ID_PATTERN, value) or _matches(_LEGACY_UUID_PATTERN, value.lower())):
+        raise ValueError("invalid event_id")
+    return value
 
 
 class StrictModel(BaseModel):
@@ -77,7 +126,8 @@ class ArtifactRef(StrictModel):
     def artifact_path_valid(cls, v):
         return sanitize_relative_path(v)
 class ToolDisplay(StrictModel):
-    kind:Literal["text","json","diff","table","tree","markdown"]="text"; title:str|None=None; text:str|None=None; language:str|None=None; json:JsonValue|None=None; truncated:bool=False
+    model_config = ConfigDict(extra="forbid", use_enum_values=True, populate_by_name=True, serialize_by_alias=True)
+    kind:Literal["text","json","diff","table","tree","markdown"]="text"; title:str|None=None; text:str|None=None; language:str|None=None; json_data:JsonValue|None=Field(default=None, alias="json", serialization_alias="json"); truncated:bool=False
 class ContentDeltaPayload(StrictModel):
     message_id:str; stage:StageName; worker_id:str|None=None; role:str; delta:str; final:bool=False
 class ToolCallPayload(StrictModel):
@@ -139,6 +189,10 @@ class PipelineInjectRequest(StrictModel):
     def non_empty_public_strings(cls, v):
         if v is not None and not str(v).strip(): raise ValueError("blank strings are not allowed")
         return v
+    @field_validator("worker_id")
+    @classmethod
+    def worker_id_valid(cls, v):
+        return validate_worker_id(v)
 class ControlResponse(StrictModel):
     ok:bool=True; run_id:str; status:RunStatus; message:str
 class SteerRequest(StrictModel):
@@ -153,8 +207,16 @@ class SteerRequest(StrictModel):
         if self.target == "worker" and not (self.worker_id and str(self.worker_id).strip()):
             raise ValueError("worker_id is required when target='worker'")
         return self
+    @field_validator("worker_id")
+    @classmethod
+    def worker_id_valid(cls, v):
+        return validate_worker_id(v)
 class StageSkipRequest(StrictModel):
     run_id:str; stage:StageName; reason:str; task_id:str|None=None
+    @field_validator("task_id")
+    @classmethod
+    def task_id_valid(cls, v):
+        return validate_task_id(v)
 class InterviewAnswerRequest(StrictModel):
     answers:dict[str,str]
     @field_validator("answers")
@@ -197,8 +259,20 @@ class WorkerSpawnRequest(StrictModel):
     run_id:str; role:WorkerRole; task:str; phase_number:int|None=None; model:str|None=None
 class WorkerAssignRequest(StrictModel):
     run_id:str; worker_id:str; task_id:str|None=None; task:str; phase_number:int|None=None
+    @field_validator("worker_id")
+    @classmethod
+    def worker_id_valid(cls, v):
+        return validate_worker_id(v)
+    @field_validator("task_id")
+    @classmethod
+    def task_id_valid(cls, v):
+        return validate_task_id(v)
 class WorkerInjectRequest(StrictModel):
     run_id:str; worker_id:str; message:str
+    @field_validator("worker_id")
+    @classmethod
+    def worker_id_valid(cls, v):
+        return validate_worker_id(v)
 class BlockerCreateRequest(StrictModel):
     run_id:str; stage:StageName; message:str; worker_id:str|None=None; severity:Literal["warning","blocker"]="blocker"
 class BlockerResolveRequest(StrictModel):
@@ -255,7 +329,11 @@ class ValidateBrowserStageConfig(StrictModel):
         return v
 class DevelopStageConfig(StrictModel): model:str="openai/gpt-5.5-fast"; orchestrator_model:str="openai/gpt-5.5-fast"; max_retries:int=2
 class StagesConfig(StrictModel):
-    interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:DesignStageConfig=Field(default_factory=DesignStageConfig); validate:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3)); validate_browser:ValidateBrowserStageConfig=Field(default_factory=ValidateBrowserStageConfig); plan:PlanStageConfig=Field(default_factory=PlanStageConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
+    model_config = ConfigDict(extra="forbid", use_enum_values=True, populate_by_name=True, serialize_by_alias=True)
+    interview:InterviewStageConfig=Field(default_factory=InterviewStageConfig); design:DesignStageConfig=Field(default_factory=DesignStageConfig); validation:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=3), alias="validate", serialization_alias="validate"); validate_browser:ValidateBrowserStageConfig=Field(default_factory=ValidateBrowserStageConfig); plan:PlanStageConfig=Field(default_factory=PlanStageConfig); review:StageModelConfig=Field(default_factory=lambda:StageModelConfig(max_retries=2,max_iterations=2)); develop:DevelopStageConfig=Field(default_factory=DevelopStageConfig)
+    @property
+    def validate(self) -> StageModelConfig:
+        return self.validation
 class SwarmConfig(StrictModel): max_workers:int=8; default_worker_count:int=2; worker_task_timeout_s:int=900; worker_start_timeout_s:int=30; file_lock_timeout_s:int=120; file_lock_retry_ms:int=250; merge_strategy:Literal["no_ff","squash"]="no_ff"; conflict_strategy:Literal["ours","diff3","abort"]="ours"
 class PiConfig(StrictModel): command:str="nexussy-pi"; args:list[str]=Field(default_factory=list); startup_timeout_s:int=30; shutdown_timeout_s:int=10; max_stdout_line_bytes:int=1048576
 class SSEConfig(StrictModel): heartbeat_interval_s:int=15; client_queue_max_events:int=1000; replay_max_events:int=10000; retry_ms:int=3000
@@ -277,18 +355,31 @@ class HeartbeatPayload(StrictModel): ts:datetime=Field(default_factory=now_utc);
 class StageTransitionPayload(StrictModel): from_stage:StageName|None=None; to_stage:StageName; from_status:StageRunStatus|None=None; to_status:StageRunStatus; reason:str
 class CheckpointPayload(StrictModel): checkpoint_id:str; stage:StageName; path:str; sha256:str; created_at:datetime
 class ArtifactUpdatedPayload(StrictModel): artifact:ArtifactRef; action:Literal["created","updated","deleted"]; anchor:str|None=None
-class WorkerTaskPayload(StrictModel): worker_id:str; task_id:str; phase_number:int|None=None; task_title:str; status:WorkerTaskStatus
-class WorkerStreamPayload(StrictModel): worker_id:str; stream_kind:Literal["rpc","stdout","stderr"]; line:str; parsed:bool=False; truncated:bool=False
+class WorkerTaskPayload(StrictModel):
+    worker_id:str; task_id:str; phase_number:int|None=None; task_title:str; status:WorkerTaskStatus
+    @field_validator("worker_id")
+    @classmethod
+    def worker_id_valid(cls, v): return validate_worker_id(v)
+    @field_validator("task_id")
+    @classmethod
+    def task_id_valid(cls, v): return validate_task_id(v)
+class WorkerStreamPayload(StrictModel):
+    worker_id:str; stream_kind:Literal["rpc","stdout","stderr"]; line:str; parsed:bool=False; truncated:bool=False
+    @field_validator("worker_id")
+    @classmethod
+    def worker_id_valid(cls, v): return validate_worker_id(v)
 class GitEventPayload(StrictModel): action:GitEventAction; worker_id:str|None=None; branch_name:str|None=None; commit_sha:str|None=None; paths:list[str]=Field(default_factory=list); message:str
 class PausePayload(StrictModel): paused:bool; reason:str; requested_by:str="api"
 class DonePayload(StrictModel): final_status:RunStatus; summary:str; artifacts:list[ArtifactRef]=Field(default_factory=list); usage:TokenUsage=Field(default_factory=TokenUsage); error:ErrorResponse|None=None
 class EventEnvelope(StrictModel):
-    event_id:str=Field(default_factory=new_id); sequence:int; contract_version:str="1.0"; type:SSEEventType; session_id:str; run_id:str; ts:datetime=Field(default_factory=now_utc); source:Literal["core","worker","tui","web"]="core"; payload:JsonValue
+    event_id:str=Field(default_factory=new_event_id); sequence:int; contract_version:str="1.0"; type:SSEEventType; session_id:str; run_id:str; ts:datetime=Field(default_factory=now_utc); source:Literal["core","worker","tui","web"]="core"; payload:JsonValue
+    @field_validator("event_id")
+    @classmethod
+    def event_id_valid(cls, v): return validate_event_id(v)
 
 PipelineStatusResponse.model_rebuild()
 
 def re_match(pattern: str, value: str) -> bool:
-    import re
     return re.match(pattern, value) is not None
 
 def assert_json_safe(value):

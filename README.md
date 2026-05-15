@@ -82,6 +82,8 @@ SPEC.md    Authoritative implementation contract
 
 `SPEC.md` is the source of truth for contracts. `SPEC_COVERAGE.md` tracks implementation evidence and remaining gaps.
 
+Current deep-review residual cleanup is tracked in `DEEP_CODE_REVIEW.md` and status docs. The residual bucket is closed: Pydantic shadow-field aliases, strict ID validation, renderer harness tests, and shared web anchor constants all have focused verification.
+
 ## Install
 
 Prerequisites:
@@ -444,6 +446,8 @@ bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh
 ```
 
 Current traceability status is tracked in `SPEC_COVERAGE.md` and `FULL_SPEC_REMAINING.md`. At the time of this README update, no rows are blocked on missing external tooling; live provider, live Pi, installer, core, TUI, web, shell, and ops evidence is recorded in the coverage matrix and `scripts/evidence/`.
+
+The deep code review follow-up report is tracked in `DEEP_CODE_REVIEW.md`; all critical/high findings and the residual cleanup bucket are closed with regression coverage.
 
 For backup, restore, schema migration, and audit-log operations, see `OPERATIONS.md`.
 

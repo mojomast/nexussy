@@ -4,11 +4,15 @@
 
 Current coverage summary: all SPEC rows are covered. Core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, worker tool execution, plan task validation, TUI default-renderer contract, full Ubuntu install idempotency, and live multi-agent swarm workload control all have current evidence.
 
+Deep-review residual cleanup is also closed outside the SPEC matrix: schema shadow-field aliases, strict ID validation, renderer harness tests, and shared web anchor constants all have focused regression coverage.
+
 ## Execution Model
 
 Close this file through the circular loop in `CIRCULAR_DEVELOPMENT.md`. Work proceeds in cycles, not by cherry-picking rows: core runtime semantics, core contracts/providers/MCP, TUI closure, web evidence, ops evidence, then live external checks. Each cycle delegates only to the owning subagent, adds tests for new behavior, reruns the area suite, updates this file and `SPEC_COVERAGE.md`, then advances to the next cycle.
 
 Current active cycle: none — all spec rows covered. Local/team hardening is complete, including sandboxed executor docs, deployment profiles, audit logging, `OPERATIONS.md`, rotate-key, R-080 live provider-plus-Pi evidence, R-063/R-069 install idempotency evidence, and R-075 live swarm evidence.
+
+Deep-review residual cleanup is tracked separately from SPEC coverage and is closed. Pydantic shadow-field aliases, strict WorkerID/TaskID/EventID validation, full renderer harness tests, and shared web anchor constants all have focused test evidence.
 
 ## Highest-Priority Partial Rows
 

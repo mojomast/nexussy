@@ -35,7 +35,7 @@ async def test_worker_permission_denial_frame_emits_tool_output_sse(tmp_path):
     async def fake_spawn(*args, **kwargs):
         return FakeRpc()
 
-    worker = Worker(worker_id="analyst-1", run_id="rid", role=WorkerRole.analyst, status=WorkerStatus.running, task_id="task-1", task_title="Analyze", worktree_path=str(tmp_path), branch_name="worker/analyst-1", model="openai/gpt-5.5-fast")
+    worker = Worker(worker_id="analyst-1", run_id="rid", role=WorkerRole.analyst, status=WorkerStatus.running, task_id="task-abc123", task_title="Analyze", worktree_path=str(tmp_path), branch_name="worker/analyst-1", model="openai/gpt-5.5-fast")
 
     await run_worker_rpc(engine, "rid", "sid", worker, 1, engine.config, WorkerRole.analyst, tmp_path, tmp_path, spawn_fn=fake_spawn)
 

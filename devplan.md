@@ -16,6 +16,7 @@ No new Python package dependencies are approved in this plan. All graph, permiss
 - 2026-05-02: Sprint 5 Phase 0 browser-harness feasibility review completed; `BROWSER_HARNESS_NOTES.md` records optionality, browser requirements, detection/fallback, and minimal validation-session findings.
 - 2026-05-02: Sprint 5 T-501 through T-505 completed; optional browser validation is disabled by default, fake-tested, wired after develop when enabled, reported by doctor, and documented in CHANGELOG/SPEC_COVERAGE.
 - 2026-05-14: Deep code review fix pass completed across core, TUI, web, and root/docs. Critical/high fixes covered real worker tool execution, shell-safe local worker bash, richer graph data, interview timeout cleanup, SSE/client stream cleanup, web proxy limits/timeouts, dashboard chat/graph/control surfaces, generated config defaults, and regression coverage. Verification passed for core, TUI, web, shell syntax, ops tests, installer dry-run, and core/web startup smokes with explicit `PYTHONPATH`.
+- 2026-05-15: Residual deep-review closure completed. Core removed Pydantic shadow-field warnings through aliases and added WorkerID/TaskID/EventID validation, TUI added OpenTUI/PiTUI renderer harness tests, web moved anchor constants into a shared asset, and docs/status now record completion. Verification passed for core, TUI, web, shell syntax, ops tests, installer dry-run, and core/web startup smokes.
 <!-- PROGRESS_LOG_END -->
 
 ## Conflict Resolution

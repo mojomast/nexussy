@@ -174,7 +174,11 @@ async def dashboard(_: Request) -> HTMLResponse:
 async def static_asset(request: Request) -> Response:
     """Serve the zero-build dashboard assets packaged with the web app."""
     filename = request.path_params["filename"]
-    allowed = {"app.js": "application/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
+    allowed = {
+        "anchors.js": "application/javascript; charset=utf-8",
+        "app.js": "application/javascript; charset=utf-8",
+        "style.css": "text/css; charset=utf-8",
+    }
     if filename not in allowed:
         return _json_error(404, "not_found", "Static asset not found")
     asset = resources.files("nexussy_web").joinpath("static", filename)
