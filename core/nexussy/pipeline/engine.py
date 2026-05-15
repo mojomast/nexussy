@@ -198,6 +198,10 @@ class Engine:
                     q.put_nowait(slow)
                 except asyncio.QueueFull:
                     pass
+                logger.warning(
+                    "SSE client queue full for run %s — dropping oldest event and disconnecting slow subscriber",
+                    run_id,
+                )
                 self.queues.get(run_id, set()).discard(q)
         return env
 
