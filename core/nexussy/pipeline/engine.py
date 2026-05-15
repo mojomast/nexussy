@@ -690,6 +690,18 @@ class Engine:
             payload = ToolOutputPayload(
                 call_id=call_id, stage=stage, success=False, error=str(e) or "forbidden", worker_id=worker_id
             )
+        except ValueError as e:
+            if str(e) == "path_rejected":
+                write_audit(
+                    self.config.home_dir,
+                    "path_traversal_rejected",
+                    run_id=run_id,
+                    worker_id=worker_id,
+                    path=arguments.get("path"),
+                )
+            payload = ToolOutputPayload(
+                call_id=call_id, stage=stage, success=False, error=str(e) or "invalid path", worker_id=worker_id
+            )
         except Exception as e:
             payload = ToolOutputPayload(
                 call_id=call_id, stage=stage, success=False, error=str(e) or "tool failed", worker_id=worker_id
