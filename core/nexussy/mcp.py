@@ -6,7 +6,32 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from nexussy.api.schemas import ArtifactManifestResponse, ArtifactRef, Blocker, ControlResponse, ErrorCode, ErrorResponse, InterviewAnswerRequest, PausePayload, PipelineInjectRequest, PipelineStartRequest, PipelineStatusResponse, RunStatus, RunSummary, SSEEventType, SessionDetail, StageStatusSchema, SteerRequest, Worker, WorkerAssignRequest, WorkerSpawnRequest, WorkerStatus, WorkerStreamPayload, WorkerTaskPayload, WorkerTaskStatus
+from nexussy.api.schemas import (
+    ArtifactManifestResponse,
+    ArtifactRef,
+    Blocker,
+    ControlResponse,
+    ErrorCode,
+    ErrorResponse,
+    InterviewAnswerRequest,
+    PausePayload,
+    PipelineInjectRequest,
+    PipelineStartRequest,
+    PipelineStatusResponse,
+    RunStatus,
+    RunSummary,
+    SSEEventType,
+    SessionDetail,
+    StageStatusSchema,
+    SteerRequest,
+    Worker,
+    WorkerAssignRequest,
+    WorkerSpawnRequest,
+    WorkerStatus,
+    WorkerStreamPayload,
+    WorkerTaskPayload,
+    WorkerTaskStatus,
+)
 from nexussy.session import now_utc
 from nexussy.api.schemas import WorkerRole
 from nexussy.swarm.roles import check_tool_permission
@@ -40,12 +65,49 @@ async def _get_status(arguments: dict[str, Any], *, engine, db):
     if not runs:
         raise KeyError("run")
     row = runs[0]
-    run = RunSummary(run_id=run_id, session_id=row["session_id"], status=row["status"], current_stage=row["current_stage"], started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None, finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None)
-    srows = await db.read("SELECT * FROM stage_runs WHERE run_id=? ORDER BY CASE stage WHEN 'interview' THEN 1 WHEN 'design' THEN 2 WHEN 'validate' THEN 3 WHEN 'plan' THEN 4 WHEN 'review' THEN 5 ELSE 6 END", (run_id,))
-    stages = [StageStatusSchema(stage=x["stage"], status=x["status"], attempt=x["attempt"] or 0, started_at=datetime.fromisoformat(x["started_at"]) if x["started_at"] else None, finished_at=datetime.fromisoformat(x["finished_at"]) if x["finished_at"] else None) for x in srows]
-    workers = [Worker.model_validate_json(x["worker_json"]) for x in await db.read("SELECT worker_json FROM workers WHERE run_id=?", (run_id,))]
-    blockers = [Blocker(blocker_id=x["blocker_id"], run_id=x["run_id"], worker_id=x["worker_id"], stage=x["stage"], severity=x["severity"], message=x["message"], resolved=bool(x["resolved"]), created_at=datetime.fromisoformat(x["created_at"]), resolved_at=datetime.fromisoformat(x["resolved_at"]) if x["resolved_at"] else None) for x in await db.read("SELECT * FROM blockers WHERE run_id=? AND resolved=0", (run_id,))]
-    return PipelineStatusResponse(run=run, stages=stages, workers=workers, paused=bool(engine.paused.get(run_id)), blockers=blockers)
+    run = RunSummary(
+        run_id=run_id,
+        session_id=row["session_id"],
+        status=row["status"],
+        current_stage=row["current_stage"],
+        started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+        finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+    )
+    srows = await db.read(
+        "SELECT * FROM stage_runs WHERE run_id=? ORDER BY CASE stage WHEN 'interview' THEN 1 WHEN 'design' THEN 2 WHEN 'validate' THEN 3 WHEN 'plan' THEN 4 WHEN 'review' THEN 5 ELSE 6 END",
+        (run_id,),
+    )
+    stages = [
+        StageStatusSchema(
+            stage=x["stage"],
+            status=x["status"],
+            attempt=x["attempt"] or 0,
+            started_at=datetime.fromisoformat(x["started_at"]) if x["started_at"] else None,
+            finished_at=datetime.fromisoformat(x["finished_at"]) if x["finished_at"] else None,
+        )
+        for x in srows
+    ]
+    workers = [
+        Worker.model_validate_json(x["worker_json"])
+        for x in await db.read("SELECT worker_json FROM workers WHERE run_id=?", (run_id,))
+    ]
+    blockers = [
+        Blocker(
+            blocker_id=x["blocker_id"],
+            run_id=x["run_id"],
+            worker_id=x["worker_id"],
+            stage=x["stage"],
+            severity=x["severity"],
+            message=x["message"],
+            resolved=bool(x["resolved"]),
+            created_at=datetime.fromisoformat(x["created_at"]),
+            resolved_at=datetime.fromisoformat(x["resolved_at"]) if x["resolved_at"] else None,
+        )
+        for x in await db.read("SELECT * FROM blockers WHERE run_id=? AND resolved=0", (run_id,))
+    ]
+    return PipelineStatusResponse(
+        run=run, stages=stages, workers=workers, paused=bool(engine.paused.get(run_id)), blockers=blockers
+    )
 
 
 async def _pause(arguments: dict[str, Any], *, engine, db):
@@ -58,7 +120,12 @@ async def _pause(arguments: dict[str, Any], *, engine, db):
     for rpc in list(getattr(engine, "active_worker_rpcs", {}).get(run_id, [])):
         await rpc.stop(getattr(getattr(cfg, "pi", None), "shutdown_timeout_s", 10))
     if hasattr(engine, "emit"):
-        await engine.emit(SSEEventType.pause_state_changed, rows[0]["session_id"], run_id, PausePayload(paused=True, reason=arguments.get("reason", "user"), requested_by="mcp"))
+        await engine.emit(
+            SSEEventType.pause_state_changed,
+            rows[0]["session_id"],
+            run_id,
+            PausePayload(paused=True, reason=arguments.get("reason", "user"), requested_by="mcp"),
+        )
     await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("paused", run_id)))
     return ControlResponse(run_id=run_id, status=RunStatus.paused, message="paused")
 
@@ -70,7 +137,12 @@ async def _resume(arguments: dict[str, Any], *, engine, db):
         raise KeyError("run")
     engine.paused.pop(run_id, None)
     if hasattr(engine, "emit"):
-        await engine.emit(SSEEventType.pause_state_changed, rows[0]["session_id"], run_id, PausePayload(paused=False, reason="resume", requested_by="mcp"))
+        await engine.emit(
+            SSEEventType.pause_state_changed,
+            rows[0]["session_id"],
+            run_id,
+            PausePayload(paused=False, reason="resume", requested_by="mcp"),
+        )
     await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("running", run_id)))
     return ControlResponse(run_id=run_id, status=RunStatus.running, message="resumed")
 
@@ -85,7 +157,12 @@ async def _cancel(arguments: dict[str, Any], *, engine, db):
         task.cancel()
     engine.paused.pop(run_id, None)
     if hasattr(engine, "emit"):
-        await engine.emit(SSEEventType.pause_state_changed, rows[0]["session_id"], run_id, PausePayload(paused=False, reason=arguments.get("reason", "cancelled"), requested_by="mcp"))
+        await engine.emit(
+            SSEEventType.pause_state_changed,
+            rows[0]["session_id"],
+            run_id,
+            PausePayload(paused=False, reason=arguments.get("reason", "cancelled"), requested_by="mcp"),
+        )
     await db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("cancelled", run_id)))
     return ControlResponse(run_id=run_id, status=RunStatus.cancelled, message=arguments.get("reason", "cancelled"))
 
@@ -96,7 +173,17 @@ async def _get_artifacts(arguments: dict[str, Any], *, engine=None, db=None):
     if not run_rows:
         raise KeyError("run")
     rows = await db.read("SELECT * FROM artifacts WHERE run_id=?", (run_id,))
-    artifacts = [ArtifactRef(kind=x["kind"], path=x["path"], sha256=x["sha256"], bytes=x["bytes"], updated_at=datetime.fromisoformat(x["updated_at"]), phase_number=x["phase_number"]) for x in rows]
+    artifacts = [
+        ArtifactRef(
+            kind=x["kind"],
+            path=x["path"],
+            sha256=x["sha256"],
+            bytes=x["bytes"],
+            updated_at=datetime.fromisoformat(x["updated_at"]),
+            phase_number=x["phase_number"],
+        )
+        for x in rows
+    ]
     return ArtifactManifestResponse(session_id=run_rows[0]["session_id"], run_id=run_id, artifacts=artifacts)
 
 
@@ -119,7 +206,21 @@ async def _inject(arguments: dict[str, Any], *, engine=None, db=None):
     if not rows:
         raise KeyError("run")
     if hasattr(engine, "emit"):
-        await engine.emit(SSEEventType.pipeline_error, rows[0]["session_id"], req.run_id, ErrorResponse(error_code=ErrorCode.run_not_active, message="injected context", details={"message": req.message, "worker_id": req.worker_id, "stage": req.stage.value if req.stage else None}, retryable=True))
+        await engine.emit(
+            SSEEventType.pipeline_error,
+            rows[0]["session_id"],
+            req.run_id,
+            ErrorResponse(
+                error_code=ErrorCode.run_not_active,
+                message="injected context",
+                details={
+                    "message": req.message,
+                    "worker_id": req.worker_id,
+                    "stage": req.stage.value if req.stage else None,
+                },
+                retryable=True,
+            ),
+        )
     return ControlResponse(run_id=req.run_id, status=rows[0]["status"], message="injected")
 
 
@@ -143,8 +244,34 @@ async def _worker_spawn(arguments: dict[str, Any], *, engine, db):
     default_model = getattr(getattr(cfg, "providers", None), "default_model", "mock/model")
     wid = f"{req.role}-{uuid4().hex[:8]}"
     wt = str(pathlib.Path(projects_dir).expanduser() / "workers" / wid)
-    worker = Worker(worker_id=wid, run_id=req.run_id, role=req.role, status=WorkerStatus.idle, task_title=req.task, worktree_path=wt, branch_name=f"worker/{wid}", model=req.model or default_model)
-    await db.write(lambda con: con.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)", (worker.worker_id, worker.run_id, worker.role, worker.status, worker.task_id, worker.worktree_path, worker.branch_name, worker.pid, worker.usage.model_dump_json(), None, worker.model_dump_json())))
+    worker = Worker(
+        worker_id=wid,
+        run_id=req.run_id,
+        role=req.role,
+        status=WorkerStatus.idle,
+        task_title=req.task,
+        worktree_path=wt,
+        branch_name=f"worker/{wid}",
+        model=req.model or default_model,
+    )
+    await db.write(
+        lambda con: con.execute(
+            "INSERT OR REPLACE INTO workers VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                worker.worker_id,
+                worker.run_id,
+                worker.role,
+                worker.status,
+                worker.task_id,
+                worker.worktree_path,
+                worker.branch_name,
+                worker.pid,
+                worker.usage.model_dump_json(),
+                None,
+                worker.model_dump_json(),
+            ),
+        )
+    )
     if hasattr(engine, "emit"):
         await engine.emit(SSEEventType.worker_spawned, run_rows[0]["session_id"], req.run_id, worker)
     return worker
@@ -169,18 +296,51 @@ async def _worker_assign(arguments: dict[str, Any], *, engine, db):
     worker.task_id = req.task_id or f"task-{uuid4().hex[:8]}"
     worker.task_title = req.task
     worker.status = WorkerStatus.assigned
-    await db.write(lambda con: con.execute("UPDATE workers SET status=?, task_id=?, worker_json=? WHERE worker_id=?", (worker.status, worker.task_id, worker.model_dump_json(), worker.worker_id)))
+    await db.write(
+        lambda con: con.execute(
+            "UPDATE workers SET status=?, task_id=?, worker_json=? WHERE worker_id=?",
+            (worker.status, worker.task_id, worker.model_dump_json(), worker.worker_id),
+        )
+    )
     now = now_utc().isoformat()
-    await db.write(lambda con: con.execute("INSERT OR REPLACE INTO worker_tasks VALUES(?,?,?,?,?,?,?,?)", (worker.task_id, worker.run_id, worker.worker_id, req.phase_number, req.task, WorkerTaskStatus.assigned.value, now, now)))
+    await db.write(
+        lambda con: con.execute(
+            "INSERT OR REPLACE INTO worker_tasks VALUES(?,?,?,?,?,?,?,?)",
+            (
+                worker.task_id,
+                worker.run_id,
+                worker.worker_id,
+                req.phase_number,
+                req.task,
+                WorkerTaskStatus.assigned.value,
+                now,
+                now,
+            ),
+        )
+    )
     run_rows = await db.read("SELECT session_id FROM runs WHERE run_id=?", (req.run_id,))
     if run_rows and hasattr(engine, "emit"):
-        await engine.emit(SSEEventType.worker_task, run_rows[0]["session_id"], req.run_id, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=req.phase_number, task_title=req.task, status=WorkerTaskStatus.assigned))
+        await engine.emit(
+            SSEEventType.worker_task,
+            run_rows[0]["session_id"],
+            req.run_id,
+            WorkerTaskPayload(
+                worker_id=worker.worker_id,
+                task_id=worker.task_id,
+                phase_number=req.phase_number,
+                task_title=req.task,
+                status=WorkerTaskStatus.assigned,
+            ),
+        )
     return worker
 
 
 async def _list_workers(arguments: dict[str, Any], *, engine=None, db=None):
     run_id = arguments["run_id"]
-    return [Worker.model_validate_json(x["worker_json"]).model_dump(mode="json") for x in await db.read("SELECT worker_json FROM workers WHERE run_id=?", (run_id,))]
+    return [
+        Worker.model_validate_json(x["worker_json"]).model_dump(mode="json")
+        for x in await db.read("SELECT worker_json FROM workers WHERE run_id=?", (run_id,))
+    ]
 
 
 async def _steer(arguments: dict[str, Any], *, engine, db):
@@ -190,12 +350,14 @@ async def _steer(arguments: dict[str, Any], *, engine, db):
         raise KeyError("run")
     now = now_utc().isoformat()
     inserted = {"id": None}
+
     def tx(con):
         cur = con.execute(
             "INSERT INTO steer_events(run_id, target, worker_id, message, priority, created_at) VALUES(?,?,?,?,?,?)",
             (req.run_id, req.target, req.worker_id, req.message, req.priority, now),
         )
         inserted["id"] = cur.lastrowid
+
     await db.write(tx)
     if req.target == "orchestrator":
         if engine is not None:
@@ -203,14 +365,28 @@ async def _steer(arguments: dict[str, Any], *, engine, db):
                 engine.steer_queue.pop(req.run_id, None)
                 engine.steer_context.pop(req.run_id, None)
                 consumed_at = now_utc().isoformat()
-                await db.write(lambda con: con.execute("UPDATE steer_events SET consumed_at=? WHERE run_id=? AND target='orchestrator' AND consumed_at IS NULL", (consumed_at, req.run_id)))
+                await db.write(
+                    lambda con: con.execute(
+                        "UPDATE steer_events SET consumed_at=? WHERE run_id=? AND target='orchestrator' AND consumed_at IS NULL",
+                        (consumed_at, req.run_id),
+                    )
+                )
             else:
-                engine.steer_queue.setdefault(req.run_id, []).append({"id": inserted["id"], "message": req.message, "priority": req.priority, "ts": now})
+                engine.steer_queue.setdefault(req.run_id, []).append(
+                    {"id": inserted["id"], "message": req.message, "priority": req.priority, "ts": now}
+                )
     else:
         # Mirror worker_inject path: emit worker_stream event and forward to active RPC if present
         sid = run_rows[0]["session_id"]
         if engine is not None and hasattr(engine, "emit"):
-            payload = WorkerStreamPayload(worker_id=req.worker_id, stream_kind="rpc", line=json.dumps({"type": "inject", "message": req.message, "priority": req.priority, "source": "steer"}), parsed=True)
+            payload = WorkerStreamPayload(
+                worker_id=req.worker_id,
+                stream_kind="rpc",
+                line=json.dumps(
+                    {"type": "inject", "message": req.message, "priority": req.priority, "source": "steer"}
+                ),
+                parsed=True,
+            )
             await engine.emit(SSEEventType.worker_stream, sid, req.run_id, payload)
             for rpc in list(getattr(engine, "active_worker_rpcs", {}).get(req.run_id, [])):
                 if getattr(rpc, "worker_id", None) == req.worker_id:
@@ -222,8 +398,15 @@ async def _steer_status(arguments: dict[str, Any], *, engine, db):
     run_id = arguments["run_id"]
     if not await db.read("SELECT run_id FROM runs WHERE run_id=?", (run_id,)):
         raise KeyError("run")
-    rows = await db.read("SELECT id, run_id, target, worker_id, message, priority, created_at, consumed_at FROM steer_events WHERE run_id=? ORDER BY id DESC LIMIT 3", (run_id,))
-    return {"run_id": run_id, "queue_length": len(getattr(engine, "steer_queue", {}).get(run_id, [])) if engine is not None else 0, "recent": rows}
+    rows = await db.read(
+        "SELECT id, run_id, target, worker_id, message, priority, created_at, consumed_at FROM steer_events WHERE run_id=? ORDER BY id DESC LIMIT 3",
+        (run_id,),
+    )
+    return {
+        "run_id": run_id,
+        "queue_length": len(getattr(engine, "steer_queue", {}).get(run_id, [])) if engine is not None else 0,
+        "recent": rows,
+    }
 
 
 def _json_rpc_error(code: int, message: str, request_id=None) -> dict[str, Any]:
@@ -251,7 +434,7 @@ async def call_stdio(reader, writer, *, engine=None, db=None):
                 response = _json_rpc_error(-32600, "missing or invalid method", request_id)
             elif method == "notifications/initialized":
                 if not is_notification:
-                    response = {"jsonrpc":"2.0","id":request_id,"result":{}}
+                    response = {"jsonrpc": "2.0", "id": request_id, "result": {}}
             else:
                 try:
                     if method == "tools/list":
@@ -261,12 +444,16 @@ async def call_stdio(reader, writer, *, engine=None, db=None):
                         if hasattr(result, "model_dump"):
                             result = result.model_dump(mode="json")
                     elif method == "initialize":
-                        result = {"protocolVersion":"2024-11-05","serverInfo":{"name":"nexussy","version":"1.0"},"capabilities":{"tools":{}}}
+                        result = {
+                            "protocolVersion": "2024-11-05",
+                            "serverInfo": {"name": "nexussy", "version": "1.0"},
+                            "capabilities": {"tools": {}},
+                        }
                     else:
                         response = _json_rpc_error(-32601, f"unknown method: {method}", request_id)
                         result = None
                     if response is None and not is_notification:
-                        response = {"jsonrpc":"2.0","id":request_id,"result":result}
+                        response = {"jsonrpc": "2.0", "id": request_id, "result": result}
                 except Exception as e:
                     if not is_notification:
                         response = _json_rpc_error(-32603, str(e), request_id)
@@ -293,7 +480,10 @@ register(
             "auto_approve_interview": {"type": "boolean"},
             "existing_repo_path": {"type": "string"},
             "start_stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]},
-            "stop_after_stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]},
+            "stop_after_stage": {
+                "type": "string",
+                "enum": ["interview", "design", "validate", "plan", "review", "develop"],
+            },
             "resume_run_id": {"type": "string"},
             "model_overrides": {"type": "object"},
             "metadata": {"type": "object"},
@@ -301,16 +491,143 @@ register(
     },
     _start_pipeline,
 )
-register("nexussy_get_status", "Get status for a nexussy pipeline run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _get_status)
-register("nexussy_pause", "Pause a nexussy pipeline run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}, "reason": {"type": "string"}}}, _pause)
-register("nexussy_resume", "Resume a nexussy pipeline run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _resume)
-register("nexussy_cancel", "Cancel a nexussy pipeline run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}, "reason": {"type": "string"}}}, _cancel)
-register("nexussy_get_artifacts", "Get artifact manifest for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _get_artifacts)
-register("nexussy_list_sessions", "List recent nexussy sessions", {"type": "object", "properties": {"limit": {"type": "integer"}, "offset": {"type": "integer"}}}, _list_sessions)
-register("nexussy_interview_answer", "Submit interview answers for a session", {"type": "object", "required": ["session_id", "answers"], "properties": {"session_id": {"type": "string"}, "answers": {"type": "object"}}}, _interview_answer)
-register("nexussy_inject", "Inject guidance into a running pipeline", {"type": "object", "required": ["run_id", "message"], "properties": {"run_id": {"type": "string"}, "message": {"type": "string"}, "worker_id": {"type": "string"}, "stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]}}}, _inject)
-register("nexussy_worker_spawn", "Spawn a worker in the swarm", {"type": "object", "required": ["run_id", "role", "task"], "properties": {"run_id": {"type": "string"}, "role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "model": {"type": "string"}, "requester_role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}}}, _worker_spawn)
-register("nexussy_worker_assign", "Assign a task to an existing worker", {"type": "object", "required": ["run_id", "worker_id", "task"], "properties": {"run_id": {"type": "string"}, "worker_id": {"type": "string"}, "task_id": {"type": "string"}, "task": {"type": "string"}, "phase_number": {"type": "integer"}, "requester_role": {"type": "string", "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"]}}}, _worker_assign)
-register("nexussy_list_workers", "List workers for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _list_workers)
-register("nexussy_steer", "Steer a running pipeline orchestrator or a specific worker", {"type": "object", "required": ["target", "run_id", "message"], "properties": {"target": {"type": "string", "enum": ["orchestrator", "worker"]}, "run_id": {"type": "string"}, "worker_id": {"type": "string"}, "message": {"type": "string"}, "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]}}}, _steer)
-register("nexussy_steer_status", "List queued and recent steering events for a run", {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}, _steer_status)
+register(
+    "nexussy_get_status",
+    "Get status for a nexussy pipeline run",
+    {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}},
+    _get_status,
+)
+register(
+    "nexussy_pause",
+    "Pause a nexussy pipeline run",
+    {
+        "type": "object",
+        "required": ["run_id"],
+        "properties": {"run_id": {"type": "string"}, "reason": {"type": "string"}},
+    },
+    _pause,
+)
+register(
+    "nexussy_resume",
+    "Resume a nexussy pipeline run",
+    {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}},
+    _resume,
+)
+register(
+    "nexussy_cancel",
+    "Cancel a nexussy pipeline run",
+    {
+        "type": "object",
+        "required": ["run_id"],
+        "properties": {"run_id": {"type": "string"}, "reason": {"type": "string"}},
+    },
+    _cancel,
+)
+register(
+    "nexussy_get_artifacts",
+    "Get artifact manifest for a run",
+    {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}},
+    _get_artifacts,
+)
+register(
+    "nexussy_list_sessions",
+    "List recent nexussy sessions",
+    {"type": "object", "properties": {"limit": {"type": "integer"}, "offset": {"type": "integer"}}},
+    _list_sessions,
+)
+register(
+    "nexussy_interview_answer",
+    "Submit interview answers for a session",
+    {
+        "type": "object",
+        "required": ["session_id", "answers"],
+        "properties": {"session_id": {"type": "string"}, "answers": {"type": "object"}},
+    },
+    _interview_answer,
+)
+register(
+    "nexussy_inject",
+    "Inject guidance into a running pipeline",
+    {
+        "type": "object",
+        "required": ["run_id", "message"],
+        "properties": {
+            "run_id": {"type": "string"},
+            "message": {"type": "string"},
+            "worker_id": {"type": "string"},
+            "stage": {"type": "string", "enum": ["interview", "design", "validate", "plan", "review", "develop"]},
+        },
+    },
+    _inject,
+)
+register(
+    "nexussy_worker_spawn",
+    "Spawn a worker in the swarm",
+    {
+        "type": "object",
+        "required": ["run_id", "role", "task"],
+        "properties": {
+            "run_id": {"type": "string"},
+            "role": {
+                "type": "string",
+                "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"],
+            },
+            "task": {"type": "string"},
+            "phase_number": {"type": "integer"},
+            "model": {"type": "string"},
+            "requester_role": {
+                "type": "string",
+                "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"],
+            },
+        },
+    },
+    _worker_spawn,
+)
+register(
+    "nexussy_worker_assign",
+    "Assign a task to an existing worker",
+    {
+        "type": "object",
+        "required": ["run_id", "worker_id", "task"],
+        "properties": {
+            "run_id": {"type": "string"},
+            "worker_id": {"type": "string"},
+            "task_id": {"type": "string"},
+            "task": {"type": "string"},
+            "phase_number": {"type": "integer"},
+            "requester_role": {
+                "type": "string",
+                "enum": ["orchestrator", "backend", "frontend", "qa", "devops", "writer", "analyst"],
+            },
+        },
+    },
+    _worker_assign,
+)
+register(
+    "nexussy_list_workers",
+    "List workers for a run",
+    {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}},
+    _list_workers,
+)
+register(
+    "nexussy_steer",
+    "Steer a running pipeline orchestrator or a specific worker",
+    {
+        "type": "object",
+        "required": ["target", "run_id", "message"],
+        "properties": {
+            "target": {"type": "string", "enum": ["orchestrator", "worker"]},
+            "run_id": {"type": "string"},
+            "worker_id": {"type": "string"},
+            "message": {"type": "string"},
+            "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        },
+    },
+    _steer,
+)
+register(
+    "nexussy_steer_status",
+    "List queued and recent steering events for a run",
+    {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}},
+    _steer_status,
+)
