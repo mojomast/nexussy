@@ -68,6 +68,17 @@ def _rate_limited_error(provider: str, model: str, limited) -> ErrorResponse:
 
 
 class Engine:
+    _STAGE_HANDLERS = {
+        StageName.interview: lambda engine, *a, **kw: interview.run(engine, *a, **kw),
+        StageName.design: lambda engine, *a, **kw: design.run(engine, *a, **kw),
+        StageName.validate: lambda engine, *a, **kw: validate.run(engine, *a, **kw),
+        StageName.plan: lambda engine, *a, **kw: plan.run(engine, *a, **kw),
+        StageName.review: lambda engine, *a, **kw: review.run(engine, *a, **kw),
+        StageName.develop: lambda engine, *a, **kw: develop.run(
+            engine, *a, spawn_fn=kw.pop("spawn_fn", spawn_pi_worker), **kw
+        ),
+    }
+
     def __init__(self, db, config):
         self.db = db
         self.config = config
@@ -1092,15 +1103,3 @@ class Engine:
 
     async def _run_worker_rpc(self, *args, **kwargs):
         return await develop.run_worker_rpc(self, *args, spawn_fn=kwargs.pop("spawn_fn", spawn_pi_worker), **kwargs)
-
-
-Engine._STAGE_HANDLERS = {
-    StageName.interview: lambda engine, *a, **kw: interview.run(engine, *a, **kw),
-    StageName.design: lambda engine, *a, **kw: design.run(engine, *a, **kw),
-    StageName.validate: lambda engine, *a, **kw: validate.run(engine, *a, **kw),
-    StageName.plan: lambda engine, *a, **kw: plan.run(engine, *a, **kw),
-    StageName.review: lambda engine, *a, **kw: review.run(engine, *a, **kw),
-    StageName.develop: lambda engine, *a, **kw: develop.run(
-        engine, *a, spawn_fn=kw.pop("spawn_fn", spawn_pi_worker), **kw
-    ),
-}
