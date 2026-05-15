@@ -41,7 +41,7 @@ The result is a traceable run with durable artifacts, resumable checkpoints, and
 - Pi RPC subprocess adapter for live worker execution, with a bundled deterministic fallback for local tests.
 - Pause, resume, skip, cancel, inject, blocker, and worker controls.
 - Terminal UI for setup and day-to-day control.
-- Web dashboard for observing health, runs, artifacts, workers, config, secrets, and SSE activity.
+- Web dashboard for observing and controlling health, runs, artifacts, workers, graph data, config, secrets, and SSE/chat activity.
 - MCP-compatible tool surface for external agents.
 - Root installer and launcher scripts with dry-run, doctor, logs, status, update, and optional systemd-user support.
 
@@ -174,7 +174,9 @@ Inside the TUI:
 - `/secrets` refreshes provider-key status.
 - `/delete-key NAME` deletes a configured provider key.
 - `/new DESCRIPTION` starts an explicit pipeline run.
-- `/pause`, `/resume`, `/skip`, `/stage`, `/spawn`, `/inject`, and `/export` control active runs.
+- `/pause`, `/resume`, `/cancel`, `/skip`, `/stage`, `/spawn`, `/inject`, and `/export` control active runs.
+- `/memory`, `/graph`, `/config`, and `/events` open data overlays backed by the core API.
+- `/steer`, `/steer @worker-id`, `/steer list`, and `/steer clear` manage orchestrator/worker steering.
 
 Ordinary chat-like text stays in local Ask mode unless an explicit action command is used.
 
@@ -195,6 +197,18 @@ core server is running. No build step required - plain HTML/CSS/JS, no npm, no C
   browser console to authenticate requests
 
 **No external dependencies** - works offline, no CDN, no npm.
+
+The packaged web dashboard runs separately at `http://localhost:7772` through
+`./nexussy.sh start` or `python3 -m nexussy_web.app`. It proxies `/api/*` and SSE
+to core, applies request-size limits and upstream timeouts, streams proxied
+responses instead of buffering them, and adds browser security headers. The
+dashboard includes:
+
+- Live chat/event stream with tool rows and cost badge.
+- SVG graph visualization backed by `/api/graph`.
+- Pipeline pause, resume, skip, cancel, and inject controls.
+- Worker inject and stop controls.
+- Config, secrets, artifacts, DevPlan, swarm, and file-lock panels.
 
 ## Starting A Pipeline Run
 
@@ -259,6 +273,7 @@ Worker behavior:
 
 - Workers spawn and run in parallel.
 - Git merges happen serially to keep conflict handling deterministic.
+- Local worker tool calls execute through core with role permissions, path checks, write-lock enforcement, structured `tool_output`, and `tool_progress` events.
 - Worker RPC resume is guarded at max depth 3.
 - Worker output is streamed into SSE events.
 - Changed files are extracted into artifacts after merge.
@@ -381,6 +396,7 @@ Other safeguards:
 - Symlink escapes are rejected when enabled.
 - Logs scrub common API key, bearer token, password, private key, and context-guarded secret hash forms.
 - Worker writes require file locks.
+- Local bash worker tools use exec-based subprocesses with stripped environments, process-group termination, hard timeouts, and output caps.
 - SQLite writes are serialized with WAL, busy timeout, retries, and indexed run lookups.
 
 ## Configuration
@@ -427,7 +443,7 @@ bash -n install.sh nexussy.sh ops_tests.sh launch_verify.sh
 ./ops_tests.sh
 ```
 
-Current traceability status is tracked in `SPEC_COVERAGE.md` and `FULL_SPEC_REMAINING.md`. At the time of this README update, no rows are blocked on missing external tooling. The main remaining partial evidence item is a single full production-provider plus live-Pi develop run because that can spend provider tokens and modify a throwaway worktree.
+Current traceability status is tracked in `SPEC_COVERAGE.md` and `FULL_SPEC_REMAINING.md`. At the time of this README update, no rows are blocked on missing external tooling; live provider, live Pi, installer, core, TUI, web, shell, and ops evidence is recorded in the coverage matrix and `scripts/evidence/`.
 
 For backup, restore, schema migration, and audit-log operations, see `OPERATIONS.md`.
 
@@ -438,7 +454,7 @@ For backup, restore, schema migration, and audit-log operations, see `OPERATIONS
 - Use `CIRCULAR_DEVELOPMENT.md` when closing coverage gaps sequentially.
 - Do not depend on `ussycode`.
 - Do not log secrets.
-- Recent fixes include keyring fallback warning behavior, automatic 429 rate-limit persistence from provider completions, narrowed file-lock DB exception handling, rename-diff parsing, unique mock develop worker IDs, event-based Pi RPC response waiting, numeric config coercion, and expanded security tests.
+- Recent fixes include real worker tool execution, shell-safe local bash workers, expanded graph data, interview timeout cleanup, TUI stream cleanup and data commands, web proxy limits/timeouts, dashboard chat/graph/control surfaces, generated phase task content, and expanded regression coverage.
 
 ## Update
 

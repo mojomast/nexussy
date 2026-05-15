@@ -67,9 +67,9 @@ Resolve paths through the path sanitizer, validate anchors before writes, create
 
 | Area | Commands |
 |---|---|
-| Core | `python -m pytest -q core/tests`; `python -m nexussy.api.server` |
+| Core | `python3 -m pytest -q core/tests`; `PYTHONPATH=core python3 -m nexussy.api.server` |
 | TUI | `cd tui && bun install`; `cd tui && bun test`; `cd tui && bun run typecheck`; `cd tui && bun run start` |
-| Web | `python -m pytest -q web/tests`; `python -m nexussy_web.app` |
+| Web | `python3 -m pytest -q web/tests`; `PYTHONPATH=web python3 -m nexussy_web.app` |
 | Installer | `bash -n install.sh nexussy.sh`; `./install.sh --non-interactive --dry-run`; `./install.sh --non-interactive`; `./nexussy.sh start`; `./nexussy.sh status`; `./nexussy.sh stop`; `./nexussy.sh doctor` |
 
 # CORE WORKER ORCHESTRATION
@@ -89,8 +89,9 @@ Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loop
 - Task slicing: plan saves both `devplan.md` and a strict `devplan_tasks` JSON sidecar. `DevplanTask` has `task_id`, `title`, `acceptance_criteria`, `files_allowed`, `depends_on`, `owner`, and `estimated_tokens`; `stages.plan.devplan_task_validation` defaults to `repair`, and develop reads the sidecar first with markdown fallback.
 - Interview auto-skip: setting `metadata.skip_interview = "true"` on `/pipeline/start` synthesizes all interview answers from the project description (each marked `source="auto"`) and bypasses the human pause gate. `stages.interview.min_description_words` defaults to `50`; shorter auto-skip descriptions tag answers with `confidence="low"`, and design prompts are instructed to stay conservative.
 - Merge conflict recovery: `swarm.conflict_strategy` defaults to `"ours"`; `"ours"` auto-resolves with `git checkout --ours`, `"diff3"` captures conflict-marker content in `conflict_report.conflicts_detail` and completes with `needs_review=true`, and `"abort"` aborts the merge and raises with conflict paths.
+- Worker tool execution: core `execute_worker_tool` performs local read/write/edit/list/search/bash operations through role permissions, path sanitization, write-lock enforcement, stripped-env subprocesses, `tool_output`, and `tool_progress` events. Local Pi worker bash uses exec-based process creation rather than shell interpretation.
 - Worker control APIs: `/swarm/workers/{worker_id}/inject`, `/swarm/workers/{worker_id}/stop`, `/swarm/workers/{worker_id}/stream`, `/swarm/spawn`, and `/swarm/assign` are wired to DB state and SSE/RPC where applicable.
-- Core static dashboard: `/ui` serves zero-build HTML/JS/CSS for session polling, run status, SSE logs, and interview answers.
+- Core static dashboard: `/ui` serves zero-build HTML/JS/CSS for session polling, run status, SSE logs, and interview answers. The packaged web dashboard proxies `/api/*`, enforces body/time limits, streams responses, and includes chat, graph, pipeline controls, worker controls, artifacts, config, and secrets views.
 
 ## Worker Bash Sandbox
 

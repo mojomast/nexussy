@@ -167,17 +167,12 @@
 ### 15. Web dashboard `#graph` is non-functional
 - **File:** `web/nexussy_web/static/app.js`
 - **Lines:** 271-278
-- **Issue:** Renders raw `JSON.stringify` text instead of a D3 force-directed graph per SPEC §19.
-- **Fix:** Add D3 v7 via CDN in `index.html`. In `app.js`, implement a force simulation:
+- **Issue:** Renders raw `JSON.stringify` text instead of the SPEC §19 graph visualization.
+- **Fix:** Implement a zero-build SVG graph visualization in `app.js` using `/api/graph` data:
   ```javascript
   async function loadGraph() {
     const data = await api("/graph?" + q()).then(r => r.json());
-    const svg = d3.select("#graph-viewer").html("").append("svg").attr("width", 800).attr("height", 600);
-    const simulation = d3.forceSimulation(data.nodes)
-      .force("link", d3.forceLink(data.edges).id(d => d.id))
-      .force("charge", d3.forceManyBody().strength(-200))
-      .force("center", d3.forceCenter(400, 300));
-    // render nodes and links
+    renderGraph(data); // draw nodes/edges into #graph-viewer with SVG
   }
   ```
 
@@ -593,7 +588,7 @@
 | 98 | `ToolOutputPayload` with `display` | §9.3 | core | Missing |
 | 99 | `ContentDeltaPayload` schema | §9.3 | core | Missing |
 | 100 | `/stage` slash command calls API | §18.2 | tui | Missing |
-| 101 | Web `#graph` D3 visualization | §19 | web | Missing |
+| 101 | Web `#graph` SVG visualization | §19 | web | Missing |
 | 102 | Web `#chat` live stream | §19 | web | Missing |
 | 103 | Web pipeline controls | §10.3 | web | Missing |
 | 104 | Web worker controls | §10.5 | web | Missing |
@@ -625,7 +620,7 @@
 - [x] **SPEC/default-config status** — `SPEC.md` §6.2 and §27.2 now match the generated default config, including CORS/web/auth additions and the bundled local-dev `nexussy-pi` default.
 - [x] **Status docs** — `CHANGELOG.md` and `SPEC_COVERAGE.md` record the root fix; `ops_tests.sh` asserts the new generated keys so #109 stays closed.
 
-Remaining findings in this report are owned by Subagents A, B, or C; no `core/`, `tui/`, or `web/` implementation files were modified by this root pass.
+The root/docs-only pass was followed by the coordinator implementation pass below, which closed the critical/high cross-module findings and recorded the residual non-breaking follow-ups.
 
 ## Fix Pass — Coordinator Summary (2026-05-14)
 

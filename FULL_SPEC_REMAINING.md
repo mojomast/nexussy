@@ -1,8 +1,8 @@
 # Full Spec Remaining Checklist
 
-`SPEC_COVERAGE.md` was re-audited after the core review-gap and TUI handoff work. The matrix now distinguishes deterministic route/helper coverage from full contract semantics.
+`SPEC_COVERAGE.md` was re-audited after the deep code review fix pass. The matrix now distinguishes deterministic route/helper coverage from full contract semantics and records the latest core/TUI/web/root verification counts.
 
-Current coverage summary: all SPEC rows are covered. Core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, plan task validation, TUI default-renderer contract, full Ubuntu install idempotency, and live multi-agent swarm workload control all have current evidence.
+Current coverage summary: all SPEC rows are covered. Core Pi worker, MCP tools, web UI, session lifecycle, cost tracking, worker controls, worker tool execution, plan task validation, TUI default-renderer contract, full Ubuntu install idempotency, and live multi-agent swarm workload control all have current evidence.
 
 ## Execution Model
 

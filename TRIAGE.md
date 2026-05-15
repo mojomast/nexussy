@@ -14,16 +14,16 @@
 - Resolved: orchestrator and worker steering is wired through the `nexussy_steer` MCP tool and the `steer_events` SQLite table; orchestrator-target messages drain into `engine.steer_context[run_id]` at each stage boundary; worker-target messages flow through the existing inject path.
 - Resolved: interview stage auto-skips human gating when `metadata.skip_interview == "true"`, synthesizing all answers via the configured provider and marking each `InterviewQuestionAnswer.source = "auto"`.
 - Resolved: develop merge conflicts are now recovered automatically — `merge_single_worker` saves a `conflict_report` artifact, runs `git checkout --ours` + `git add` for each conflicting path, attempts `git commit --no-edit`, and only raises if the second commit also fails.
-- Core regression suite is green: `python3 -m pytest -q core/tests` passed with 97 tests and 3 existing warnings.
-- TUI regression suite is green: `bun test && bun run typecheck` passed with 67 tests.
-- Web regression suite is green: `python3 -m pytest -q web/tests` passed with 52 tests.
+- Core regression suite is green: `python3 -m pytest -q core/tests` passed with 157 tests and 3 existing warnings.
+- TUI regression suite is green: `bun test && bun run typecheck` passed with 73 tests.
+- Web regression suite is green: `python3 -m pytest -q web/tests` passed with 55 tests.
 - Root operations checks are green: shell syntax, `./ops_tests.sh`, and `./install.sh --non-interactive --dry-run` pass.
 - `scripts/smoke_integration.sh` syntax and parser harness pass: `bash -n scripts/smoke_integration.sh`; `bash scripts/test_smoke_parser.sh`.
 - CI has the expected four verification jobs plus Docker gating: `.github/workflows/ci.yml` defines `core`, `tui`, `web`, `ops`, and `docker-build`, with `docker-build.needs: [core, tui, web, ops]`.
 - CI uses `python3` for Python install, Ruff, core tests, web deps, and web tests in `.github/workflows/ci.yml` lines 21-28 and 63-67.
 - The stage split is present: `core/nexussy/pipeline/stages/` contains `interview.py`, `design.py`, `validate.py`, `plan.py`, `review.py`, and `develop.py`.
-- `core/nexussy/pipeline/engine.py` is under the target at 299 lines and still imports `nexussy.pipeline.engine` as the public orchestrator module.
-- The web dashboard multi-answer flow is present: `web/nexussy_web/static/app.js` lines 160-188 renders all candidate questions into `#interview-fields`, and lines 280-293 builds and posts a full `answers` map.
+- `core/nexussy/pipeline/engine.py` remains split across helper/stage modules and still imports `nexussy.pipeline.engine` as the public orchestrator module.
+- The web dashboard multi-answer flow is present, and the dashboard now also includes live chat/tool rows, SVG graph rendering, pipeline controls, and worker controls.
 - SPEC coverage currently has no partial, `implemented-untested`, or `blocked-external` rows; `FULL_SPEC_REMAINING.md` lists no remaining work.
 
 ## What is unproven

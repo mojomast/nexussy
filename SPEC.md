@@ -115,8 +115,8 @@ Subagent B and Subagent C MUST build against mock HTTP/SSE fixtures derived from
 
 | Process | Command | Host | Port | Log file | PID file |
 |---|---|---:|---:|---|---|
-| core | `python -m nexussy.api.server` | `127.0.0.1` | `7771` | `/tmp/nexussy-core.log` | `~/.nexussy/run/core.pid` |
-| web | `python -m nexussy_web.app` | `127.0.0.1` | `7772` | `/tmp/nexussy-web.log` | `~/.nexussy/run/web.pid` |
+| core | `PYTHONPATH=core python3 -m nexussy.api.server` | `127.0.0.1` | `7771` | `/tmp/nexussy-core.log` | `~/.nexussy/run/core.pid` |
+| web | `PYTHONPATH=web python3 -m nexussy_web.app` | `127.0.0.1` | `7772` | `/tmp/nexussy-web.log` | `~/.nexussy/run/web.pid` |
 | tui | `bun run start` from `tui/` | none | none | `/tmp/nexussy-tui.log` | `~/.nexussy/run/tui.pid` |
 
 `nexussy.sh start` MUST start core and web. `nexussy.sh start-tui` MUST start the TUI after verifying core health.
@@ -1439,7 +1439,7 @@ B MUST implement SSE reconnect with `Last-Event-ID`.
 
 ## 19. Web Dashboard Contract
 
-C MUST implement a single-file Starlette dashboard on port 7772. C MUST NOT require npm or a build step.
+C MUST implement a zero-build Starlette dashboard on port 7772 using packaged HTML/CSS/JS assets. C MUST NOT require npm, a CDN, or a build step.
 
 `web/nexussy_web/templates/index.html` MUST include tabs:
 
@@ -1450,7 +1450,7 @@ C MUST implement a single-file Starlette dashboard on port 7772. C MUST NOT requ
 | `#swarm` | Worker grid, file lock feed, worktree status |
 | `#sessions` | Paginated session browser |
 | `#devplan` | Live `devplan.md` with highlighted anchors |
-| `#graph` | D3 force-directed graph using `/api/graph` |
+| `#graph` | Zero-build SVG graph visualization using `/api/graph` |
 | `#config` | Config viewer/editor using `/api/config` |
 | `#secrets` | Secret status and set/delete controls using `/api/secrets` |
 
@@ -1521,8 +1521,8 @@ A cold coding agent MUST locate its assignment within three anchored reads of `h
 
 A is done only when all criteria pass:
 
-1. `python -m pytest -q core/tests` passes.
-2. `python -m nexussy.api.server` starts on `127.0.0.1:7771`.
+1. `python3 -m pytest -q core/tests` passes.
+2. `PYTHONPATH=core python3 -m nexussy.api.server` starts on `127.0.0.1:7771`.
 3. `GET /health` returns `ok=true`, `db_ok=true`, and `contract_version="1.0"`.
 4. `POST /pipeline/start` with a mock provider creates a run and returns `RunStartResponse`.
 5. `GET /pipeline/runs/{run_id}/stream` emits `run_started`, all six ordered stage transitions, `checkpoint_saved`, and `done` using valid `EventEnvelope` JSON.
@@ -1555,8 +1555,8 @@ B is done only when all criteria pass:
 
 C is done only when all criteria pass:
 
-1. `python -m pytest -q web/tests` passes.
-2. `python -m nexussy_web.app` starts on `127.0.0.1:7772`.
+1. `python3 -m pytest -q web/tests` passes.
+2. `PYTHONPATH=web python3 -m nexussy_web.app` starts on `127.0.0.1:7772`.
 3. `/` returns a single HTML document.
 4. No npm, Node, bundler, transpiler, or build output is required.
 5. `/api/health` proxies to mock or live core.
@@ -1620,13 +1620,13 @@ D is done only when all criteria pass:
 | `./nexussy.sh logs tui` | D |
 | `./nexussy.sh update` | D |
 | `./nexussy.sh doctor` | D |
-| `python -m nexussy.api.server` | A |
-| `python -m nexussy_web.app` | C |
+| `PYTHONPATH=core python3 -m nexussy.api.server` | A |
+| `PYTHONPATH=web python3 -m nexussy_web.app` | C |
 | `bun run start` from `tui/` | B |
-| `python -m pytest -q core/tests` | A |
+| `python3 -m pytest -q core/tests` | A |
 | `bun test` | B |
 | `bun run typecheck` | B |
-| `python -m pytest -q web/tests` | C |
+| `python3 -m pytest -q web/tests` | C |
 
 ### 27.2 Config Keys
 
