@@ -228,6 +228,13 @@ async def _inject(arguments: dict[str, Any], *, engine=None, db=None):
 
 
 async def _worker_spawn(arguments: dict[str, Any], *, engine, db):
+    """
+    Register a new worker in the database and emit a worker_spawned event.
+
+    NOTE: This does NOT start a subprocess. Workers use a lazy-spawn model —
+    the actual process is started later when the worker is assigned a task
+    and an RPC session is established via the develop stage or run_worker_rpc.
+    """
     raw = dict(arguments)
     requester_role = raw.pop("requester_role", None)
     if requester_role is not None:
