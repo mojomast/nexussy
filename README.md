@@ -4,7 +4,7 @@
 [![Release](https://github.com/mojomast/nexussy/actions/workflows/release.yml/badge.svg)](https://github.com/mojomast/nexussy/actions/workflows/release.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
-nexussy is a local software-delivery harness for running a complete AI-assisted development pipeline from one project request. It turns a project description into interview answers, design artifacts, a dev plan, review feedback, worker execution, merge reports, changed-file manifests, and handoff documents that another agent or human can continue from without needing the original chat history.
+nexussy is a local software-delivery harness for turning one project request into a built project or feature. It takes a plain-language idea, clarifies requirements, designs and validates an approach, creates a development plan, assigns work to AI workers, merges their code, and leaves behind reports, changed-file manifests, and handoff documents that another agent or human can continue from without needing the original chat history.
 
 It is the fifth-generation Ussyverse coding harness lineage:
 
@@ -25,7 +25,36 @@ The core workflow is:
 7. Merge worker output serially, extract changed files, and write reports.
 8. Stream every important state transition over SSE to local UIs.
 
-The result is a traceable run with durable artifacts, resumable checkpoints, and enough anchored context to safely continue later.
+The intended result is the completed code in the project worktree. The artifacts are the trace: they explain what was asked, what was designed, what was planned, what was built, what changed, and how the run finished.
+
+## From Idea To Built Project
+
+A user can start with only a simple idea:
+
+```text
+Build a small web app where I can track books I want to read, mark them as finished, and see simple reading stats.
+```
+
+In the TUI, that becomes an explicit pipeline request:
+
+```text
+/new Build a small web app where I can track books I want to read, mark them as finished, and see simple reading stats.
+```
+
+nexussy then walks the idea through the delivery pipeline:
+
+1. Interview asks or synthesizes missing requirements.
+2. Design describes the product behavior, UX, architecture, and constraints.
+3. Validate checks the design and routes corrections back when needed.
+4. Plan writes anchored implementation tasks and phase files.
+5. Review checks the plan and can send feedback back to planning.
+6. Develop assigns tasks to workers, runs tool calls in worker worktrees, merges output, and records changed files.
+
+For a successful run, the main deliverable is the updated project directory. Supporting artifacts such as `design_draft.md`, `devplan.md`, `develop_report.json`, `merge_report.json`, and `changed_files.json` show how the result was produced.
+
+The strongest local proof path is `scripts/smoke_integration.sh`: with core/web running, provider credentials configured, a git repo supplied through `NEXUSSY_SMOKE_PROJECT_DIR`, and a Pi-compatible worker command supplied through `NEXUSSY_PI_COMMAND`, it starts a real pipeline, waits for `done final_status=passed`, and verifies non-empty changed files plus passing develop and merge reports.
+
+What this does not guarantee: nexussy cannot guarantee that every vague idea becomes production-quality software without human review. Output quality still depends on the configured model/provider, the worker executor, project constraints, available tests, and the clarity of the requirements. The system is designed to make that process observable, steerable, resumable, and auditable rather than opaque.
 
 ## Main Capabilities
 

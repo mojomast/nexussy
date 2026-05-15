@@ -1,7 +1,7 @@
 # nexussy Handoff
 
 <!-- QUICK_STATUS_START -->
-SPEC circular development pass complete: `SPEC_COVERAGE.md` now records 80 tested rows, 10 partial rows, 0 implemented-untested rows, and 0 blocked-external rows. Full verification passes across core, TUI, web, shell syntax, installer dry-run, and ops tests; R-080 remains partial for a full production provider plus live Pi develop run.
+SPEC circular development pass complete and later evidence has closed the live external backlog: `SPEC_COVERAGE.md` records tested provider, Pi, installer, swarm, and provider/Pi/worktree/develop integration rows. Full verification passes across core, TUI, web, shell syntax, installer dry-run, ops tests, and recorded live smoke evidence.
 Guided provider-key setup added: core `/secrets` persists keyring-first with env-file fallback, bounded keyring timeouts to avoid onboarding hangs, `/config` updates persist to YAML, and provider discovery reads persisted keys; TUI supports `/secrets`, `/set-key NAME` hidden-input guidance, `/delete-key NAME`, `bun run start -- --set-key NAME`, `bun run start -- --setup`, and `bun run start -- --setup-openrouter` for single-terminal provider key/model setup with core autostart and without rendering secret values.
 OpenTUI default added: TUI no-run interactive mode now uses `@opentui/core` chat rendering; set `NEXUSSY_TUI_RENDERER=pi-tui` to use the previous Pi TUI. TUI `bun test && bun run typecheck` passes.
 OpenTUI input focus fix added: composer binds stdin/stdout explicitly, uses `input.focus()`, resizes to terminal width, and repaints as input changes; TUI tests/typecheck pass.
@@ -96,6 +96,10 @@ Residual deep-review closure complete: core removed Pydantic shadow-field warnin
 ## Files Modified: `core/nexussy/api/schemas.py`, `core/tests/test_core_contract.py`, `core/tests/test_worker_permission_sse.py`, `tui/src/opentui-app.ts`, `tui/tests/renderer-harness.test.ts`, `web/nexussy_web/app.py`, `web/nexussy_web/static/app.js`, `web/nexussy_web/static/anchors.js`, `web/nexussy_web/templates/index.html`, `web/tests/test_app.py`, `DEEP_CODE_REVIEW.md`, `CHANGELOG.md`, `SPEC_COVERAGE.md`, `FULL_SPEC_REMAINING.md`, `TRIAGE.md`, `README.md`, `devplan.md`, `handoff.md`
 
 ## Next Task: None from `DEEP_CODE_REVIEW.md`; continue with normal release smoke or new product work.
+
+## Completed: Product Promise Documentation Alignment
+## Context: README now says the primary deliverable is completed code in the project worktree, not just artifacts. It includes a simple idea-to-`/new` example, the staged path through interview/design/validate/plan/review/develop, the supporting artifacts, the `scripts/smoke_integration.sh` proof path, and honest limits: output quality depends on model/provider, Pi-compatible worker executor, project constraints, tests, and requirement clarity.
+## Files Modified: `README.md`, `devplan.md`, `phase001.md`, `handoff.md`
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->
