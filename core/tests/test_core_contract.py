@@ -1266,6 +1266,30 @@ async def test_provider_fallback_emits_retryable_pipeline_error(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_pipeline_start_accepts_http_string_stages_and_all_model_overrides(monkeypatch, tmp_path):
+    db = Database(str(tmp_path / "state.db")); await db.init()
+    cfg = load_config({"projects_dir": str(tmp_path / "projects")})
+    monkeypatch.setattr("nexussy.pipeline.engine.model_available", lambda model, allow_mock=False: True)
+    async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
+        return ProviderResult("[]", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0, "provider": "fake", "model": model})
+    monkeypatch.setattr("nexussy.pipeline.engine.complete", fake_complete)
+    engine = Engine(db, cfg)
+    res = await engine.start(PipelineStartRequest(
+        project_name="Dashboard Override Smoke",
+        description="tiny dashboard pipeline smoke",
+        start_stage="interview",
+        stop_after_stage="interview",
+        auto_approve_interview=True,
+        model_overrides={stage: "openrouter/openai/gpt-4o-mini" for stage in ["interview", "design", "validate", "plan", "review", "develop"]},
+        metadata={"skip_interview": "true"},
+    ))
+    await engine.tasks[res.run_id]
+    rows = await db.read("SELECT status, current_stage FROM runs WHERE run_id=?", (res.run_id,))
+    assert rows[0]["status"] == "passed"
+    assert rows[0]["current_stage"] == "interview"
+
+
+@pytest.mark.asyncio
 async def test_worker_tool_permission_failure_emits_tool_output(tmp_path):
     db = Database(str(tmp_path / "state.db")); await db.init()
     cfg = load_config({"projects_dir": str(tmp_path / "projects")})

@@ -58,6 +58,21 @@ logger = logging.getLogger(__name__)
 STAGES = [StageName(s) for s in STAGE_ORDER]
 
 
+def _stage_name(value) -> StageName:
+    """Return a StageName for enum or string values.
+
+    Request schemas use ``use_enum_values=True``, so HTTP-created
+    PipelineStartRequest instances expose stage fields as strings while several
+    engine paths need enum objects. Normalizing at engine boundaries keeps both
+    direct enum-based tests and real API requests working.
+    """
+    return value if isinstance(value, StageName) else StageName(value)
+
+
+def _stage_index(value) -> int:
+    return STAGES.index(_stage_name(value))
+
+
 def _rate_limited_error(provider: str, model: str, limited) -> ErrorResponse:
     return ErrorResponse(
         error_code=ErrorCode.rate_limited,
@@ -280,8 +295,9 @@ class Engine:
                     selected[st] = self.config.providers.default_model
                     continue
                 raise ProviderStartError(provider_error_for_model(model))
-        start_stage = req.start_stage
-        if req.resume_run_id and await resume_from_checkpoint(self.db, req.resume_run_id, req.start_stage):
+        start_stage = _stage_name(req.start_stage)
+        stop_after_stage = _stage_name(req.stop_after_stage) if req.stop_after_stage else None
+        if req.resume_run_id and await resume_from_checkpoint(self.db, req.resume_run_id, start_stage):
             checkpoint = await latest_checkpoint(self.db, req.resume_run_id)
             if checkpoint:
                 stage_value = checkpoint.stage.value if hasattr(checkpoint.stage, "value") else checkpoint.stage
@@ -291,9 +307,9 @@ class Engine:
                 ):
                     next_index = min(next_index + 1, len(STAGES) - 1)
                 candidate = STAGES[next_index]
-                if STAGES.index(candidate) > STAGES.index(req.start_stage):
+                if _stage_index(candidate) > _stage_index(start_stage):
                     start_stage = candidate
-        effective_req = req.model_copy(update={"start_stage": start_stage})
+        effective_req = req.model_copy(update={"start_stage": start_stage, "stop_after_stage": stop_after_stage})
         detail = await self.create_session(effective_req)
         rid = effective_req.resume_run_id or str(uuid4())
         now = now_utc()
@@ -357,8 +373,8 @@ class Engine:
         )
 
     async def _run(self, req, detail, run, selected_models=None, allow_mock=False):
-        start = STAGES.index(req.start_stage)
-        stop = STAGES.index(req.stop_after_stage) if req.stop_after_stage else len(STAGES) - 1
+        start = _stage_index(req.start_stage)
+        stop = _stage_index(req.stop_after_stage) if req.stop_after_stage else len(STAGES) - 1
         artifacts = []
         root = detail.main_worktree
         prev = None
