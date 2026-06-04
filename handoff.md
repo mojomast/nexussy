@@ -108,6 +108,10 @@ Residual deep-review closure complete: core removed Pydantic shadow-field warnin
 ## Completed: GitHub README Polish
 ## Context: README now opens with a GitHub-friendly quick start, integrated provider/model onboarding flow, Ask mode versus build mode examples, the confirmation path to `/new`, output/artifact locations, and a common-use table before architecture/install/security details. The install section still documents dry-run, systemd-user, launcher commands, and verification.
 ## Files Modified: `README.md`, `devplan.md`, `phase001.md`, `handoff.md`
+
+## Completed: AgentRouter Full-Pipeline Hardening
+## Context: Live AgentRouter runs showed develop could falsely pass after worker JSON-RPC errors, no-change workers, or partial task assignment. Core now presents AgentRouter provider and bundled worker calls as Claude Code; local worker streaming handles cumulative/concatenated tool arguments; develop fails worker JSON-RPC errors and no-change workers; single-worker develop receives all devplan tasks; accumulated steering is injected into develop specs. Final live proof run `e0dc5296-11d3-4242-b813-70d214a22997` built `wordcount-tool` with `wordcount.py`, `tests/test_wordcount.py`, and `README.md`; `python3 -m pytest -q` passed with 4 tests, and text/JSON CLI checks passed. Benchmark report: `/tmp/opencode/agentrouter-bench/wordcount-agentrouter-report-20260604T195223Z.json`.
+## Files Modified: `core/nexussy/providers.py`, `core/nexussy/swarm/local_pi_worker.py`, `core/nexussy/pipeline/stages/develop.py`, `core/tests/test_core_contract.py`, `core/tests/test_local_pi_worker.py`, `AGENTS.md`, `README.md`, `CHANGELOG.md`, `SPEC_COVERAGE.md`, `devplan.md`, `handoff.md`
 <!-- HANDOFF_NOTES_END -->
 
 <!-- SUBAGENT_A_ASSIGNMENT_START -->

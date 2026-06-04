@@ -242,29 +242,56 @@ async def merge_workers(engine, req, detail, rid, root, context):
         devplan_tasks_text = ""
     specs = _slice_devplan_tasks(devplan_text, devplan_tasks_text)
     steer = await engine.consume_steer(rid)
-    if steer:
-        messages = [m.get("message", "") for m in steer if m.get("message")]
-        if messages:
-            block = "## Steering Instructions\n" + "\n".join(messages)
-            specs = [{**spec, "steering_instructions": block} for spec in specs]
-    worker_results = await asyncio.gather(*[run_single_worker(engine, req, detail, rid, root, role, idx, context, task_spec=specs[(idx - 1) % len(specs)]) for idx, role in enumerate(roles, start=1)], return_exceptions=True)
-    for result in worker_results:
-        if isinstance(result, Exception):
-            raise result
-        merge_result = await merge_single_worker(engine, result, req, detail, rid, root, context, workers, merged)
-        workers.append(merge_result.worker)
-        merged.append(merge_result.worker_id)
+    messages = [m for m in getattr(engine, "steer_context", {}).get(rid, []) if m]
+    messages.extend(m.get("message", "") for m in steer if m.get("message"))
+    if messages:
+        block = "## Steering Instructions\n" + "\n".join(messages)
+        specs = [{**spec, "steering_instructions": block} for spec in specs]
+    context["task_count"] = len(specs)
+    if len(roles) == 1 and len(specs) > 1:
+        spec_text = json.dumps(specs, indent=2)
+        specs = [{
+            "task_id": "T-all",
+            "title": "Implement all devplan tasks",
+            "acceptance_criteria": "complete every task in task_specs_json",
+            "files_allowed": sorted({path for spec in specs for path in spec.get("files_allowed", [])}) or ["*"],
+            "depends_on": [],
+            "owner": roles[0].value,
+            "estimated_tokens": sum(spec.get("estimated_tokens") or 0 for spec in specs) or None,
+            "task_specs_json": spec_text,
+        }]
+    assignment_count = max(len(specs), len(roles))
+    for start in range(0, assignment_count, len(roles)):
+        batch = []
+        batch_size = min(len(roles), assignment_count - start)
+        for offset in range(batch_size):
+            task_idx = start + offset + 1
+            role = roles[offset % len(roles)]
+            spec = specs[(task_idx - 1) % len(specs)]
+            batch.append(run_single_worker(engine, req, detail, rid, root, role, task_idx, context, task_spec=spec))
+        worker_results = await asyncio.gather(*batch, return_exceptions=True)
+        for result in worker_results:
+            if isinstance(result, Exception):
+                raise result
+            merge_result = await merge_single_worker(engine, result, req, detail, rid, root, context, workers, merged)
+            workers.append(merge_result.worker)
+            merged.append(merge_result.worker_id)
     await prune_worktrees(str(main))
     manifest = await extract_changed_files(str(main), base, str(artifacts_dir / "changed-files"), rid)
     orch.status = WorkerStatus.finished
     await engine._persist_worker(orch)
     await engine.emit(SSEEventType.worker_status, sid, rid, orch)
-    merge_report = MergeReport(run_id=rid, base_commit=base, merge_commit=manifest.merge_commit, merged_workers=merged, passed=True)
-    return [
-        await engine._save_art(rid, sid, root, "develop_report", DevelopReport(run_id=rid, passed=True, workers=workers, tasks_total=len(workers), tasks_passed=len(workers)).model_dump_json(indent=2)),
+    task_total = int(context.get("task_count") or len(specs))
+    passed = bool(manifest.files) and len(merged) >= assignment_count
+    merge_report = MergeReport(run_id=rid, base_commit=base, merge_commit=manifest.merge_commit, merged_workers=merged, passed=passed)
+    refs = [
+        await engine._save_art(rid, sid, root, "develop_report", DevelopReport(run_id=rid, passed=passed, workers=workers, tasks_total=max(task_total, assignment_count), tasks_passed=max(task_total, assignment_count) if passed else len(merged), tasks_failed=0 if passed else max(1, max(task_total, assignment_count) - len(merged))).model_dump_json(indent=2)),
         await engine._save_art(rid, sid, root, "merge_report", merge_report.model_dump_json(indent=2)),
         await engine._save_art(rid, sid, root, "changed_files", manifest.model_dump_json(indent=2)),
     ]
+    if not passed:
+        raise RuntimeError("develop produced no changed files")
+    return refs
 
 
 async def run_single_worker(engine, req, detail, rid, root, role, idx, context, task_spec: dict | None = None):
@@ -285,10 +312,22 @@ async def run_single_worker(engine, req, detail, rid, root, role, idx, context, 
     await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.running)
     await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.running))
     await run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, spawn_fn=context["spawn_fn"], task_spec=task_spec)
-    if not [path for path in pathlib.Path(wt).glob("**/*") if ".git" not in path.parts]:
-        pathlib.Path(wt, f"{role.value}.txt").write_text(f"{role.value} completed\n")
+    status_rc, status_out = await _git_proc(pathlib.Path(wt), "status", "--porcelain")
+    if status_rc != 0:
+        raise RuntimeError(f"git status failed for worker {wid}")
+    if not status_out.strip():
+        await _fail_worker_task(engine, sid, rid, worker, idx)
+        raise RuntimeError(f"worker {wid} produced no changes")
     commit = await commit_worker(wt, f"nexussy: {wid} {worker.task_id}")
     return {"worker": worker, "idx": idx, "wid": wid, "wt": wt, "branch": branch, "commit": commit}
+
+
+async def _fail_worker_task(engine, sid: str, rid: str, worker: Worker, idx: int) -> None:
+    worker.status = WorkerStatus.failed
+    await engine._persist_worker(worker)
+    await engine.emit(SSEEventType.worker_status, sid, rid, worker)
+    await engine._persist_worker_task(rid, worker.worker_id, worker.task_id, idx, worker.task_title, WorkerTaskStatus.failed)
+    await engine.emit(SSEEventType.worker_task, sid, rid, WorkerTaskPayload(worker_id=worker.worker_id, task_id=worker.task_id, phase_number=idx, task_title=worker.task_title, status=WorkerTaskStatus.failed))
 
 
 async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _depth: int = 0, spawn_fn=spawn_pi_worker, task_spec: dict | None = None):
@@ -300,8 +339,9 @@ async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _de
     prompt = json.dumps(task_spec) if task_spec else "nexussy develop task"
     req_id = await rpc.request(worker.task_title, prompt)
     was_paused_on_timeout = False
+    response = None
     try:
-        await rpc.wait_response(req_id, engine.config.swarm.worker_task_timeout_s)
+        response = await rpc.wait_response(req_id, engine.config.swarm.worker_task_timeout_s)
     except TimeoutError:
         was_paused_on_timeout = bool(engine.paused.get(rid))
         if not was_paused_on_timeout:
@@ -313,6 +353,11 @@ async def run_worker_rpc(engine, rid, sid, worker, idx, cfg, role, main, wt, _de
         await rpc.stop(engine.config.pi.shutdown_timeout_s)
         if rpc in engine.active_worker_rpcs.get(rid, []):
             engine.active_worker_rpcs[rid].remove(rpc)
+    if isinstance(response, dict) and response.get("error"):
+        error = response.get("error")
+        message = error.get("message") if isinstance(error, dict) else str(error)
+        await _fail_worker_task(engine, sid, rid, worker, idx)
+        raise RuntimeError(f"worker RPC error: {message or 'unknown error'}")
     if was_paused_on_timeout:
         worker.status = WorkerStatus.paused
         await engine._persist_worker(worker)

@@ -8,7 +8,9 @@ import re
 import shlex
 import signal
 import sys
-from typing import Any
+import uuid
+from types import SimpleNamespace
+from typing import Any, AsyncIterator
 
 from nexussy.api.schemas import StageName, ToolOutputPayload, WorkerRole
 from nexussy.security import sanitize_relative_path, scrub_log
@@ -175,6 +177,184 @@ def _tools_schema() -> list[dict[str, Any]]:
     ]
 
 
+def _anthropic_tools_schema() -> list[dict[str, Any]]:
+    tools = []
+    for tool in _tools_schema():
+        fn = tool["function"]
+        tools.append({"name": fn["name"], "description": fn["description"], "input_schema": fn["parameters"]})
+    return tools
+
+
+def _agentrouter_token() -> str | None:
+    return os.environ.get("AGENTROUTER_API_KEY") or os.environ.get("AGENT_ROUTER_TOKEN")
+
+
+def _model_id(model: str) -> str:
+    return model.split("/", 1)[1] if "/" in model else model
+
+
+def _tool_delta(index: int, tool_id: str, name: str, arguments: str) -> Any:
+    fn = SimpleNamespace(name=name, arguments=arguments)
+    tc = SimpleNamespace(index=index, id=tool_id, function=fn)
+    return SimpleNamespace(content=None, tool_calls=[tc])
+
+
+def _text_delta(text: str) -> Any:
+    return SimpleNamespace(content=text, tool_calls=[])
+
+
+def _chunk(delta: Any) -> Any:
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+
+def _merge_stream_field(current: str, part: str) -> str:
+    if not part:
+        return current
+    if part.startswith(current):
+        return part
+    if current.startswith(part):
+        return current
+    if current.endswith("}") and part.startswith(current[:-1].rstrip()):
+        return part
+    return current + part
+
+
+def _tool_arguments(raw: str) -> dict[str, Any]:
+    text = raw or "{}"
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        idx = 0
+        last: Any = None
+        while idx < len(text):
+            while idx < len(text) and text[idx].isspace():
+                idx += 1
+            if idx >= len(text):
+                break
+            last, idx = decoder.raw_decode(text, idx)
+        value = last
+    if not isinstance(value, dict):
+        raise ValueError("tool arguments must be a JSON object")
+    return value
+
+
+def _anthropic_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    system_parts: list[str] = []
+    out: list[dict[str, Any]] = []
+    pending_tool_results: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "system":
+            system_parts.append(str(msg.get("content") or ""))
+            continue
+        if role == "tool":
+            pending_tool_results.append({"type": "tool_result", "tool_use_id": str(msg.get("tool_call_id") or ""), "content": str(msg.get("content") or "")})
+            continue
+        if pending_tool_results:
+            out.append({"role": "user", "content": pending_tool_results})
+            pending_tool_results = []
+        if role == "assistant":
+            content: list[dict[str, Any]] = []
+            if msg.get("content"):
+                content.append({"type": "text", "text": str(msg.get("content"))})
+            for call in msg.get("tool_calls") or []:
+                fn = call.get("function") or {}
+                try:
+                    tool_input = json.loads(fn.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    tool_input = {}
+                content.append({"type": "tool_use", "id": str(call.get("id") or fn.get("name") or "tool"), "name": str(fn.get("name") or ""), "input": tool_input})
+            out.append({"role": "assistant", "content": content or [{"type": "text", "text": ""}]})
+        else:
+            out.append({"role": "user", "content": [{"type": "text", "text": str(msg.get("content") or "")} ]})
+    if pending_tool_results:
+        out.append({"role": "user", "content": pending_tool_results})
+    return "\n\n".join(part for part in system_parts if part), out
+
+
+async def _agentrouter_completion(model: str, messages: list[dict[str, Any]]) -> AsyncIterator[Any]:
+    try:
+        import httpx
+    except Exception as exc:
+        raise RuntimeError("httpx is required for AgentRouter worker calls") from exc
+    token = _agentrouter_token()
+    if not token:
+        raise RuntimeError("missing AgentRouter token")
+    session_id = str(uuid.uuid4())
+    system, anthropic_messages = _anthropic_messages(messages)
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Api-Key": token,
+        "User-Agent": "claude-cli/2.1.157 (external, sdk-cli)",
+        "X-Claude-Code-Session-Id": session_id,
+        "X-Stainless-Arch": "x64",
+        "X-Stainless-Lang": "js",
+        "X-Stainless-OS": "Linux",
+        "X-Stainless-Package-Version": "0.94.0",
+        "X-Stainless-Retry-Count": "0",
+        "X-Stainless-Runtime": "node",
+        "X-Stainless-Runtime-Version": "v24.3.0",
+        "X-Stainless-Timeout": "900",
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "anthropic-version": "2023-06-01",
+        "x-app": "cli",
+    }
+    payload = {
+        "model": _model_id(model),
+        "messages": anthropic_messages,
+        "system": [
+            {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.157.nexussy; cc_entrypoint=sdk-cli; cch=nexussy;"},
+            {"type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+        ],
+        "tools": _anthropic_tools_schema(),
+        "metadata": {"user_id": json.dumps({"device_id": "nexussy", "account_uuid": "", "session_id": session_id})},
+        "max_tokens": 4096,
+        "stream": True,
+    }
+    tool_blocks: dict[int, dict[str, str]] = {}
+    async with httpx.AsyncClient(timeout=900) as client:
+        async with client.stream("POST", "https://agentrouter.org/v1/messages?beta=true", headers=headers, json=payload) as response:
+            if response.status_code >= 400:
+                raise RuntimeError((await response.aread()).decode("utf-8", errors="replace")[:500])
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                event_type = event.get("type")
+                if event_type == "content_block_start":
+                    block = event.get("content_block") or {}
+                    if block.get("type") == "tool_use":
+                        idx = int(event.get("index") or 0)
+                        tool_blocks[idx] = {"id": str(block.get("id") or f"tool-{idx}"), "name": str(block.get("name") or ""), "arguments": ""}
+                elif event_type == "content_block_delta":
+                    idx = int(event.get("index") or 0)
+                    delta = event.get("delta") or {}
+                    if isinstance(delta.get("text"), str):
+                        yield _chunk(_text_delta(delta["text"]))
+                    if isinstance(delta.get("partial_json"), str):
+                        block = tool_blocks.setdefault(idx, {"id": f"tool-{idx}", "name": "", "arguments": ""})
+                        block["arguments"] = _merge_stream_field(block["arguments"], delta["partial_json"])
+                elif event_type == "content_block_stop":
+                    idx = int(event.get("index") or 0)
+                    block = tool_blocks.pop(idx, None)
+                    if block:
+                        yield _chunk(_tool_delta(idx, block["id"], block["name"], block["arguments"] or "{}"))
+    for idx, block in list(tool_blocks.items()):
+        yield _chunk(_tool_delta(idx, block["id"], block["name"], block["arguments"] or "{}"))
+
+
 def _devplan_tasks() -> str:
     path = _root() / ".nexussy" / "artifacts" / "devplan.md"
     if not path.exists():
@@ -191,15 +371,17 @@ def _messages(task: str, context: str) -> list[dict[str, Any]]:
     worktree = str(_root())
     tasks = _devplan_tasks()
     return [
-        {"role": "system", "content": f"You are a nexussy {role} worker running inside worktree {worktree}. Available tools: read_file, write_file, edit_file, bash, list_dir. Stay inside the worktree, never use path traversal or '..', and keep changes focused on assigned tasks. Devplan tasks:\n{tasks}"},
+        {"role": "system", "content": f"You are a nexussy {role} worker running inside worktree {worktree}. Available tools: read_file, write_file, edit_file, bash, list_dir. Stay inside the worktree, never use path traversal or '..', and keep changes focused on assigned tasks. If the task requires creating or changing project files, you must call write_file, edit_file, or bash before giving a final summary. Do not claim implementation is complete until the filesystem change has been made. Devplan tasks:\n{tasks}"},
         {"role": "user", "content": f"Task:\n{task}\n\nContext:\n{context}\n\nInjected messages:\n" + "\n".join(_injected_messages)},
     ]
 
 
 async def _completion(messages: list[dict[str, Any]]) -> Any:
+    model = os.environ.get("PI_DEFAULT_MODEL") or os.environ.get("NEXUSSY_DEFAULT_MODEL") or "openai/gpt-4o-mini"
+    if _agentrouter_token():
+        return _agentrouter_completion(model, messages)
     from litellm import acompletion  # imported lazily so module import stays side-effect safe
 
-    model = os.environ.get("PI_DEFAULT_MODEL") or os.environ.get("NEXUSSY_DEFAULT_MODEL") or "openai/gpt-4o-mini"
     return await acompletion(model=model, messages=messages, tools=_tools_schema(), stream=True)
 
 
@@ -220,11 +402,11 @@ async def _run_agent(task: str, context: str) -> dict[str, Any]:
             for tc in getattr(delta, "tool_calls", None) or []:
                 idx = int(tc.index or 0)
                 cur = tool_calls.setdefault(idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                cur["id"] += getattr(tc, "id", None) or ""
+                cur["id"] = _merge_stream_field(cur["id"], getattr(tc, "id", None) or "")
                 fn = getattr(tc, "function", None)
                 if fn:
-                    cur["function"]["name"] += getattr(fn, "name", None) or ""
-                    cur["function"]["arguments"] += getattr(fn, "arguments", None) or ""
+                    cur["function"]["name"] = _merge_stream_field(cur["function"]["name"], getattr(fn, "name", None) or "")
+                    cur["function"]["arguments"] = _merge_stream_field(cur["function"]["arguments"], getattr(fn, "arguments", None) or "")
         if not tool_calls:
             return {"status": "ok", "summary": final_text.strip()}
         assistant["tool_calls"] = list(tool_calls.values())
@@ -232,7 +414,7 @@ async def _run_agent(task: str, context: str) -> dict[str, Any]:
         for call in assistant["tool_calls"]:
             name = call["function"]["name"]
             call_id = call.get("id") or name
-            args = json.loads(call["function"].get("arguments") or "{}")
+            args = _tool_arguments(call["function"].get("arguments") or "{}")
             _event("tool_call", {"call_id": call_id, "name": name, "arguments": args})
             try:
                 result = await run_tool(name, args)

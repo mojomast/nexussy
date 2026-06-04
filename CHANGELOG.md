@@ -4,6 +4,7 @@
 
 ### Added
 
+- AgentRouter live pipeline support now presents core and bundled worker calls through Claude Code-shaped AgentRouter requests. `AGENTROUTER_API_KEY` and `AGENT_ROUTER_TOKEN` are discovered as provider credentials; worker streams handle AgentRouter tool-use fragments; and live evidence shows `openai/deepseek-v4-flash` orchestration plus `openai/gpt-5.4` worker calls building `wordcount-tool` with passing pytest and CLI checks.
 - Sprint 5 adds optional browser validation after `develop` via an externally installed `browser-harness` command. It is disabled by default, adds no required Python packages, writes bounded `validate_browser_report` artifacts, preserves the six-stage default pipeline, and includes fake-only core coverage plus launcher `doctor` diagnostics.
 - Deep code review fixes close the critical/high pass across core, TUI, web, and root docs: worker tool execution, shell-safe local worker bash, graph data, interview/SSE robustness, TUI stream cleanup and commands, web proxy limits/timeouts, dashboard chat/graph/control surfaces, generated phase task content, installer config defaults, and regression coverage.
 - Documentation refresh aligns README, SPEC, AGENTS, coverage, triage, and review-report status with the deep code review fixes and current verification commands/counts.
@@ -60,6 +61,7 @@
 
 ### Fixed
 
+- Develop-stage worker JSON-RPC errors now fail the worker task and pipeline, no-change workers fail develop instead of being reported as successful, single-worker runs receive all devplan tasks, and accumulated orchestrator steering is included in develop task specs.
 - **Worker sandbox**: replaced bypassable bash denylist with stripped-env subprocess + 64KB output cap
 - **Database**: SQLite read connection pool (3 connections, query_only) eliminates per-read connection overhead
 

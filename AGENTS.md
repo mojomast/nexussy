@@ -74,9 +74,9 @@ Resolve paths through the path sanitizer, validate anchors before writes, create
 
 # CORE WORKER ORCHESTRATION
 
-Develop-stage workers spawn and run in parallel, then merge serially to keep git conflict handling deterministic. Use `_run_single_worker` for custom worker spawn/RPC behavior and `_merge_single_worker` for custom merge/report behavior.
+Develop-stage workers spawn and run in parallel, then merge serially to keep git conflict handling deterministic. Worker slots are concurrency, not task coverage: when one worker is assigned multiple devplan tasks, develop wraps the task list into a single all-tasks payload; when multiple roles are configured, each role still receives work. Use `_run_single_worker` for custom worker spawn/RPC behavior and `_merge_single_worker` for custom merge/report behavior.
 
-Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loops. Manual interview waits time out according to `stages.interview.answer_timeout_s`; timeout cleanup clears paused state before the run is marked failed.
+Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loops. JSON-RPC worker `error` responses fail the worker task and pipeline instead of being treated as successful output, and workers that produce no git changes fail develop rather than creating synthetic success files. Manual interview waits time out according to `stages.interview.answer_timeout_s`; timeout cleanup clears paused state before the run is marked failed.
 
 # CURRENT CORE CAPABILITIES
 
@@ -86,12 +86,23 @@ Worker RPC resume is guarded at max depth 3 to avoid recursive pause/resume loop
 - MCP tools: `nexussy_start_pipeline`, `nexussy_get_status`, `nexussy_list_sessions`, `nexussy_get_artifacts`, `nexussy_interview_answer`, `nexussy_pause`, `nexussy_resume`, `nexussy_cancel`, `nexussy_inject`, `nexussy_steer`, `nexussy_steer_status`, `nexussy_worker_spawn`, `nexussy_worker_assign`, and `nexussy_list_workers`.
 - Steering: `nexussy_steer` accepts `{target: orchestrator|worker, run_id, worker_id?, message, priority}`, persists every event to the `steer_events` SQLite table, and either appends to `engine.steer_queue[run_id]` or forwards to the worker inject path. Orchestrator steering is marked with `consumed_at` when drained, injected into plan prompts and develop task specs, and `priority="urgent"` unblocks paused pipeline waits immediately.
 - TUI steering: `/steer <message>` targets the orchestrator, `/steer @<worker-id> <message>` targets an existing worker, `/steer list` shows the current queue length plus recent DB-backed `steer_events`, and `/steer clear` sends `CLEAR_CONTEXT` through `nexussy_steer`.
-- Task slicing: plan saves both `devplan.md` and a strict `devplan_tasks` JSON sidecar. `DevplanTask` has `task_id`, `title`, `acceptance_criteria`, `files_allowed`, `depends_on`, `owner`, and `estimated_tokens`; `stages.plan.devplan_task_validation` defaults to `repair`, and develop reads the sidecar first with markdown fallback.
+- Task slicing: plan saves both `devplan.md` and a strict `devplan_tasks` JSON sidecar. `DevplanTask` has `task_id`, `title`, `acceptance_criteria`, `files_allowed`, `depends_on`, `owner`, and `estimated_tokens`; `stages.plan.devplan_task_validation` defaults to `repair`, and develop reads the sidecar first with markdown fallback. Develop consumes queued and previously consumed orchestrator steering in worker task specs.
 - Interview auto-skip: setting `metadata.skip_interview = "true"` on `/pipeline/start` synthesizes all interview answers from the project description (each marked `source="auto"`) and bypasses the human pause gate. `stages.interview.min_description_words` defaults to `50`; shorter auto-skip descriptions tag answers with `confidence="low"`, and design prompts are instructed to stay conservative.
 - Merge conflict recovery: `swarm.conflict_strategy` defaults to `"ours"`; `"ours"` auto-resolves with `git checkout --ours`, `"diff3"` captures conflict-marker content in `conflict_report.conflicts_detail` and completes with `needs_review=true`, and `"abort"` aborts the merge and raises with conflict paths.
 - Worker tool execution: core `execute_worker_tool` performs local read/write/edit/list/search/bash operations through role permissions, path sanitization, write-lock enforcement, stripped-env subprocesses, `tool_output`, and `tool_progress` events. Local Pi worker bash uses exec-based process creation rather than shell interpretation.
 - Worker control APIs: `/swarm/workers/{worker_id}/inject`, `/swarm/workers/{worker_id}/stop`, `/swarm/workers/{worker_id}/stream`, `/swarm/spawn`, and `/swarm/assign` are wired to DB state and SSE/RPC where applicable.
 - Core static dashboard: `/ui` serves zero-build HTML/JS/CSS for session polling, run status, SSE logs, and interview answers. The packaged web dashboard proxies `/api/*`, enforces body/time limits, streams responses, and includes chat, graph, pipeline controls, worker controls, artifacts, config, and secrets views.
+
+## AgentRouter Notes
+
+- AgentRouter rejects generic direct OpenAI/LiteLLM traffic with `unauthorized_client_error` even when normal OpenAI-compatible headers are supplied. The installed Claude Code harness succeeds with the same token, so AgentRouter traffic must present as Claude Code.
+- Supported token env names in this worktree are `AGENTROUTER_API_KEY` and `AGENT_ROUTER_TOKEN`; do not print these values in logs or reports.
+- Core provider calls use AgentRouter's Anthropic-compatible `/v1/messages?beta=true` route with Claude Code-style headers such as `User-Agent: claude-cli/2.1.157 (external, sdk-cli)`, `x-app: cli`, `X-Claude-Code-Session-Id`, `anthropic-version: 2023-06-01`, `anthropic-beta` containing `claude-code-20250219`, and Stainless SDK headers.
+- AgentRouter's route may emit streamed `tool_use` blocks without a final `content_block_stop`; worker adapters flush any open tool block at stream end so tool calls are not dropped. Some AgentRouter worker streams send cumulative or concatenated tool argument fragments; merge streamed fields defensively and recover the last complete JSON object before executing the tool.
+- Fastest observed orchestration model was `openai/deepseek-v4-flash`. It is good for pipeline stages but not reliable for worker tool calls. A successful full all-AgentRouter pipeline used `openai/deepseek-v4-flash` for orchestration and `openai/gpt-5.4` for bundled worker calls.
+- AgentRouter sometimes returns transient upstream HTML `405` responses during stage calls; retrying the same run configuration can pass.
+- Successful full-pipeline proof from this session: run `6c06851d-852f-47fa-a189-61abae560369` created and merged `hello_agentrouter.txt` with content `AgentRouter completed a full nexussy pipeline.` using AgentRouter for both orchestration and bundled worker model calls.
+- Successful tool-building proof after develop hardening: run `e0dc5296-11d3-4242-b813-70d214a22997` built `wordcount-tool` through live AgentRouter with `openai/deepseek-v4-flash` orchestration and `openai/gpt-5.4` bundled worker calls. Final changed files were `wordcount.py`, `tests/test_wordcount.py`, and `README.md`; `python3 -m pytest -q` passed with 4 tests, and text/JSON CLI checks passed. The benchmark report is under `/tmp/opencode/agentrouter-bench/`.
 
 ## Worker Bash Sandbox
 

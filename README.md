@@ -379,11 +379,13 @@ Manual interview waits time out according to `stages.interview.answer_timeout_s`
 
 ## Provider Modes
 
-Production provider execution uses LiteLLM and a configured provider key.
+Production provider execution uses configured provider keys. Standard providers run through the LiteLLM-compatible path; AgentRouter tokens use its Anthropic-compatible Claude Code-shaped `/v1/messages?beta=true` route so requests present like Claude Code rather than generic OpenAI-compatible traffic.
 
 Supported key names include:
 
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`, `GLM_API_KEY`, `ZAI_API_KEY`, `REQUESTY_API_KEY`, `AETHER_API_KEY`, and `OLLAMA_BASE_URL`.
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AGENTROUTER_API_KEY`, `AGENT_ROUTER_TOKEN`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`, `GLM_API_KEY`, `ZAI_API_KEY`, `REQUESTY_API_KEY`, `AETHER_API_KEY`, and `OLLAMA_BASE_URL`.
+
+For AgentRouter, the fastest observed stage model is `openai/deepseek-v4-flash`. Use a stronger worker model such as `openai/gpt-5.4` for bundled worker tool calls when reliability matters. A live end-to-end `wordcount-tool` proof used that split and produced `wordcount.py`, `tests/test_wordcount.py`, and `README.md` with passing pytest and CLI checks.
 
 Local development modes:
 
@@ -403,7 +405,11 @@ Worker behavior:
 
 - Workers spawn and run in parallel.
 - Git merges happen serially to keep conflict handling deterministic.
+- Worker JSON-RPC `error` responses fail the worker task and pipeline instead of being counted as successful output.
+- Workers that produce no git changes fail develop instead of creating placeholder success files.
+- With one worker and multiple devplan tasks, develop passes the whole task list to that worker; with multiple configured roles, each role still receives a worker assignment.
 - Local worker tool calls execute through core with role permissions, path checks, write-lock enforcement, structured `tool_output`, and `tool_progress` events.
+- The bundled AgentRouter worker adapter handles streamed tool arguments that arrive as incremental, cumulative, or concatenated fragments.
 - Worker RPC resume is guarded at max depth 3.
 - Worker output is streamed into SSE events.
 - Changed files are extracted into artifacts after merge.

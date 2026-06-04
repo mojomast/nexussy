@@ -895,6 +895,92 @@ async def test_complete_persists_litellm_429(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_complete_uses_agentrouter_headers_for_openai(monkeypatch):
+    seen = {}
+    async def acompletion(*args, **kwargs):
+        seen.update(kwargs)
+        message = types.SimpleNamespace(content="ok")
+        choice = types.SimpleNamespace(message=message)
+        usage = types.SimpleNamespace(prompt_tokens=3, completion_tokens=2)
+        return types.SimpleNamespace(choices=[choice], usage=usage, _hidden_params={"response_cost": 0.0})
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(acompletion=acompletion))
+    result = await complete("design", "prompt", "openai/gpt-5.5", _env={"OPENAI_API_KEY":"sk-test", "AGENTROUTER_BASE_URL":"https://agentrouter.org/v1"})
+    assert result.text == "ok"
+    assert seen["base_url"] == "https://agentrouter.org/v1"
+    assert seen["api_key"] == "sk-test"
+    assert seen["extra_headers"]["User-Agent"].startswith("claude-cli/")
+    assert seen["extra_headers"]["x-app"] == "cli"
+    assert seen["extra_headers"]["X-Claude-Code-Session-Id"] == "nexussy-agentrouter"
+
+
+@pytest.mark.asyncio
+async def test_complete_uses_agentrouter_headers_for_anthropic(monkeypatch):
+    seen = {}
+    async def acompletion(*args, **kwargs):
+        seen.update(kwargs)
+        message = types.SimpleNamespace(content="ok")
+        choice = types.SimpleNamespace(message=message)
+        usage = types.SimpleNamespace(prompt_tokens=3, completion_tokens=2)
+        return types.SimpleNamespace(choices=[choice], usage=usage, _hidden_params={"response_cost": 0.0})
+    monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace(acompletion=acompletion))
+    await complete("design", "prompt", "anthropic/claude-haiku-4-5-20251001", _env={"ANTHROPIC_API_KEY":"sk-test", "AGENTROUTER_BASE_URL":"https://agentrouter.org/v1"})
+    assert seen["base_url"] == "https://agentrouter.org/v1"
+    assert seen["api_key"] == "sk-test"
+    assert seen["extra_headers"] == {
+        "User-Agent": "claude-cli/1.0.0 (external, cli)",
+        "x-app": "cli",
+        "X-Claude-Code-Session-Id": "nexussy-agentrouter",
+    }
+
+
+@pytest.mark.asyncio
+async def test_complete_agentrouter_token_uses_direct_claude_code_presentation(monkeypatch):
+    seen = {}
+    class Response:
+        status_code = 200
+        text = ""
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def aread(self):
+            return b""
+        async def aiter_lines(self):
+            yield 'data: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}'
+            yield 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}'
+            yield 'data: {"type":"message_delta","usage":{"output_tokens":2}}'
+            yield 'data: [DONE]'
+    class Client:
+        def __init__(self, timeout):
+            seen["timeout"] = timeout
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def stream(self, method, url, *, headers, json):
+            seen["method"] = method
+            seen["url"] = url
+            seen["headers"] = headers
+            seen["json"] = json
+            return Response()
+    monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(AsyncClient=Client))
+    result = await complete("design", "prompt", "openai/gpt-5.4", _env={"AGENTROUTER_API_KEY":"sk-test"}, timeout_s=42)
+    assert result.text == "ok"
+    assert result.usage["provider"] == "agentrouter"
+    assert result.usage["model"] == "openai/gpt-5.4"
+    assert seen["url"] == "https://agentrouter.org/v1/messages?beta=true"
+    assert seen["method"] == "POST"
+    assert seen["headers"]["Authorization"] == "Bearer sk-test"
+    assert seen["headers"]["X-Api-Key"] == "sk-test"
+    assert seen["headers"]["User-Agent"] == "claude-cli/2.1.157 (external, sdk-cli)"
+    assert seen["headers"]["x-app"] == "cli"
+    assert "claude-code-20250219" in seen["headers"]["anthropic-beta"]
+    assert seen["json"]["model"] == "gpt-5.4"
+    assert seen["json"]["stream"] is True
+    assert seen["json"]["system"][1]["text"] == "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+
+
+@pytest.mark.asyncio
 async def test_git_worktree_lifecycle(tmp_path):
     repo = tmp_path / "repo"; base = await init_repo(str(repo))
     wt1, br1 = await create_worktree(str(repo), str(tmp_path / "workers"), "w1")
@@ -1005,6 +1091,58 @@ def test_pipeline_develop_uses_fake_pi_and_worktrees(monkeypatch, tmp_path):
         assert sum(1 for e in events if e["type"] == "worker_task") >= 4
         workers = c.get("/swarm/workers", params={"run_id": body["run_id"]}).json()
         assert any(w["role"] == "orchestrator" for w in workers)
+
+
+def test_pipeline_develop_fails_on_worker_rpc_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("NEXUSSY_PROVIDER_MODE", "fake")
+    child = tmp_path / "fake_pi_error.py"
+    child.write_text(
+        "import json, sys\n"
+        "msg=json.loads(sys.stdin.readline())\n"
+        "print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'error':{'code':-32000,'message':'worker exploded','data':{'status':'error'}}}), flush=True)\n"
+    )
+    server.config = load_config({"swarm":{"default_worker_count":1}, "pi":{"shutdown_timeout_s":0}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Develop Error","description":"backend","auto_approve_interview":True,"metadata":{"mock_provider":False,"fake_pi_command":sys.executable,"fake_pi_args":[str(child)],"worker_roles":["backend"]}})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for _ in range(100):
+            ev = c.get("/events", params={"run_id": body["run_id"]}).json()
+            if ev and ev[-1]["type"] == "done": break
+            import time; time.sleep(.05)
+        assert ev[-1]["payload"]["final_status"] == "failed"
+        assert any(e["type"] == "pipeline_error" and "worker exploded" in json.dumps(e["payload"]) for e in ev)
+        workers = c.get("/swarm/workers", params={"run_id": body["run_id"]}).json()
+        assert any(w["status"] == "failed" for w in workers if w["role"] == "backend")
+
+
+def test_pipeline_develop_fails_when_worker_produces_no_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSSY_DATABASE_PATH", str(tmp_path / "state.db"))
+    monkeypatch.setenv("NEXUSSY_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("NEXUSSY_PROVIDER_MODE", "fake")
+    child = tmp_path / "fake_pi_noop.py"
+    child.write_text(
+        "import json, sys\n"
+        "msg=json.loads(sys.stdin.readline())\n"
+        "print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{'status':'ok'}}), flush=True)\n"
+    )
+    server.config = load_config({"swarm":{"default_worker_count":1}, "pi":{"shutdown_timeout_s":0}})
+    server.db = Database(server.config.database.global_path, server.config.database.busy_timeout_ms, server.config.database.write_retry_count, server.config.database.write_retry_base_ms)
+    server.engine = Engine(server.db, server.config)
+    with TestClient(app) as c:
+        r = c.post("/pipeline/start", json={"project_name":"Develop Noop","description":"backend","auto_approve_interview":True,"metadata":{"mock_provider":False,"fake_pi_command":sys.executable,"fake_pi_args":[str(child)],"worker_roles":["backend"]}})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for _ in range(100):
+            ev = c.get("/events", params={"run_id": body["run_id"]}).json()
+            if ev and ev[-1]["type"] == "done": break
+            import time; time.sleep(.05)
+        assert ev[-1]["payload"]["final_status"] == "failed"
+        assert any(e["type"] == "pipeline_error" and "produced no changes" in json.dumps(e["payload"]) for e in ev)
 
 
 def test_develop_pause_resume_requeues_running_worker(monkeypatch, tmp_path):

@@ -8,6 +8,11 @@ from nexussy.swarm.local_pi_worker import run_tool
 from nexussy.swarm.pi_rpc import spawn_pi_worker
 
 
+def test_tool_argument_stream_handles_cumulative_and_concatenated_chunks():
+    assert local_pi_worker._merge_stream_field('{"path":"x"}', '{"path":"x","content":"y"}') == '{"path":"x","content":"y"}'
+    assert local_pi_worker._tool_arguments('{"path":"x"}{"path":"x","content":"y"}') == {"path": "x", "content": "y"}
+
+
 @pytest.mark.asyncio
 async def test_local_pi_worker_tools_are_worktree_scoped(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUSSY_WORKTREE", str(tmp_path))
