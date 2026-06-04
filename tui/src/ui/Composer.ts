@@ -69,7 +69,7 @@ export function pendingInterviewFromArtifact(response:unknown): ChatUiState["pen
   if (!content.trim()) return undefined;
   let parsed:unknown;
   try { parsed = JSON.parse(content); } catch { return undefined; }
-  const questions = Array.isArray((parsed as any)?.questions) ? (parsed as any).questions.map((q:any, index:number) => ({ question_id:String(q.question_id ?? q.id ?? `q${index + 1}`), question:String(q.question ?? q.text ?? ""), suggested_answer:typeof q.suggested_answer === "string" ? q.suggested_answer : undefined })).filter((q:{question_id:string; question:string}) => q.question) : [];
+  const questions = Array.isArray((parsed as any)?.questions) ? (parsed as any).questions.map((q:any, index:number) => ({ question_id:String(q.question_id ?? q.id ?? `q${index + 1}`), question:String(q.question ?? q.text ?? ""), answer:typeof q.answer === "string" ? q.answer : undefined, suggested_answer:typeof q.suggested_answer === "string" ? q.suggested_answer : undefined })).filter((q:{question_id:string; question:string; answer?:string}) => q.question && (!q.answer || q.answer === "pending")).map(({ question_id, question, suggested_answer }:{question_id:string; question:string; suggested_answer?:string}) => ({ question_id, question, suggested_answer })) : [];
   return questions.length ? { questions, answers:{}, index:0 } : undefined;
 }
 
@@ -177,15 +177,10 @@ async function answerPendingInterview(client:ClientLike, state:ChatUiState, text
   const pending = state.pendingInterview!;
   const question = pending.questions[pending.index];
   if (!question) return [{ ...state, pendingInterview:undefined }, { message:"interview cleared" }];
-  const answers = { ...pending.answers, [question.question_id]:text };
-  const nextIndex = pending.index + 1;
-  if (nextIndex < pending.questions.length) {
-    const next = pending.questions[nextIndex];
-    return [{ ...state, pendingInterview:{ ...pending, answers, index:nextIndex }, transcript:[...state.transcript, { kind:"stage_control", id:`interview-answer-${Date.now()}`, stage:"interview", action:"chat", text:`Answer saved for ${question.question_id}` }, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(next, nextIndex, pending.questions.length) }], statusMessage:`interview ${nextIndex + 1}/${pending.questions.length}` }, { message:"interview answer saved" }];
-  }
+  const answers = { [question.question_id]:text };
   await requireClientMethod(client.interviewAnswer, "/interview-answer").call(client, state.app.sessionId!, answers);
   const app = state.app.runId ? await hydrateRunStatus(client, state.app) : state.app;
-  return [{ ...state, app, pendingInterview:undefined, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:"Submitted interview answers" }], statusMessage:"interview answers submitted" }, { message:"interview answers submitted", stream:Boolean(state.app.runId) }];
+  return [{ ...state, app, pendingInterview:undefined, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:`Submitted answer for ${question.question_id}; waiting for the next adaptive question or pipeline work` }], statusMessage:"interview answer submitted" }, { message:"interview answer submitted; composer ready", stream:Boolean(state.app.runId) }];
 }
 
 function requireClientMethod<T extends (...args:any[]) => unknown>(method:T|undefined, command:string): T {

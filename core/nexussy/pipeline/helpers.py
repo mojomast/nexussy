@@ -237,6 +237,34 @@ def parse_interview_questions(text: str) -> list[InterviewQuestionAnswer]:
     return questions[:8]
 
 
+def parse_interview_turn(text: str, prior_count: int, req: PipelineStartRequest) -> tuple[bool, InterviewQuestionAnswer | None, dict[str, list[str]]]:
+    text = _extract_json_text(text)
+    try:
+        raw = json.loads(text)
+    except Exception:
+        raw = None
+    if isinstance(raw, list):
+        questions = parse_interview_questions(text)
+        return False, questions[0] if questions else _fallback_interview_turn(prior_count, req), {}
+    if isinstance(raw, dict):
+        if bool(raw.get("done")):
+            summary = {
+                "requirements": _string_list(raw.get("requirements")),
+                "constraints": _string_list(raw.get("constraints")),
+                "risks": _string_list(raw.get("risks")),
+            }
+            return True, None, summary
+        item = raw.get("question") if isinstance(raw.get("question"), dict) else raw
+        if isinstance(item, dict):
+            question_id = str(item.get("id") or item.get("question_id") or f"q{prior_count + 1}").strip() or f"q{prior_count + 1}"
+            question = str(item.get("question") or item.get("text") or "").strip()
+            if question:
+                suggested = item.get("suggested_answer") if isinstance(item.get("suggested_answer"), str) else None
+                evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+                return False, InterviewQuestionAnswer(question_id=question_id, question=question, answer="pending", source="user", suggested_answer=suggested, evidence=[str(x) for x in evidence[:4]]), {}
+    return False, _fallback_interview_turn(prior_count, req), {}
+
+
 def parse_auto_answers(text: str, questions: list[InterviewQuestionAnswer], req: PipelineStartRequest) -> dict[str, str]:
     text = _extract_json_text(text)
     try:
@@ -253,6 +281,26 @@ def parse_auto_answers(text: str, questions: list[InterviewQuestionAnswer], req:
     return out
 
 
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()][:12]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _fallback_interview_turn(prior_count: int, req: PipelineStartRequest) -> InterviewQuestionAnswer:
+    fallbacks = [
+        InterviewQuestionAnswer(question_id="q_goal", question="What should the first useful version accomplish?", answer="pending", source="user", suggested_answer="Start with the smallest working proof of concept."),
+        InterviewQuestionAnswer(question_id="q_users", question="Who will use it first, and what should they be able to do?", answer="pending", source="user"),
+        InterviewQuestionAnswer(question_id="q_interface", question="How should people interact with it first: CLI, web UI, API, chat, or something else?", answer="pending", source="user", suggested_answer="Choose the simplest interface that proves the idea."),
+        InterviewQuestionAnswer(question_id="q_quality", question="What check should prove it works locally?", answer="pending", source="user", suggested_answer="Add a small automated smoke test."),
+    ]
+    if prior_count < len(fallbacks):
+        return fallbacks[prior_count]
+    return InterviewQuestionAnswer(question_id=f"q{prior_count + 1}", question=f"What important constraint is still missing for {req.project_name}?", answer="pending", source="user")
+
+
 def _extract_json_text(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -262,6 +310,8 @@ def _extract_json_text(text: str) -> str:
     last_array = stripped.rfind("]")
     first_obj = stripped.find("{")
     last_obj = stripped.rfind("}")
+    if first_obj >= 0 and last_obj > first_obj and (first_array < 0 or first_obj < first_array):
+        return stripped[first_obj:last_obj + 1]
     if first_array >= 0 and last_array > first_array:
         return stripped[first_array:last_array + 1]
     if first_obj >= 0 and last_obj > first_obj:

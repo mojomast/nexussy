@@ -39,6 +39,7 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
   editor.setAutocompleteProvider(new CombinedAutocompleteProvider(COMMANDS.map(name => ({ name, description:"nexussy command" })), process.cwd()));
   const setStatus = (text:string) => { state = { ...state, statusMessage:text }; tui.requestRender(true); };
   let stopped = false;
+  let activeStreamRunId: string | undefined;
   const disposers: Array<() => void> = [];
   const stopTui = () => {
     if (stopped) return;
@@ -49,17 +50,23 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
 
   async function streamCurrentRun() {
     if (!state.app.runId) return;
+    if (activeStreamRunId === state.app.runId) return;
+    activeStreamRunId = state.app.runId;
     try {
+      setStatus("streaming; composer ready");
       const lastEventId = state.connection.lastEventId ?? state.app.lastEventId;
       for await (const env of client.streamRun(state.app.runId, { retryMs:3000, attempts:0, lastEventId })) {
         if (state.rawEvents.some(event => event.event_id === env.event_id)) continue;
         state = reduceChatEvent(state, env);
-        if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && !state.pendingInterview && state.app.stages.interview !== "passed") {
+        if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && state.app.stages.interview !== "passed") {
           try {
             const pendingInterview = pendingInterviewFromArtifact(await client.artifact("interview", state.app.sessionId));
+            const currentId = state.pendingInterview?.questions[state.pendingInterview.index]?.question_id;
             if (pendingInterview) {
               const first = pendingInterview.questions[0];
-              state = { ...state, pendingInterview, transcript:[...state.transcript, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(first, 0, pendingInterview.questions.length) }] };
+              state = { ...state, pendingInterview, transcript:first.question_id === currentId ? state.transcript : [...state.transcript, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(first, 0, pendingInterview.questions.length) }] };
+            } else {
+              state = { ...state, pendingInterview:undefined };
             }
           } catch {}
         }
@@ -72,6 +79,8 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
       const err = actionableError(message);
       state = { ...state, transcript:[...state.transcript, { kind:"error", id:`stream-error-${Date.now()}`, text:err.text, actions:err.actions }] };
       setStatus(message);
+    } finally {
+      activeStreamRunId = undefined;
     }
   }
 
@@ -86,7 +95,7 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
         const [next, result] = await handleComposerSubmit(client, state, line);
         state = next;
         setStatus(result.message);
-        if (result.stream) await streamCurrentRun();
+        if (result.stream) void streamCurrentRun();
         if (result.exit) stopTui();
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);

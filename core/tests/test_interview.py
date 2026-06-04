@@ -9,7 +9,8 @@ from nexussy.config import load_config
 from nexussy.db import Database
 from nexussy.pipeline.engine import Engine
 from nexussy.providers import ProviderResult
-from nexussy.pipeline.helpers import parse_interview_questions
+from nexussy.pipeline.helpers import parse_interview_questions, parse_interview_turn
+from nexussy.api.schemas import PipelineStartRequest
 
 
 QUESTIONS = [
@@ -35,6 +36,10 @@ def fake_complete_factory(prompts):
         usage={"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model}
         if "Generate a dynamic JSON array" in prompt:
             return ProviderResult(json.dumps(QUESTIONS), usage)
+        if "adaptive discovery interviewer" in prompt:
+            if "Prior answers:\n- none yet" not in prompt:
+                return ProviderResult(json.dumps({"done": True, "requirements": ["Use the user's interview answer to build the first version."], "constraints": [], "risks": []}), usage)
+            return ProviderResult(json.dumps({"done": False, "question": {"id": "q_goal", "question": "What should the first useful version do?", "suggested_answer": "Ship a small proof of concept."}}), usage)
         if "Answer these interview questions" in prompt:
             return ProviderResult(json.dumps({
                 "q_name":"HabitTrack",
@@ -91,6 +96,14 @@ def test_interview_question_parser_accepts_fenced_dynamic_json():
     assert questions[0].evidence == ["README mentions local CLI"]
 
 
+def test_interview_turn_parser_prefers_outer_object_with_nested_arrays():
+    req = PipelineStartRequest(project_name="Chat", description="Build a chatbot")
+    done, question, summary = parse_interview_turn('{"done": true, "requirements": ["Use chat UI"], "constraints": [], "risks": []}', 1, req)
+    assert done is True
+    assert question is None
+    assert summary["requirements"] == ["Use chat UI"]
+
+
 @pytest.mark.asyncio
 async def test_interview_auto_answers_use_description(tmp_path, monkeypatch):
     await reset_core(tmp_path, monkeypatch)
@@ -119,7 +132,8 @@ async def test_interview_blocks_pipeline_when_manual(tmp_path, monkeypatch):
         assert status["run"]["status"] == "paused"
         assert not any(e["type"] == "stage_transition" and e["payload"].get("to_stage") == "design" for e in events)
         pending=json.loads((await c.get("/pipeline/artifacts/interview", params={"session_id":body["session_id"]})).json()["content_text"])
-        answers={q["question_id"]: f"user answer for {q['question_id']}" for q in pending["questions"]}
+        assert len([q for q in pending["questions"] if q["answer"] == "pending"]) == 1
+        answers={pending["questions"][-1]["question_id"]: f"user answer for {pending['questions'][-1]['question_id']}"}
         posted=await c.post(f"/pipeline/{body['session_id']}/interview/answer", json={"answers":answers})
         assert posted.status_code == 200, posted.text
         for _ in range(100):

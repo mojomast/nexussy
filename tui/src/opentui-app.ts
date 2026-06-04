@@ -26,9 +26,11 @@ function clampLine(line:string, width:number): string {
 
 function isMainTranscriptItem(item:TranscriptItem): boolean {
   if (item.kind === "assistant" || item.kind === "run_started" || item.kind === "done" || item.kind === "error") return true;
-  if (item.kind === "stage") return item.status === "passed" || item.status === "failed" || item.status === "cancelled" || item.status === "paused";
+  if (item.kind === "stage") return true;
   if (item.kind === "stage_control") return true;
-  if (item.kind === "worker") return /failed|blocked|conflict/i.test(item.text);
+  if (item.kind === "worker") return true;
+  if (item.kind === "tool") return !item.collapsed || /failed|error/i.test(item.text);
+  if (item.kind === "artifact") return /devplan|design|review|develop|changed_files|interview/i.test(item.text);
   return false;
 }
 
@@ -108,6 +110,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
 
   let state = createInitialChatState(initial);
   let stopped = false;
+  let activeStreamRunId: string | undefined;
   const disposers: Array<() => void> = [];
   let resolveDone: () => void = () => {};
   const done = new Promise<void>(resolve => { resolveDone = resolve; });
@@ -239,6 +242,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   const setStatus = (message:string) => {
     state = { ...state, statusMessage:message };
     render();
+    input.focus();
   };
 
   const render = () => {
@@ -256,21 +260,28 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
 
   async function streamCurrentRun() {
     if (!state.app.runId) return;
+    if (activeStreamRunId === state.app.runId) return;
+    activeStreamRunId = state.app.runId;
     try {
+      setStatus("streaming; composer ready");
       const lastEventId = state.connection.lastEventId ?? state.app.lastEventId;
       for await (const env of client.streamRun(state.app.runId, { retryMs:3000, attempts:0, lastEventId })) {
         if (state.rawEvents.some(event => event.event_id === env.event_id)) continue;
         state = reduceChatEvent(state, env);
-        if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && !state.pendingInterview && state.app.stages.interview !== "passed") {
+        if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && state.app.stages.interview !== "passed") {
           try {
             const pendingInterview = pendingInterviewFromArtifact(await client.artifact("interview", state.app.sessionId));
+            const currentId = state.pendingInterview?.questions[state.pendingInterview.index]?.question_id;
             if (pendingInterview) {
               const first = pendingInterview.questions[0];
-              state = { ...state, pendingInterview, transcript:[...state.transcript, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(first, 0, pendingInterview.questions.length) }] };
+              state = { ...state, pendingInterview, transcript:first.question_id === currentId ? state.transcript : [...state.transcript, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(first, 0, pendingInterview.questions.length) }] };
+            } else {
+              state = { ...state, pendingInterview:undefined };
             }
           } catch {}
         }
         render();
+        input.focus();
         if (env.type === "done") break;
       }
       setStatus(`run ${state.app.finalStatus ?? "finished"}`);
@@ -279,6 +290,9 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
       const err = actionableError(message);
       state = { ...state, transcript:[...state.transcript, { kind:"error", id:`stream-error-${Date.now()}`, text:err.text, actions:err.actions }] };
       setStatus(message);
+    } finally {
+      activeStreamRunId = undefined;
+      input.focus();
     }
   }
 
@@ -294,13 +308,15 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
         const [next, result] = await handleComposerSubmit(client, state, line);
         state = next;
         setStatus(result.message);
-        if (result.stream) await streamCurrentRun();
+        if (result.stream) void streamCurrentRun();
         if (result.exit) stop();
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         const err = actionableError(message);
         state = { ...state, transcript:[...state.transcript, { kind:"error", id:`command-error-${Date.now()}`, text:err.text, actions:err.actions }] };
         setStatus(`error: ${message}`);
+      } finally {
+        input.focus();
       }
     })();
   };

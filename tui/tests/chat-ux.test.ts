@@ -220,20 +220,22 @@ test("pending interview turns plain text into answers instead of Ask mode", asyn
   let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true, stages:{ ...createDefaultChatState().app.stages, interview:"paused" } }, pendingInterview:{ questions:[{ question_id:"q1", question:"What should it do?" }, { question_id:"q2", question:"Any constraints?" }], answers:{}, index:0 } };
   let result;
   [state, result] = await handleComposerSubmit(client, state, "Build a local chatbot");
-  expect(result.message).toBe("interview answer saved");
+  expect(result.message).toBe("interview answer submitted; composer ready");
   expect(client.calls.some((call:any[]) => call[0] === "chat")).toBe(false);
-  expect(state.pendingInterview?.answers.q1).toBe("Build a local chatbot");
-  expect(renderChat(state)).toContain("Interview question 2/2: Any constraints?");
-  [state, result] = await handleComposerSubmit(client, state, "Keep it simple");
-  expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"Build a local chatbot", q2:"Keep it simple" }]);
-  expect(result.stream).toBe(true);
   expect(state.pendingInterview).toBeUndefined();
+  expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"Build a local chatbot" }]);
+  expect(result.stream).toBe(true);
 });
 
 test("interview artifact content becomes pending interview questions", () => {
   const pending = pendingInterviewFromArtifact({ content_text:JSON.stringify({ questions:[{ question_id:"q1", question:"What should it do?", suggested_answer:"Start small" }] }) });
   expect(pending?.questions[0]).toEqual({ question_id:"q1", question:"What should it do?", suggested_answer:"Start small" });
   expect(renderChat({ ...createDefaultChatState(), transcript:[{ kind:"assistant", id:"q", role:"assistant", text:`Interview question 1/1: ${pending!.questions[0].question}\nSuggested default: ${pending!.questions[0].suggested_answer}` }] })).toContain("Suggested default: Start small");
+});
+
+test("interview artifact pending state ignores answered history", () => {
+  const pending = pendingInterviewFromArtifact({ content_text:JSON.stringify({ questions:[{ question_id:"q1", question:"Goal?", answer:"Answered" }, { question_id:"q2", question:"Interface?", answer:"pending" }] }) });
+  expect(pending?.questions).toEqual([{ question_id:"q2", question:"Interface?", suggested_answer:undefined }]);
 });
 
 test("pause state changed for interview marks interview paused and renders visibly", () => {

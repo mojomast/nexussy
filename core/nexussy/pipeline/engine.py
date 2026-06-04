@@ -1073,12 +1073,18 @@ class Engine:
         fut = self.interview_waiters.get(session_id)
         if fut and not fut.done():
             fut.set_result(answered)
+            current = current or await self._latest_interview_artifact(rid)
+            return InterviewArtifact(
+                project_name=current.project_name if current else "pending",
+                project_slug=current.project_slug if current else "pending",
+                description=current.description if current else "pending",
+                questions=answered,
+                requirements=[a.answer for a in answered],
+            )
         self.paused.pop(rid, None)
         await self.db.write(lambda con: con.execute("UPDATE runs SET status=? WHERE run_id=?", ("running", rid)))
         await transition_session_status(self.db, session_id, SessionStatus.running)
-        await self.emit(
-            SSEEventType.pause_state_changed, session_id, rid, PausePayload(paused=False, reason="interview answered")
-        )
+        await self.emit(SSEEventType.pause_state_changed, session_id, rid, PausePayload(paused=False, reason="interview answered"))
         current = current or await self._latest_interview_artifact(rid)
         return InterviewArtifact(
             project_name=current.project_name if current else "pending",
