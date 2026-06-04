@@ -1,6 +1,7 @@
 import type { ModelOption, RoutingProfileName, RoutingTable, SecretSummary, StageName, StageRouting } from "../types";
 
 export const routingProfiles: RoutingProfileName[] = ["default", "fast", "cheap", "strict"];
+export const routingProfileGateStages: Record<RoutingProfileName, boolean> = { default:true, fast:false, cheap:true, strict:true };
 
 export const providerModelCatalog: Array<{provider:string; secretName:string; models:string[]; agents:string[]}> = [
   { provider:"agentrouter", secretName:"AGENTROUTER_API_KEY", models:["openai/deepseek-v4-flash", "openai/gpt-5.4", "anthropic/claude-sonnet-4"], agents:["orchestrator", "worker"] },

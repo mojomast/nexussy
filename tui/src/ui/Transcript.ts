@@ -1,4 +1,5 @@
 import { reduceEvent } from "../state";
+import { buildGateSummary } from "../lib/gateSummary";
 import type { EventEnvelope, StageName } from "../types";
 import { renderArtifactLink } from "./ArtifactLink";
 import { renderToolCard } from "./ToolCard";
@@ -72,7 +73,7 @@ function truncateError(message:string): string {
   return text.length > 1000 ? `${text.slice(0, 1000)}...` : text;
 }
 
-export function transcriptItemFromEvent(env:EventEnvelope): TranscriptItem | null {
+export function transcriptItemFromEvent(env:EventEnvelope, activeStage?:StageName): TranscriptItem | null {
   const p = env.payload as any;
   if (env.type === "heartbeat" || env.type === "cost_update") return null;
   if (env.type === "run_started") return { kind:"run_started", id:env.event_id, text:`Run started (${p.status ?? "running"})` };
@@ -86,7 +87,7 @@ export function transcriptItemFromEvent(env:EventEnvelope): TranscriptItem | nul
     const stage = p.stage as StageName; const status = String(p.status ?? "running"); const icon = status === "passed" ? "✓" : status === "failed" ? "✗" : "●";
     return { kind:"stage", id:env.event_id, stage, status, text:`${icon} ${title(stage)} ${status}` };
   }
-  if (env.type === "pause_state_changed") { const stage=(p.stage ?? (/interview/i.test(p.reason ?? "") ? "interview" : "plan")) as StageName; return { kind:"stage", id:env.event_id, stage, status:p.paused ? "paused" : "running", text:p.paused ? `Ⅱ ${title(stage)} paused - ${p.reason ?? "user"}` : `● ${title(stage)} resumed - ${p.reason ?? "user"}` }; }
+  if (env.type === "pause_state_changed") { const stage=(p.stage ?? activeStage ?? "plan") as StageName; return { kind:"stage", id:env.event_id, stage, status:p.paused ? "paused" : "running", text:p.paused ? `Ⅱ ${title(stage)} paused - ${p.reason ?? "user"}` : `● ${title(stage)} resumed - ${p.reason ?? "user"}` }; }
   if (env.type === "content_delta") return { kind:"assistant", id:env.event_id, role:p.role ?? "assistant", text:p.delta ?? "" };
   if (env.type === "tool_call") return { kind:"tool", id:p.call_id ?? env.event_id, title:`${p.tool_name}`, text:JSON.stringify(p.arguments ?? {}), collapsed:true };
   if (env.type === "tool_progress") return { kind:"tool", id:p.call_id ?? env.event_id, title:"tool progress", text:p.message ?? "", collapsed:false };
@@ -108,9 +109,12 @@ export function transcriptItemFromEvent(env:EventEnvelope): TranscriptItem | nul
 
 export function reduceChatEvent(state:ChatUiState, env:EventEnvelope): ChatUiState {
   if (state.rawEvents.some(event => event.event_id === env.event_id)) return state;
+  const activeStage = activeStageFromState(state);
   const app = reduceEvent(state.app, env);
-  const item = transcriptItemFromEvent(env);
-  return { ...state, app, rawEvents:[...state.rawEvents, env], transcript:item ? [...state.transcript, item] : state.transcript, connection:{ connected:true, lastEventId:env.event_id } };
+  const item = transcriptItemFromEvent(env, activeStage);
+  const transcript = item ? [...state.transcript, item] : state.transcript;
+  const pendingGate = gateFromTransition(state, env, transcript) ?? state.pendingGate;
+  return { ...state, app, pendingGate, pendingInterview:state.pendingInterview, rawEvents:[...state.rawEvents, env], transcript, connection:{ connected:true, lastEventId:env.event_id } };
 }
 
 export function renderTranscriptItem(item:TranscriptItem): string[] {
@@ -134,4 +138,21 @@ function itemStage(item:TranscriptItem): StageName|undefined {
   if (item.kind === "stage" || item.kind === "stage_control") return item.stage;
   if (item.kind === "artifact") return item.artifact.kind === "devplan" ? "plan" : undefined;
   return undefined;
+}
+
+function activeStageFromState(state:ChatUiState): StageName|undefined {
+  return Object.entries(state.app.stages).find(([, status]) => status === "running" || status === "paused")?.[0] as StageName|undefined;
+}
+
+function gateFromTransition(state:ChatUiState, env:EventEnvelope, transcript:TranscriptItem[]): ChatUiState["pendingGate"]|undefined {
+  if (env.type !== "stage_transition" || state.app.config.gateStages === false) return undefined;
+  const p = env.payload as any;
+  const from = p.from_stage as StageName|undefined|null;
+  const to = p.to_stage as StageName|undefined;
+  if (!from || !to || isRetry(from, to, p.reason)) return undefined;
+  return { completedStage:from, nextStage:to, summary:buildGateSummary(from, transcript), autoAdvance:false };
+}
+
+function isRetry(from:StageName, to:StageName, reason?:string): boolean {
+  return /retry/i.test(reason ?? "") || (from === "validate" && to === "design") || (from === "review" && to === "plan");
 }

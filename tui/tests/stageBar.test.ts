@@ -1,27 +1,42 @@
 import { expect, test } from "bun:test";
 import { renderStageBar, renderStageBarFooter } from "../src/components/StageBar";
 import { STAGES, createState, reduceEvent } from "../src/state";
-import { renderPipelineRows, renderPipelineStrip } from "../src/ui/PipelineStrip";
-import type { EventEnvelope } from "../src/types";
+import { LABELS, VERBS, renderPipelineRows, renderPipelineStrip } from "../src/ui/PipelineStrip";
+import type { EventEnvelope, StageName } from "../src/types";
 
 function envelope(type:any, payload:any, sequence=1): EventEnvelope { return { event_id:`e${sequence}`, sequence, contract_version:"1.0", type, session_id:"s", run_id:"r", ts:"2026-04-28T00:00:00Z", source:"core", payload } as EventEnvelope; }
 
 test("STAGES contains the core pipeline stages in order", () => {
-  expect(STAGES).toEqual(["interview", "design", "validate", "plan", "review", "develop", "validate_browser"]);
+  expect(STAGES).toEqual(["interview", "design", "validate", "validate_browser", "plan", "review", "develop"]);
+});
+
+test("stage constants cover exactly the same stage names", () => {
+  const expected: StageName[] = ["interview", "design", "validate", "validate_browser", "plan", "review", "develop"];
+  expect(STAGES).toEqual(expected);
+  expect(Object.keys(LABELS).sort()).toEqual([...expected].sort());
+  expect(Object.keys(VERBS).sort()).toEqual([...expected].sort());
 });
 
 test("shows all stages in order", () => {
   const text = renderStageBar(createState());
   for (const stage of STAGES) expect(text).toContain(stage);
   expect(text.indexOf("interview")).toBeLessThan(text.indexOf("design"));
+  expect(text.indexOf("validate")).toBeLessThan(text.indexOf("validate_browser"));
+  expect(text.indexOf("validate_browser")).toBeLessThan(text.indexOf("plan"));
   expect(text.indexOf("review")).toBeLessThan(text.indexOf("develop"));
-  expect(text.indexOf("develop")).toBeLessThan(text.indexOf("validate_browser"));
 });
 
 test("pipeline strip and rows render exactly one segment per stage", () => {
   const state = createState();
   expect(renderPipelineStrip(state).split(" | ").length).toBe(STAGES.length);
   expect(renderPipelineRows(state).length).toBe(STAGES.length);
+});
+
+test("pipeline strip shows gate icon for pending confirmation", () => {
+  const state = createState();
+  const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"done", autoAdvance:false };
+  expect(renderPipelineStrip(state, gate)).toContain("⏸ Validate pending confirmation");
+  expect(renderPipelineRows(state, gate).join("\n")).toContain("Validate  pending confirmation");
 });
 
 test("updates stage to running on stage_transition", () => {

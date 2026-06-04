@@ -15,6 +15,7 @@ import { closeOverlay } from "./ui/Overlay";
 import { renderStatusStrip } from "./ui/StatusStrip";
 import { actionableError, reduceChatEvent, renderTranscriptItem } from "./ui/Transcript";
 import { modelLabel } from "./lib/routing";
+import { pauseForNewGate } from "./lib/gateSummary";
 import type { ChatUiState, TranscriptItem } from "./ui/types";
 
 const WIDE_LAYOUT_MIN_WIDTH = 112;
@@ -36,8 +37,12 @@ function isMainTranscriptItem(item:TranscriptItem): boolean {
 
 function renderTranscriptText(state:ChatUiState): string {
   const visibleItems = state.transcript.filter(item => (!state.stageChat || item.kind === "stage_control" || item.kind === "assistant" || item.kind === "error") && isMainTranscriptItem(item));
+  const gate = state.pendingGate ? [`╭─ Stage complete: ${state.pendingGate.completedStage} → next: ${state.pendingGate.nextStage}`, `│ Summary: ${state.pendingGate.summary}`, "│ Review /artifacts or /plan for details.", "│ Type yes to advance, or chat here to iterate first.", "╰─", ""] : [];
+  const pending = state.pendingInterview;
+  const question = pending?.questions[pending.index ?? 0];
+  const interview = pending && question ? [`╭─ Interview: Question ${pending.index + 1}/${pending.questions.length}`, `│ ${question.question}`, ...(question.suggested_answer ? [`│ Suggested: ${question.suggested_answer}`] : []), `╰─ ${question.suggested_answer ? "Press Enter to accept the suggestion, or type your answer." : "Type your answer."}`, ""] : [];
   const lines = visibleItems.length ? visibleItems.flatMap(item => [...renderTranscriptItem(item), ""]).slice(0, -1) : renderOnboarding();
-  return lines.slice(-80).join("\n");
+  return [...interview, ...gate, ...lines].slice(-90).join("\n");
 }
 
 function renderSidePanel(state:ChatUiState, width:number): string {
@@ -267,7 +272,9 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
       const lastEventId = state.connection.lastEventId ?? state.app.lastEventId;
       for await (const env of client.streamRun(state.app.runId, { retryMs:3000, attempts:0, lastEventId })) {
         if (state.rawEvents.some(event => event.event_id === env.event_id)) continue;
+        const previous = state;
         state = reduceChatEvent(state, env);
+        state = await pauseForNewGate(client, previous, state);
         if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && state.app.stages.interview !== "passed") {
           try {
             const pendingInterview = pendingInterviewFromArtifact(await client.artifact("interview", state.app.sessionId));
@@ -299,7 +306,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   const submit = (text:string) => {
     const line = text.trim();
     input.value = "";
-    if (!line) { render(); return; }
+    if (!line && !state.pendingInterview) { render(); return; }
     if (line === "/quit" || line === "/exit") { stop(); return; }
     void (async () => {
       try {

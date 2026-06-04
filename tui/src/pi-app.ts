@@ -6,6 +6,7 @@ import { formatInterviewQuestion, handleComposerSubmit, pendingInterviewFromArti
 import { COMMANDS } from "./ui/CommandPalette";
 import { closeOverlay } from "./ui/Overlay";
 import { actionableError, reduceChatEvent } from "./ui/Transcript";
+import { pauseForNewGate } from "./lib/gateSummary";
 import type { ChatUiState } from "./ui/types";
 
 const plain = (text:string) => text;
@@ -57,7 +58,9 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
       const lastEventId = state.connection.lastEventId ?? state.app.lastEventId;
       for await (const env of client.streamRun(state.app.runId, { retryMs:3000, attempts:0, lastEventId })) {
         if (state.rawEvents.some(event => event.event_id === env.event_id)) continue;
+        const previous = state;
         state = reduceChatEvent(state, env);
+        state = await pauseForNewGate(client, previous, state);
         if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && state.app.stages.interview !== "passed") {
           try {
             const pendingInterview = pendingInterviewFromArtifact(await client.artifact("interview", state.app.sessionId));
@@ -87,7 +90,7 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
   editor.onSubmit = (text:string) => {
     const line = text.trim();
     editor.setText("");
-    if (!line) return;
+    if (!line && !state.pendingInterview) return;
     if (line === "/quit" || line === "/exit") { stopTui(); return; }
     void (async () => {
       try {

@@ -17,10 +17,38 @@ export function renderChat(state:ChatUiState, width=100): string {
   const scope = state.stageChat ? `  stage chat: ${state.stageChat.stage}` : "";
   const header = `nexussy  ${state.app.runId ? `run ${state.app.runId.slice(0,8)}` : "session ready"}  profile: ${state.app.routingProfile}${scope}`;
   const transcript = renderTranscript(state.transcript, state.transcriptFilter?.stage ?? state.stageChat?.stage);
+  const interview = renderInterviewBlock(state);
+  const gate = renderGateBlock(state);
   const intro = transcript.length ? transcript : renderOnboarding();
   const overlay = renderOverlay(state);
-  const rows = [header, renderPipelineStrip(state.app), "", ...intro, ...(overlay.length ? ["", `╭─ ${state.overlay}`, ...overlay.map(x => `│ ${x}`), "╰─"] : []), "", renderStatusStrip(state), `${composerPrompt(state)}${state.composer.text}`];
+  const rows = [header, renderPipelineStrip(state.app, state.pendingGate, state.pendingInterview), "", ...interview, ...gate, ...intro, ...(overlay.length ? ["", `╭─ ${state.overlay}`, ...overlay.map(x => `│ ${x}`), "╰─"] : []), "", renderStatusStrip(state), `${composerPrompt(state)}${state.composer.text}`];
   return rows.map(row => clampLine(row, width)).join("\n");
+}
+
+function renderGateBlock(state:ChatUiState): string[] {
+  const gate = state.pendingGate;
+  if (!gate) return [];
+  return [
+    `╭─ Stage complete: ${gate.completedStage} → next: ${gate.nextStage}`,
+    `│ Summary: ${gate.summary}`,
+    "│ Review /artifacts or /plan for details.",
+    "│ Type yes to advance, or chat here to iterate first.",
+    "╰─",
+    "",
+  ];
+}
+
+function renderInterviewBlock(state:ChatUiState): string[] {
+  const pending = state.pendingInterview;
+  const question = pending?.questions[pending.index ?? 0];
+  if (!pending || !question) return [];
+  return [
+    `╭─ Interview: Question ${pending.index + 1}/${pending.questions.length}`,
+    `│ ${question.question}`,
+    ...(question.suggested_answer ? [`│ Suggested: ${question.suggested_answer}`] : []),
+    `╰─ ${question.suggested_answer ? "Press Enter to accept the suggestion, or type your answer." : "Type your answer."}`,
+    "",
+  ];
 }
 
 export function renderDashboardMode(state:ChatUiState): string {

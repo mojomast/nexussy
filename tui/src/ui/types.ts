@@ -20,6 +20,7 @@ export type TranscriptItem =
 export interface ComposerState { text:string; history:string[]; historyIndex:number; fileRefs:string[]; autocompleteOpen:boolean; autocompleteQuery:string; }
 export interface ConnectionState { connected:boolean; lastEventId?:string; error?:string; }
 export interface PendingInterview { questions:Array<{question_id:string; question:string; suggested_answer?:string|null}>; answers:Record<string,string>; index:number; }
+export interface PendingGate { completedStage:StageName; nextStage:StageName; summary:string; autoAdvance:boolean; }
 
 export interface ChatUiState {
   mode: UiMode;
@@ -30,10 +31,10 @@ export interface ChatUiState {
   transcriptFilter?: { stage:StageName };
   workerFilter?: "all"|"idle"|"busy"|"failed";
   pendingInterview?: PendingInterview;
+  pendingGate?: PendingGate;
   app: TuiState;
   rawEvents: EventEnvelope[];
   transcript: TranscriptItem[];
-  interviewMode?: boolean;
   pendingAction?: { description:string; command:string };
   composer: ComposerState;
   connection: ConnectionState;

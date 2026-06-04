@@ -46,7 +46,7 @@ test("reducer consumes fixture payloads for every Section 9 event and updates pa
   expect(Object.values(s.blockers).some(b => b.resolved)).toBe(true);
   expect(s.paused).toBe(true);
   expect(s.artifacts[0].kind).toBe("devplan");
-  expect(s.stages.design).toBe("running");
+  expect(s.stages.design).toBe("paused");
   expect(s.finalStatus).toBe("passed");
   const panels = renderPanels(s);
   expect(panels.left).toContain("Paused: yes");

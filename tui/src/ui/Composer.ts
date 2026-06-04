@@ -79,8 +79,10 @@ export function formatInterviewQuestion(question:{question:string; suggested_ans
 
 export async function handleComposerSubmit(client:ClientLike, state:ChatUiState, input:string): Promise<[ChatUiState, CommandOutcome]> {
   const line = input.trim();
+  if (!line && state.pendingInterview && state.app.sessionId) return answerPendingInterviewDefault(client, state);
   if (!line) return [state, { message:"" }];
   const withHistory = { ...state, composer:{ ...state.composer, history:[...state.composer.history, line], historyIndex:-1 } };
+  if (withHistory.pendingGate && !withHistory.pendingGate.autoAdvance && !line.startsWith("/")) return handleGateInput(client, withHistory, line);
   const bucket = classifyInteraction(line, withHistory);
   if (bucket !== "command") {
     if (withHistory.pendingInterview && withHistory.app.sessionId) return answerPendingInterview(client, withHistory, line);
@@ -124,7 +126,9 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
     const profile = rest[0] as RoutingProfileName|undefined;
     if (!profile) return [{ ...withHistory, overlay:"profile" }, { message:"profile" }];
     if (!profiles.has(profile)) throw new Error("usage: /profile <default|fast|cheap|strict>");
-    return [{ ...withHistory, app:reduceRoutingProfile(withHistory.app, profile), overlay:"profile", statusMessage:`profile ${profile}` }, { message:`profile ${profile}` }];
+    const app = reduceRoutingProfile(withHistory.app, profile);
+    const note = app.config.gateStages === false ? "auto-advance: stages will not pause for confirmation" : "stage gates enabled";
+    return [{ ...withHistory, app, overlay:"profile", statusMessage:`profile ${profile}; ${note}` }, { message:`profile ${profile}` }];
   }
   if (cmd === "/status") return hydrateStatusOverlay(client, withHistory, "status");
   if (cmd === "/stages") return hydrateStatusOverlay(client, withHistory, "stages");
@@ -173,6 +177,22 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   throw new Error(`unknown command ${cmd}`);
 }
 
+async function handleGateInput(client:ClientLike, state:ChatUiState, line:string): Promise<[ChatUiState, CommandOutcome]> {
+  const gate = state.pendingGate!;
+  if (/^(yes|y|proceed|continue|advance|next|go|ok|confirm|run it|✓)$/i.test(line)) {
+    if (!state.app.runId) throw new Error("run_id is required to advance");
+    await client.resume(state.app.runId);
+    const app = addStageControlNote({ ...state.app, paused:false }, { stage:gate.completedStage, action:"resume", reason:"user confirmed advance to next stage" });
+    return [{ ...state, pendingGate:undefined, app, transcript:[...state.transcript, { kind:"stage_control", id:`gate-confirm-${Date.now()}`, stage:gate.completedStage, action:"resume", text:`Advancing to ${gate.nextStage}` }], statusMessage:`advancing to ${gate.nextStage}` }, { message:`advancing to ${gate.nextStage}`, stream:true }];
+  }
+  if (/^(no|n|cancel|stop|abort)$/i.test(line)) {
+    return [{ ...state, pendingGate:undefined, app:{ ...state.app, paused:true }, statusMessage:"pipeline paused - iterate with /chat or /stage-chat" }, { message:"gate cancelled; pipeline paused" }];
+  }
+  if (!state.app.runId) throw new Error("run_id is required for gate steering");
+  await client.inject({ run_id:state.app.runId, message:line, stage:gate.completedStage });
+  return [{ ...state, transcript:[...state.transcript, { kind:"stage_control", id:`gate-chat-${Date.now()}`, stage:gate.completedStage, action:"chat", text:line }], statusMessage:`steering ${gate.completedStage}` }, { message:`steering ${gate.completedStage}` }];
+}
+
 async function answerPendingInterview(client:ClientLike, state:ChatUiState, text:string): Promise<[ChatUiState, CommandOutcome]> {
   const pending = state.pendingInterview!;
   const question = pending.questions[pending.index];
@@ -181,6 +201,13 @@ async function answerPendingInterview(client:ClientLike, state:ChatUiState, text
   await requireClientMethod(client.interviewAnswer, "/interview-answer").call(client, state.app.sessionId!, answers);
   const app = state.app.runId ? await hydrateRunStatus(client, state.app) : state.app;
   return [{ ...state, app, pendingInterview:undefined, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:`Submitted answer for ${question.question_id}; waiting for the next adaptive question or pipeline work` }], statusMessage:"interview answer submitted" }, { message:"interview answer submitted; composer ready", stream:Boolean(state.app.runId) }];
+}
+
+async function answerPendingInterviewDefault(client:ClientLike, state:ChatUiState): Promise<[ChatUiState, CommandOutcome]> {
+  const pending = state.pendingInterview!;
+  const question = pending.questions[pending.index];
+  if (!question?.suggested_answer) return [{ ...state, statusMessage:"No default available - type your answer.", transcript:[...state.transcript, { kind:"assistant", id:`interview-no-default-${Date.now()}`, role:"assistant", text:"No default available - type your answer." }] }, { message:"No default available - type your answer." }];
+  return answerPendingInterview(client, state, question.suggested_answer);
 }
 
 function requireClientMethod<T extends (...args:any[]) => unknown>(method:T|undefined, command:string): T {
