@@ -1,4 +1,5 @@
-import type { StageName } from "../types";
+import { STAGES, type TuiState } from "../state";
+import type { ArtifactRef, StageName } from "../types";
 import type { ChatUiState, ClientLike, TranscriptItem } from "../ui/types";
 
 export function buildGateSummary(stage:StageName, transcript:TranscriptItem[]): string {
@@ -39,4 +40,36 @@ export async function pauseForNewGate(client:Pick<ClientLike, "pause">, previous
   if (previous.pendingGate || !next.pendingGate || !next.app.runId) return next;
   await client.pause(next.app.runId, `stage gate: ${next.pendingGate.completedStage} complete; awaiting confirmation for ${next.pendingGate.nextStage}`);
   return { ...next, app:{ ...next.app, paused:true }, statusMessage:`paused at gate: ${next.pendingGate.completedStage} → ${next.pendingGate.nextStage}` };
+}
+
+export function pendingGateFromApp(app:TuiState): ChatUiState["pendingGate"]|undefined {
+  if (app.config.gateStages === false || !app.paused || app.finalStatus) return undefined;
+  const openIndex = STAGES.findIndex(stage => app.stages[stage] !== "passed" && app.stages[stage] !== "skipped");
+  if (openIndex <= 0) return undefined;
+  const completedStage = [...STAGES.slice(0, openIndex)].reverse().find(stage => app.stages[stage] === "passed");
+  const nextStage = STAGES[openIndex];
+  if (!completedStage || !nextStage) return undefined;
+  return { completedStage, nextStage, summary:summaryFromArtifacts(completedStage, app.artifacts), autoAdvance:false };
+}
+
+export function stageArtifacts(stage:StageName, artifacts:ArtifactRef[]): ArtifactRef[] {
+  return artifacts.filter(artifact => artifactMatchesStage(stage, artifact));
+}
+
+function summaryFromArtifacts(stage:StageName, artifacts:ArtifactRef[]): string {
+  const matches = stageArtifacts(stage, artifacts);
+  if (matches.length) return `${stage} artifact: ${matches.at(-1)!.path}`;
+  return `${stage} completed. Review artifacts or continue.`;
+}
+
+function artifactMatchesStage(stage:StageName, artifact:ArtifactRef): boolean {
+  const text = `${artifact.kind} ${artifact.path}`;
+  if (stage === "interview") return /interview/i.test(text);
+  if (stage === "design") return /design/i.test(text);
+  if (stage === "validate") return /validat|report/i.test(text);
+  if (stage === "plan") return /devplan|plan/i.test(text);
+  if (stage === "review") return /review/i.test(text);
+  if (stage === "develop") return /develop|merge|changed_files/i.test(text);
+  if (stage === "validate_browser") return /browser/i.test(text);
+  return false;
 }

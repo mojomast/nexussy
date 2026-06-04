@@ -5,6 +5,7 @@ import { findModelOption } from "../lib/routing";
 import { WORKER_ID_PATTERN } from "../commands";
 import type { PipelineStartRequest, RoutingProfileName, StageName, WorkerRole } from "../types";
 import { closeOverlay } from "./Overlay";
+import { pendingGateFromApp, stageArtifacts } from "../lib/gateSummary";
 import type { ChatUiState, ClientLike, CommandOutcome } from "./types";
 
 const greetingPattern = /^(hi|hello|hey|yo|sup|howdy|hiya|what'?s\s+up|whatsg\s+up|what'?s?\s*good)[!.\s]*$/i;
@@ -97,6 +98,9 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   }
   const bucket = classifyInteraction(line, withHistory);
   if (bucket !== "command") {
+    if (withHistory.pendingAction && /^(no|n|cancel|stop|start fresh)$/i.test(line)) {
+      return [{ ...withHistory, pendingAction:undefined, transcript:[...withHistory.transcript, { kind:"assistant", id:`pending-cancel-${Date.now()}`, role:"assistant", text:"Resume cancelled. Start a fresh pipeline with `/new <description>` when ready." }], statusMessage:"resume cancelled" }, { message:"resume cancelled" }];
+    }
     if (withHistory.stageChat) {
       if (!withHistory.app.runId) throw new Error("run_id is required for stage chat");
       await client.inject({ run_id:withHistory.app.runId, message:line, stage:withHistory.stageChat.stage });
@@ -156,7 +160,11 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
     return [{ ...withHistory, overlay:"setup", transcript:[...withHistory.transcript, { kind:"assistant", id:`setup-${Date.now()}`, role:"assistant", text:`Provider setup for ${provider}: run \`${command}\` for hidden API-key input. Then return here and use /models.` }] }, { message:`setup ${provider}` }];
   }
   if (cmd === "/new") return startNewRun(client, withHistory, rest.join(" "));
-  if (cmd === "/resume" && rest[0] && !withHistory.app.runId && !stages.has(rest[0])) { const app = await hydrateRunStatus(client, { ...withHistory.app, runId:rest[0], finalStatus:undefined }); return [{ ...withHistory, app, statusMessage:`resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }]; }
+  if (cmd === "/resume" && rest[0] && !withHistory.app.runId && !stages.has(rest[0])) {
+    const app = await hydrateRunStatus(client, { ...withHistory.app, runId:rest[0], finalStatus:undefined });
+    const pendingGate = pendingGateFromApp(app);
+    return [{ ...withHistory, app, pendingGate, overlay:pendingGate ? "pipeline" : withHistory.overlay, selectedStage:pendingGate?.completedStage ?? withHistory.selectedStage, statusMessage:pendingGate ? `paused at gate: ${pendingGate.completedStage} → ${pendingGate.nextStage}` : `resuming ${rest[0].slice(0,8)}` }, { message:`resuming ${rest[0]}`, stream:true }];
+  }
   if (cmd === "/secrets") { const secrets = await client.secrets() as any; return [{ ...withHistory, app:reduceSecrets(withHistory.app, secrets), overlay:"secrets" }, { message:"provider key status refreshed" }]; }
   if (cmd === "/memory") return dataOverlay(withHistory, "Memory", await requireClientMethod(client.memory, "/memory").call(client, withHistory.app.sessionId), "memory loaded");
   if (cmd === "/graph") return dataOverlay(withHistory, "Graph", await requireClientMethod(client.graph, "/graph").call(client, withHistory.app.sessionId, withHistory.app.runId), "graph loaded");
@@ -206,9 +214,22 @@ async function handleGateInput(client:ClientLike, state:ChatUiState, line:string
     }
     return [{ ...state, pendingGate:undefined, app:{ ...state.app, paused:true }, statusMessage:"pipeline paused - iterate with /chat or /stage-chat" }, { message:"gate cancelled; pipeline paused" }];
   }
+  if (wantsGateArtifactReview(line)) return showGateArtifacts(client, state);
   if (!state.app.runId) throw new Error("run_id is required for gate steering");
   await client.inject({ run_id:state.app.runId, message:line, stage:gate.completedStage });
   return [{ ...state, transcript:[...state.transcript, { kind:"stage_control", id:`gate-chat-${Date.now()}`, stage:gate.completedStage, action:"chat", text:line }], statusMessage:`steering ${gate.completedStage}` }, { message:`steering ${gate.completedStage}` }];
+}
+
+function wantsGateArtifactReview(line:string): boolean {
+  return /\b(show|view|open|display|read|see)\b/i.test(line) && /\b(artifact|output|design|plan|review|report|result|draft)\b/i.test(line);
+}
+
+async function showGateArtifacts(client:ClientLike, state:ChatUiState): Promise<[ChatUiState, CommandOutcome]> {
+  const gate = state.pendingGate!;
+  const app = state.app.sessionId ? reduceArtifactsSnapshot(state.app, await client.artifacts(state.app.sessionId, state.app.runId)) : state.app;
+  const artifacts = stageArtifacts(gate.completedStage, app.artifacts);
+  const lines = artifacts.length ? artifacts.map(artifact => `${artifact.kind}: ${artifact.path}`) : [`No ${gate.completedStage} artifacts are listed yet. Use /pipeline to inspect stage status.`];
+  return [{ ...state, app, overlay:"artifacts", selectedStage:gate.completedStage, transcript:[...state.transcript, { kind:"assistant", id:`gate-artifacts-${Date.now()}`, role:"assistant", text:[`Artifacts for ${gate.completedStage}:`, ...lines, "Type feedback to iterate, yes to approve, or no to stay paused."].join("\n") }], statusMessage:`showing ${gate.completedStage} artifacts` }, { message:`showing ${gate.completedStage} artifacts` }];
 }
 
 async function answerPendingInterview(client:ClientLike, state:ChatUiState, text:string): Promise<[ChatUiState, CommandOutcome]> {

@@ -21,6 +21,7 @@ export interface ErrorResponse { ok:false; error_code:ErrorCode; message:string;
 export interface ArtifactRef { kind:ArtifactKind; path:string; sha256:string; bytes:number; updated_at:string; phase_number?:number|null; }
 export interface ToolDisplay { kind:"text"|"json"|"diff"|"table"|"tree"|"markdown"; title?:string|null; text?:string|null; language?:string|null; json?:JsonValue; truncated:boolean; }
 export interface RunSummary { run_id:string; session_id:string; status:RunStatus; current_stage?:StageName|null; started_at?:string|null; finished_at?:string|null; usage:TokenUsage; }
+export interface SessionSummary { session_id:string; project_name:string; project_slug:string; status:RunStatus; current_stage?:StageName|null; created_at?:string|null; updated_at?:string|null; last_run_id?:string|null; }
 export interface StageStatusSchema { stage:StageName; status:StageRunStatus; attempt:number; max_attempts:number; started_at?:string|null; finished_at?:string|null; input_artifacts:ArtifactRef[]; output_artifacts:ArtifactRef[]; error?:ErrorResponse|null; }
 export interface Worker { worker_id:string; run_id:string; role:WorkerRole; status:WorkerStatus; task_id?:string|null; task_title?:string|null; stage?:StageName|null; worktree_path:string; branch_name:string; pid?:number|null; model:string; usage:TokenUsage; created_at:string; updated_at:string; last_error?:ErrorResponse|null; }
 export interface FileLock { path:string; worker_id:string; run_id:string; status:LockStatus; claimed_at:string; expires_at:string; }

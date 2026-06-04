@@ -7,6 +7,7 @@ import { COMMANDS } from "./ui/CommandPalette";
 import { closeOverlay } from "./ui/Overlay";
 import { actionableError, reduceChatEvent } from "./ui/Transcript";
 import { pauseForNewGate } from "./lib/gateSummary";
+import { latestResumableSession, resumePromptItem } from "./ui/ResumePrompt";
 import type { ChatUiState } from "./ui/types";
 
 const plain = (text:string) => text;
@@ -87,6 +88,16 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
     }
   }
 
+  async function offerResumePrompt() {
+    if (state.app.runId) return;
+    try {
+      const session = latestResumableSession(await client.listSessions(10, 0));
+      if (!session?.last_run_id || state.app.runId) return;
+      state = { ...state, pendingAction:{ description:`resume previous run ${session.last_run_id}`, command:`/resume ${session.last_run_id}` }, transcript:[...state.transcript, resumePromptItem(session)], statusMessage:"previous run available" };
+      tui.requestRender(true);
+    } catch {}
+  }
+
   editor.onSubmit = (text:string) => {
     const line = text.trim();
     editor.setText("");
@@ -125,5 +136,6 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
     const originalStop = tui.stop.bind(tui);
     tui.stop = () => { try { while (disposers.length) { try { disposers.pop()?.(); } catch {} } originalStop(); } finally { resolve(); } };
     tui.start();
+    void offerResumePrompt();
   });
 }

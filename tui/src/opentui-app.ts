@@ -15,7 +15,8 @@ import { closeOverlay } from "./ui/Overlay";
 import { renderStatusStrip } from "./ui/StatusStrip";
 import { actionableError, reduceChatEvent, renderTranscriptItem } from "./ui/Transcript";
 import { modelLabel } from "./lib/routing";
-import { pauseForNewGate } from "./lib/gateSummary";
+import { pauseForNewGate, stageArtifacts } from "./lib/gateSummary";
+import { latestResumableSession, resumePromptItem } from "./ui/ResumePrompt";
 import type { ChatUiState, TranscriptItem } from "./ui/types";
 
 const WIDE_LAYOUT_MIN_WIDTH = 112;
@@ -37,7 +38,8 @@ function isMainTranscriptItem(item:TranscriptItem): boolean {
 
 function renderTranscriptText(state:ChatUiState): string {
   const visibleItems = state.transcript.filter(item => (!state.stageChat || item.kind === "stage_control" || item.kind === "assistant" || item.kind === "error") && isMainTranscriptItem(item));
-  const gate = state.pendingGate ? [`╭─ Stage complete: ${state.pendingGate.completedStage} → next: ${state.pendingGate.nextStage}`, `│ Summary: ${state.pendingGate.summary}`, "│ Review /artifacts or /plan for details.", "│ Type yes to advance, or chat here to iterate first.", "╰─", ""] : [];
+  const gateArtifacts = state.pendingGate ? stageArtifacts(state.pendingGate.completedStage, state.app.artifacts).map(artifact => `│ Artifact: ${artifact.path}`).slice(-3) : [];
+  const gate = state.pendingGate ? [`╭─ Stage complete: ${state.pendingGate.completedStage} → next: ${state.pendingGate.nextStage}`, `│ Summary: ${state.pendingGate.summary}`, ...gateArtifacts, "│ Review the stage output above, or open /artifacts and /pipeline for details.", "│ Type yes to approve and advance; type feedback here to iterate; type no to stay paused.", "╰─", ""] : [];
   const pending = state.pendingInterview;
   const question = pending?.questions[pending.index ?? 0];
   const interview = pending && question ? [`╭─ Interview: Question ${pending.index + 1}/${pending.questions.length}`, `│ ${question.question}`, ...(question.suggested_answer ? [`│ Suggested: ${question.suggested_answer}`] : []), `╰─ ${question.suggested_answer ? "Press Enter to accept the suggestion, or type your answer." : "Type your answer."}`, ""] : [];
@@ -303,6 +305,17 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
     }
   }
 
+  async function offerResumePrompt() {
+    if (state.app.runId) return;
+    try {
+      const session = latestResumableSession(await client.listSessions(10, 0));
+      if (!session?.last_run_id || state.app.runId) return;
+      state = { ...state, pendingAction:{ description:`resume previous run ${session.last_run_id}`, command:`/resume ${session.last_run_id}` }, transcript:[...state.transcript, resumePromptItem(session)], statusMessage:"previous run available" };
+      render();
+      input.focus();
+    } catch {}
+  }
+
   const submit = (text:string) => {
     const line = text.trim();
     input.value = "";
@@ -400,6 +413,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   render();
   renderer.start();
   input.focus();
+  void offerResumePrompt();
 
   await done;
 }

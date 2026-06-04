@@ -1,5 +1,5 @@
 import { reduceEvent } from "../state";
-import { buildGateSummary } from "../lib/gateSummary";
+import { buildGateSummary, pendingGateFromApp } from "../lib/gateSummary";
 import type { EventEnvelope, StageName } from "../types";
 import { renderArtifactLink } from "./ArtifactLink";
 import { renderToolCard } from "./ToolCard";
@@ -119,7 +119,8 @@ export function reduceChatEvent(state:ChatUiState, env:EventEnvelope): ChatUiSta
   const skippedGate = env.type === "stage_transition" && Boolean(state.pendingGate);
   const transcriptWithItem = item ? [...state.transcript, item] : state.transcript;
   const transcript = skippedGate ? [...transcriptWithItem, { kind:"meta" as const, id:`gate-skipped-${env.event_id}`, text:"gate_skipped: transition suppressed because a stage gate is already pending" }] : transcriptWithItem;
-  const pendingGate = gateFromTransition(state, env, transcript) ?? state.pendingGate;
+  const refreshedGate = state.pendingGate && app.stages[state.pendingGate.nextStage] === "passed" ? pendingGateFromApp(app) : undefined;
+  const pendingGate = refreshedGate ?? gateFromTransition(state, env, transcript) ?? state.pendingGate;
   return { ...state, app, pendingGate, pendingInterview:state.pendingInterview, rawEvents:[...state.rawEvents, env], transcript, connection:{ connected:true, lastEventId:env.event_id } };
 }
 

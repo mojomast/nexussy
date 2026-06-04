@@ -8,6 +8,7 @@ import { STAGES, reduceSecrets, reduceStageRoutingModel, reduceStatusSnapshot } 
 import { findModelOption } from "../src/lib/routing";
 import { renderPipelineRows } from "../src/ui/PipelineStrip";
 import { buildGateSummary, pauseForNewGate } from "../src/lib/gateSummary";
+import { latestResumableSession, resumePromptItem } from "../src/ui/ResumePrompt";
 import type { EventEnvelope } from "../src/types";
 import type { ChatUiState } from "../src/ui/types";
 
@@ -32,6 +33,7 @@ class MockClient {
   artifacts(session_id:string, run_id?:string){ this.calls.push(["artifacts", session_id, run_id]); return { artifacts:[{ kind:"devplan", path:".nexussy/artifacts/devplan.md", sha256:"abc", bytes:1, updated_at:"now" }] }; }
   compact(run_id:string){ this.calls.push(["compact", run_id]); return { compacted_tokens:1234 }; }
   mcpCall(name:string, args:Record<string, unknown>){ this.calls.push(["mcpCall", name, args]); return { queue_length:2, recent:[{ target:"orchestrator", message:"tighten plan", priority:"normal", created_at:"now" }] }; }
+  listSessions(limit=10, offset=0){ this.calls.push(["listSessions", limit, offset]); return { sessions:[{ session_id:"sess-old", project_name:"Old done", project_slug:"old-done", status:"passed", last_run_id:"run-old" }, { session_id:"sess-1", project_name:"Current app", project_slug:"current-app", status:"paused", current_stage:"design", last_run_id:"run-1" }] }; }
 }
 
 test("default render is chat transcript, not dashboard columns", () => {
@@ -208,6 +210,37 @@ test("slash commands route or open overlays", async () => {
   [state] = await handleComposerSubmit(client, state, "/secrets"); expect(state.overlay).toBe("secrets");
 });
 
+test("resume prompt picks latest resumable session", () => {
+  const session = latestResumableSession(new MockClient().listSessions());
+  expect(session?.last_run_id).toBe("run-1");
+  expect(resumePromptItem(session!, "resume-test").text).toContain("Reply yes to resume run-1");
+});
+
+test("resume command reconstructs approval gate from hydrated paused status", async () => {
+  const client = new MockClient() as any;
+  client.status = (run_id:string) => {
+    client.calls.push(["status", run_id]);
+    return { ok:true, run:{ run_id, session_id:"sess-1", status:"running", usage }, stages:STAGES.map(stage => ({ stage, status:stage === "interview" || stage === "design" ? "passed" : stage === "validate" ? "paused" : "pending", attempt:1, max_attempts:1, input_artifacts:[], output_artifacts:stage === "design" ? [{ kind:"design_draft", path:".nexussy/artifacts/design_draft.md", sha256:"abc", bytes:1, updated_at:"now" }] : [] })), workers:[], paused:true, blockers:[] };
+  };
+  const [state, result] = await handleComposerSubmit(client, createDefaultChatState(), "/resume run-1");
+  expect(result.stream).toBe(true);
+  expect(state.pendingGate?.completedStage).toBe("design");
+  expect(state.pendingGate?.nextStage).toBe("validate");
+  expect(state.pendingGate?.summary).toContain("design_draft.md");
+  expect(state.overlay).toBe("pipeline");
+  expect(renderChat(state, 180)).toContain("Stage complete: design → next: validate");
+  expect(renderChat(state, 180)).toContain("Type yes to approve and advance");
+});
+
+test("declining pending resume action clears it", async () => {
+  const client = new MockClient() as any;
+  const state: ChatUiState = { ...createDefaultChatState(), pendingAction:{ description:"resume previous run", command:"/resume run-1" } };
+  const [next, result] = await handleComposerSubmit(client, state, "no");
+  expect(result.message).toBe("resume cancelled");
+  expect(next.pendingAction).toBeUndefined();
+  expect(next.transcript.at(-1)?.text).toContain("Start a fresh pipeline");
+});
+
 test("interview answers post to core and refresh status", async () => {
   const client = new MockClient() as any;
   let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
@@ -236,6 +269,16 @@ test("second stage transition does not overwrite pending gate", () => {
   state = reduceChatEvent(state, env("stage_transition", { from_stage:"validate", to_stage:"plan", from_status:"passed", to_status:"running", reason:"next" }, 21));
   expect(state.pendingGate).toEqual(firstGate);
   expect(state.transcript.some(item => item.kind === "meta" && item.text.includes("gate_skipped"))).toBe(true);
+});
+
+test("stale gate refreshes to completed design when design passes before approval", () => {
+  const gate = { completedStage:"interview" as const, nextStage:"design" as const, summary:"Interview answers captured", autoAdvance:false };
+  let state: ChatUiState = { ...createDefaultChatState(), pendingGate:gate, app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true, stages:{ ...createDefaultChatState().app.stages, interview:"passed", design:"running" } } };
+  state = reduceChatEvent(state, env("artifact_updated", { action:"created", artifact:{ kind:"design_draft", path:".nexussy/artifacts/design_draft.md", sha256:"abc", bytes:1, updated_at:"now" } }, 24));
+  state = reduceChatEvent(state, env("stage_status", { stage:"design", status:"passed", attempt:1, max_attempts:1, input_artifacts:[], output_artifacts:[] }, 25));
+  expect(state.pendingGate?.completedStage).toBe("design");
+  expect(state.pendingGate?.nextStage).toBe("validate");
+  expect(renderChat(state, 180)).toContain("Artifact: .nexussy/artifacts/design_draft.md");
 });
 
 test("retrying stage transition does not create gate", () => {
@@ -295,6 +338,18 @@ test("gate-safe slash commands pass through and blocked commands show hint", asy
   expect(state.transcript.at(-1)?.kind).toBe("assistant");
   expect(state.transcript.at(-1)?.text).toContain("Type yes to advance to validate");
   expect(client.calls.some((call:any[]) => call[0] === "startPipeline")).toBe(false);
+});
+
+test("show design during gate opens artifacts instead of injecting", async () => {
+  const client = new MockClient() as any;
+  const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
+  const designArtifact = { kind:"design_draft" as const, path:".nexussy/artifacts/design_draft.md", sha256:"abc", bytes:1, updated_at:"now" };
+  const state: ChatUiState = { ...createDefaultChatState(), pendingGate:gate, app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true, artifacts:[designArtifact] } };
+  const [next, result] = await handleComposerSubmit(client, state, "can you please show me the design");
+  expect(result.message).toBe("showing design artifacts");
+  expect(next.overlay).toBe("artifacts");
+  expect(next.transcript.at(-1)?.text).toContain("design_draft.md");
+  expect(client.calls.some((call:any[]) => call[0] === "inject")).toBe(false);
 });
 
 test("pipeline overlay includes pending gate details", async () => {

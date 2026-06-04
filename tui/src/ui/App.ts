@@ -5,6 +5,7 @@ import { renderOnboarding } from "./Onboarding";
 import { renderPipelineStrip } from "./PipelineStrip";
 import { composerPrompt, renderStatusStrip } from "./StatusStrip";
 import { renderTranscript } from "./Transcript";
+import { stageArtifacts } from "../lib/gateSummary";
 import type { ChatUiState } from "./types";
 
 export function createDefaultChatState(): ChatUiState {
@@ -28,11 +29,13 @@ export function renderChat(state:ChatUiState, width=100): string {
 function renderGateBlock(state:ChatUiState): string[] {
   const gate = state.pendingGate;
   if (!gate) return [];
+  const artifacts = stageArtifacts(gate.completedStage, state.app.artifacts).map(artifact => `│ Artifact: ${artifact.path}`);
   return [
     `╭─ Stage complete: ${gate.completedStage} → next: ${gate.nextStage}`,
     `│ Summary: ${gate.summary}`,
-    "│ Review /artifacts or /plan for details.",
-    "│ Type yes to advance, or chat here to iterate first.",
+    ...artifacts.slice(-3),
+    "│ Review the stage output above, or open /artifacts and /pipeline for details.",
+    "│ Type yes to approve and advance; type feedback here to iterate; type no to stay paused.",
     "╰─",
     "",
   ];
