@@ -7,7 +7,7 @@ import { closeOverlay } from "../src/ui/Overlay";
 import { STAGES, reduceSecrets, reduceStageRoutingModel, reduceStatusSnapshot } from "../src/state";
 import { findModelOption } from "../src/lib/routing";
 import { renderPipelineRows } from "../src/ui/PipelineStrip";
-import { pauseForNewGate } from "../src/lib/gateSummary";
+import { buildGateSummary, pauseForNewGate } from "../src/lib/gateSummary";
 import type { EventEnvelope } from "../src/types";
 import type { ChatUiState } from "../src/ui/types";
 
@@ -227,6 +227,21 @@ test("stage transition forward creates gate and auto-pause helper pauses run", a
   expect(state.app.paused).toBe(true);
 });
 
+test("second stage transition does not overwrite pending gate", () => {
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", stages:{ ...createDefaultChatState().app.stages, design:"running" } } };
+  state = reduceChatEvent(state, env("stage_transition", { from_stage:"design", to_stage:"validate", from_status:"passed", to_status:"running", reason:"next" }, 20));
+  const firstGate = state.pendingGate;
+  state = reduceChatEvent(state, env("stage_transition", { from_stage:"validate", to_stage:"plan", from_status:"passed", to_status:"running", reason:"next" }, 21));
+  expect(state.pendingGate).toEqual(firstGate);
+  expect(state.transcript.some(item => item.kind === "meta" && item.text.includes("gate_skipped"))).toBe(true);
+});
+
+test("retrying stage transition does not create gate", () => {
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", stages:{ ...createDefaultChatState().app.stages, validate:"running" } } };
+  state = reduceChatEvent(state, env("stage_transition", { from_stage:"validate", to_stage:"validate", from_status:"failed", to_status:"retrying", reason:"provider repair" }, 22));
+  expect(state.pendingGate).toBeUndefined();
+});
+
 test("gate confirm iterate and cancel are handled before ask mode", async () => {
   const client = new MockClient() as any;
   const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
@@ -245,6 +260,29 @@ test("gate confirm iterate and cancel are handled before ask mode", async () => 
   expect(result.message).toBe("gate cancelled; pipeline paused");
   expect(state.pendingGate).toBeUndefined();
   expect(state.app.paused).toBe(true);
+});
+
+test("gate-safe slash commands pass through and blocked commands show hint", async () => {
+  const client = new MockClient() as any;
+  const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
+  let state: ChatUiState = { ...createDefaultChatState(), pendingGate:gate, app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true } };
+  [state] = await handleComposerSubmit(client, state, "/artifacts");
+  expect(state.overlay).toBe("artifacts");
+  expect(state.pendingGate).toEqual(gate);
+  [state] = await handleComposerSubmit(client, state, "/new foo");
+  expect(state.pendingGate).toEqual(gate);
+  expect(state.transcript.at(-1)?.kind).toBe("assistant");
+  expect(state.transcript.at(-1)?.text).toContain("Type yes to advance to validate");
+  expect(client.calls.some((call:any[]) => call[0] === "startPipeline")).toBe(false);
+});
+
+test("validate gate summary uses tool output text", () => {
+  const summary = buildGateSummary("validate", [
+    { kind:"tool", id:"call", title:"bash", text:JSON.stringify({ cmd:"pytest -q" }), collapsed:true },
+    { kind:"tool", id:"out", title:"tool output", text:"validated: 5 checks passed", collapsed:false },
+  ]);
+  expect(summary).toContain("tool output: validated: 5 checks passed");
+  expect(summary).not.toContain("pytest -q");
 });
 
 test("fast profile disables stage gates", async () => {
@@ -271,10 +309,21 @@ test("pending interview turns plain text into answers instead of Ask mode", asyn
 
 test("empty interview input accepts suggested answer", async () => {
   const client = new MockClient() as any;
-  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true }, pendingInterview:{ questions:[{ question_id:"q1", question:"Target platform?", suggested_answer:"web app" }], answers:{}, index:0 } };
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true }, pendingInterview:{ questions:[{ question_id:"q1", question:"Target platform?", suggested_answer:"web SPA" }], answers:{}, index:0 } };
   const [, result] = await handleComposerSubmit(client, state, "");
-  expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"web app" }]);
+  expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"web SPA" }]);
   expect(result.stream).toBe(true);
+});
+
+test("empty interview input without suggestion keeps pending interview", async () => {
+  const client = new MockClient() as any;
+  const pendingInterview = { questions:[{ question_id:"q1", question:"Target platform?", suggested_answer:undefined }], answers:{}, index:0 };
+  const state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true }, pendingInterview };
+  const [next, result] = await handleComposerSubmit(client, state, "");
+  expect(result.message).toBe("interview: no suggested answer");
+  expect(next.pendingInterview).toEqual(pendingInterview);
+  expect(next.transcript.at(-1)?.text).toContain("No default available");
+  expect(client.calls.some((call:any[]) => call[0] === "interviewAnswer")).toBe(false);
 });
 
 test("interview artifact content becomes pending interview questions", () => {

@@ -1,5 +1,5 @@
 import type { StageName } from "../types";
-import type { ChatUiState, TranscriptItem } from "../ui/types";
+import type { ChatUiState, ClientLike, TranscriptItem } from "../ui/types";
 
 export function buildGateSummary(stage:StageName, transcript:TranscriptItem[]): string {
   const recent = transcript.slice(-40);
@@ -8,8 +8,11 @@ export function buildGateSummary(stage:StageName, transcript:TranscriptItem[]): 
     if (paths.length) return `Design artifacts: ${paths.slice(-3).join(", ")}`;
   }
   if (stage === "validate") {
-    const tools = recent.filter(item => item.kind === "tool" && /pass|fail|error|success|validated/i.test(item.text)).slice(-2).map(item => item.text);
-    if (tools.length) return tools.join("; ").slice(0, 160);
+    const results = recent
+      .filter((item): item is TranscriptItem & { kind:"tool" } => item.kind === "tool" && !item.collapsed && /tool output|tool failed|pass|fail|error|success|validated/i.test(`${item.title} ${item.text}`))
+      .slice(-2)
+      .map(item => `${item.title}: ${item.text.slice(0, 80)}`);
+    if (results.length) return results.join("; ");
   }
   if (stage === "plan") {
     const paths = recent.flatMap(item => item.kind === "artifact" && /devplan|plan/i.test(`${item.artifact.kind} ${item.artifact.path}`) ? [item.artifact.path] : []);
@@ -32,7 +35,7 @@ export function buildGateSummary(stage:StageName, transcript:TranscriptItem[]): 
   return fallback ? fallback.text.slice(0, 120) : `${stage} completed. Review artifacts or continue.`;
 }
 
-export async function pauseForNewGate(client:{ pause(run_id:string, reason?:string): Promise<unknown>|unknown }, previous:ChatUiState, next:ChatUiState): Promise<ChatUiState> {
+export async function pauseForNewGate(client:Pick<ClientLike, "pause">, previous:ChatUiState, next:ChatUiState): Promise<ChatUiState> {
   if (previous.pendingGate || !next.pendingGate || !next.app.runId) return next;
   await client.pause(next.app.runId, `stage gate: ${next.pendingGate.completedStage} complete; awaiting confirmation for ${next.pendingGate.nextStage}`);
   return { ...next, app:{ ...next.app, paused:true }, statusMessage:`paused at gate: ${next.pendingGate.completedStage} → ${next.pendingGate.nextStage}` };

@@ -112,7 +112,9 @@ export function reduceChatEvent(state:ChatUiState, env:EventEnvelope): ChatUiSta
   const activeStage = activeStageFromState(state);
   const app = reduceEvent(state.app, env);
   const item = transcriptItemFromEvent(env, activeStage);
-  const transcript = item ? [...state.transcript, item] : state.transcript;
+  const skippedGate = env.type === "stage_transition" && Boolean(state.pendingGate);
+  const transcriptWithItem = item ? [...state.transcript, item] : state.transcript;
+  const transcript = skippedGate ? [...transcriptWithItem, { kind:"meta" as const, id:`gate-skipped-${env.event_id}`, text:"gate_skipped: transition suppressed because a stage gate is already pending" }] : transcriptWithItem;
   const pendingGate = gateFromTransition(state, env, transcript) ?? state.pendingGate;
   return { ...state, app, pendingGate, pendingInterview:state.pendingInterview, rawEvents:[...state.rawEvents, env], transcript, connection:{ connected:true, lastEventId:env.event_id } };
 }
@@ -145,14 +147,15 @@ function activeStageFromState(state:ChatUiState): StageName|undefined {
 }
 
 function gateFromTransition(state:ChatUiState, env:EventEnvelope, transcript:TranscriptItem[]): ChatUiState["pendingGate"]|undefined {
+  if (state.pendingGate) return undefined;
   if (env.type !== "stage_transition" || state.app.config.gateStages === false) return undefined;
   const p = env.payload as any;
   const from = p.from_stage as StageName|undefined|null;
   const to = p.to_stage as StageName|undefined;
-  if (!from || !to || isRetry(from, to, p.reason)) return undefined;
+  if (!from || !to || isRetry(from, to, p)) return undefined;
   return { completedStage:from, nextStage:to, summary:buildGateSummary(from, transcript), autoAdvance:false };
 }
 
-function isRetry(from:StageName, to:StageName, reason?:string): boolean {
-  return /retry/i.test(reason ?? "") || (from === "validate" && to === "design") || (from === "review" && to === "plan");
+function isRetry(from:StageName, to:StageName, payload:any): boolean {
+  return /retry/i.test(payload.reason ?? "") || payload.to_status === "retrying" || (from === "validate" && to === "design") || (from === "review" && to === "plan");
 }

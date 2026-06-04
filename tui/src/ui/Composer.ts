@@ -13,6 +13,7 @@ const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer
 const profiles = new Set(["default","fast","cheap","strict"]);
 const workerFilters = new Set(["all","idle","busy","failed"]);
 const steerWorkerPattern = /^[a-z0-9-]+$/;
+const GATE_SAFE_COMMANDS = new Set(["/stage-chat", "/artifacts", "/plan", "/workers", "/pipeline", "/models", "/status", "/help", "/escape", "/worker", "/handoff"]);
 export type InteractionBucket = "ask" | "command" | "choice-selection" | "confirmation" | "ambiguous";
 
 export function looksLikeProjectRequest(text:string): boolean {
@@ -79,13 +80,23 @@ export function formatInterviewQuestion(question:{question:string; suggested_ans
 
 export async function handleComposerSubmit(client:ClientLike, state:ChatUiState, input:string): Promise<[ChatUiState, CommandOutcome]> {
   const line = input.trim();
-  if (!line && state.pendingInterview && state.app.sessionId) return answerPendingInterviewDefault(client, state);
-  if (!line) return [state, { message:"" }];
   const withHistory = { ...state, composer:{ ...state.composer, history:[...state.composer.history, line], historyIndex:-1 } };
+  if (withHistory.pendingInterview && withHistory.app.sessionId) {
+    const question = withHistory.pendingInterview.questions[withHistory.pendingInterview.index ?? 0];
+    if (!line && question?.suggested_answer) return answerPendingInterview(client, withHistory, question.suggested_answer);
+    if (!line) return [{ ...withHistory, transcript:[...withHistory.transcript, { kind:"assistant", id:`interview-hint-${Date.now()}`, role:"assistant", text:"No default available - type your answer." }] }, { message:"interview: no suggested answer" }];
+    return answerPendingInterview(client, withHistory, line);
+  }
+  if (!line) return [state, { message:"" }];
   if (withHistory.pendingGate && !withHistory.pendingGate.autoAdvance && !line.startsWith("/")) return handleGateInput(client, withHistory, line);
+  if (withHistory.pendingGate && line.startsWith("/")) {
+    const [cmd] = line.split(/\s+/);
+    if (!GATE_SAFE_COMMANDS.has(cmd)) {
+      return [{ ...withHistory, transcript:[...withHistory.transcript, { kind:"assistant", id:`gate-block-${Date.now()}`, role:"assistant", text:`Type yes to advance to ${withHistory.pendingGate.nextStage}, or use /artifacts /plan /workers to review first. Use no to stay paused.` }] }, { message:"gate: command blocked" }];
+    }
+  }
   const bucket = classifyInteraction(line, withHistory);
   if (bucket !== "command") {
-    if (withHistory.pendingInterview && withHistory.app.sessionId) return answerPendingInterview(client, withHistory, line);
     if (withHistory.stageChat) {
       if (!withHistory.app.runId) throw new Error("run_id is required for stage chat");
       await client.inject({ run_id:withHistory.app.runId, message:line, stage:withHistory.stageChat.stage });
@@ -201,13 +212,6 @@ async function answerPendingInterview(client:ClientLike, state:ChatUiState, text
   await requireClientMethod(client.interviewAnswer, "/interview-answer").call(client, state.app.sessionId!, answers);
   const app = state.app.runId ? await hydrateRunStatus(client, state.app) : state.app;
   return [{ ...state, app, pendingInterview:undefined, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:`Submitted answer for ${question.question_id}; waiting for the next adaptive question or pipeline work` }], statusMessage:"interview answer submitted" }, { message:"interview answer submitted; composer ready", stream:Boolean(state.app.runId) }];
-}
-
-async function answerPendingInterviewDefault(client:ClientLike, state:ChatUiState): Promise<[ChatUiState, CommandOutcome]> {
-  const pending = state.pendingInterview!;
-  const question = pending.questions[pending.index];
-  if (!question?.suggested_answer) return [{ ...state, statusMessage:"No default available - type your answer.", transcript:[...state.transcript, { kind:"assistant", id:`interview-no-default-${Date.now()}`, role:"assistant", text:"No default available - type your answer." }] }, { message:"No default available - type your answer." }];
-  return answerPendingInterview(client, state, question.suggested_answer);
 }
 
 function requireClientMethod<T extends (...args:any[]) => unknown>(method:T|undefined, command:string): T {
