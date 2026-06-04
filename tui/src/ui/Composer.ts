@@ -13,7 +13,7 @@ const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer
 const profiles = new Set(["default","fast","cheap","strict"]);
 const workerFilters = new Set(["all","idle","busy","failed"]);
 const steerWorkerPattern = /^[a-z0-9-]+$/;
-const GATE_SAFE_COMMANDS = new Set(["/stage-chat", "/artifacts", "/plan", "/workers", "/pipeline", "/models", "/status", "/help", "/escape", "/worker", "/handoff"]);
+const GATE_SAFE_COMMANDS = new Set(["/stage-chat", "/artifacts", "/plan", "/workers", "/pipeline", "/models", "/status", "/help", "/escape", "/worker", "/handoff", "/compact"]);
 export type InteractionBucket = "ask" | "command" | "choice-selection" | "confirmation" | "ambiguous";
 
 export function looksLikeProjectRequest(text:string): boolean {
@@ -175,6 +175,10 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   }
   if (cmd === "/export") return [withHistory, { message:"exported displayed session data", html:renderPanels(withHistory.app).html }];
   if (!withHistory.app.runId) throw new Error("start a run first with plain text or /new DESCRIPTION");
+  if (cmd === "/compact") {
+    const result = await requireClientMethod(client.compact, "/compact").call(client, withHistory.app.runId);
+    return [{ ...withHistory, statusMessage:`compacted ${result.compacted_tokens} tokens`, transcript:[...withHistory.transcript, { kind:"assistant", id:`compact-${Date.now()}`, role:"assistant", text:`compacted ${result.compacted_tokens} tokens` }] }, { message:`compacted ${result.compacted_tokens} tokens` }];
+  }
   if (cmd === "/pause") return stageControl(client, withHistory, rest, "pause");
   if (cmd === "/resume-run" || cmd === "/resume") return stageControl(client, withHistory, rest, "resume");
   if (cmd === "/cancel") return stageControl(client, withHistory, rest, "cancel");
@@ -197,6 +201,9 @@ async function handleGateInput(client:ClientLike, state:ChatUiState, line:string
     return [{ ...state, pendingGate:undefined, app, transcript:[...state.transcript, { kind:"stage_control", id:`gate-confirm-${Date.now()}`, stage:gate.completedStage, action:"resume", text:`Advancing to ${gate.nextStage}` }], statusMessage:`advancing to ${gate.nextStage}` }, { message:`advancing to ${gate.nextStage}`, stream:true }];
   }
   if (/^(no|n|cancel|stop|abort)$/i.test(line)) {
+    if (state.app.runId && !state.app.paused) {
+      Promise.resolve(client.pause(state.app.runId, "user declined gate advance")).catch(() => {});
+    }
     return [{ ...state, pendingGate:undefined, app:{ ...state.app, paused:true }, statusMessage:"pipeline paused - iterate with /chat or /stage-chat" }, { message:"gate cancelled; pipeline paused" }];
   }
   if (!state.app.runId) throw new Error("run_id is required for gate steering");
@@ -211,7 +218,9 @@ async function answerPendingInterview(client:ClientLike, state:ChatUiState, text
   const answers = { [question.question_id]:text };
   await requireClientMethod(client.interviewAnswer, "/interview-answer").call(client, state.app.sessionId!, answers);
   const app = state.app.runId ? await hydrateRunStatus(client, state.app) : state.app;
-  return [{ ...state, app, pendingInterview:undefined, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:`Submitted answer for ${question.question_id}; waiting for the next adaptive question or pipeline work` }], statusMessage:"interview answer submitted" }, { message:"interview answer submitted; composer ready", stream:Boolean(state.app.runId) }];
+  const nextIndex = pending.index + 1;
+  const updatedInterview = nextIndex < pending.questions.length ? { ...pending, index:nextIndex } : undefined;
+  return [{ ...state, app, pendingInterview:updatedInterview, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:`Submitted answer for ${question.question_id}; ${updatedInterview ? "next question loading…" : "waiting for pipeline to continue"}` }], statusMessage:"interview answer submitted" }, { message:"interview answer submitted; composer ready", stream:Boolean(state.app.runId) }];
 }
 
 function requireClientMethod<T extends (...args:any[]) => unknown>(method:T|undefined, command:string): T {
@@ -237,7 +246,7 @@ async function handleSteerCommand(client:ClientLike, state:ChatUiState, args:str
     const status = await client.mcpCall<{queue_length:number; recent:Array<{target:string; worker_id?:string|null; message:string; priority:string; created_at:string; consumed_at?:string|null}>}>("nexussy_steer_status", { run_id:runId });
     const recent = status.recent.slice(0, 3).map(e => `${e.target}${e.worker_id ? ` ${e.worker_id}` : ""}: ${e.message}`).join("; ") || "none";
     const message = `steer queue: ${status.queue_length}; recent: ${recent}`;
-    return [{ ...state, statusMessage:message }, { message }];
+    return [{ ...state, transcript:[...state.transcript, { kind:"assistant", id:`steer-list-${Date.now()}`, role:"assistant", text:message }], statusMessage:message }, { message }];
   }
   if (sub === "clear") {
     await client.mcpCall("nexussy_steer", { target:"orchestrator", run_id:runId, message:"CLEAR_CONTEXT", priority:"normal" });

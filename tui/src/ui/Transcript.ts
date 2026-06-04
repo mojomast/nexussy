@@ -111,6 +111,10 @@ export function reduceChatEvent(state:ChatUiState, env:EventEnvelope): ChatUiSta
   if (state.rawEvents.some(event => event.event_id === env.event_id)) return state;
   const activeStage = activeStageFromState(state);
   const app = reduceEvent(state.app, env);
+  if (env.type === "done" && state.pendingGate) {
+    const item = transcriptItemFromEvent(env, activeStage);
+    return { ...state, app, pendingGate:undefined, rawEvents:[...state.rawEvents, env], transcript:item ? [...state.transcript, item] : state.transcript, connection:{ connected:true, lastEventId:env.event_id }, statusMessage:"pipeline complete" };
+  }
   const item = transcriptItemFromEvent(env, activeStage);
   const skippedGate = env.type === "stage_transition" && Boolean(state.pendingGate);
   const transcriptWithItem = item ? [...state.transcript, item] : state.transcript;

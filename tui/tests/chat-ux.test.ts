@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createDefaultChatState, renderApp, renderChat } from "../src/ui/App";
+import { createDefaultChatState, renderApp, renderChat, renderInterviewBlock } from "../src/ui/App";
 import { classifyInteraction, handleComposerSubmit, looksLikeProjectRequest, pendingInterviewFromArtifact, wantsInterviewFirst } from "../src/ui/Composer";
 import { insertFileReference, fileReferenceQuery, fileReferenceSuggestions, rejectPathEscape } from "../src/ui/FileReferenceAutocomplete";
 import { actionableError, reduceChatEvent, transcriptItemFromEvent } from "../src/ui/Transcript";
@@ -30,6 +30,8 @@ class MockClient {
   status(run_id:string){ this.calls.push(["status", run_id]); return { ok:true, run:{ run_id, session_id:"sess-1", status:"running", usage }, stages:STAGES.map(stage => ({ stage, status:stage === "design" ? "running" : "pending", attempt:1, max_attempts:1, input_artifacts:[], output_artifacts:[] })), workers:[], paused:false, blockers:[] }; }
   workers(run_id:string){ this.calls.push(["workers", run_id]); return [{ worker_id:"backend-abc123", run_id, role:"backend", status:"running", stage:"develop", worktree_path:"", branch_name:"", model:"mock", usage, created_at:"", updated_at:"" }]; }
   artifacts(session_id:string, run_id?:string){ this.calls.push(["artifacts", session_id, run_id]); return { artifacts:[{ kind:"devplan", path:".nexussy/artifacts/devplan.md", sha256:"abc", bytes:1, updated_at:"now" }] }; }
+  compact(run_id:string){ this.calls.push(["compact", run_id]); return { compacted_tokens:1234 }; }
+  mcpCall(name:string, args:Record<string, unknown>){ this.calls.push(["mcpCall", name, args]); return { queue_length:2, recent:[{ target:"orchestrator", message:"tighten plan", priority:"normal", created_at:"now" }] }; }
 }
 
 test("default render is chat transcript, not dashboard columns", () => {
@@ -242,6 +244,15 @@ test("retrying stage transition does not create gate", () => {
   expect(state.pendingGate).toBeUndefined();
 });
 
+test("done event clears active gate and renders done item", () => {
+  const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
+  let state: ChatUiState = { ...createDefaultChatState(), pendingGate:gate, app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  state = reduceChatEvent(state, env("done", { final_status:"passed", summary:"pipeline complete" }, 23));
+  expect(state.pendingGate).toBeUndefined();
+  expect(state.transcript.some(item => item.kind === "done")).toBe(true);
+  expect(state.statusMessage).toBe("pipeline complete");
+});
+
 test("gate confirm iterate and cancel are handled before ask mode", async () => {
   const client = new MockClient() as any;
   const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
@@ -262,6 +273,16 @@ test("gate confirm iterate and cancel are handled before ask mode", async () => 
   expect(state.app.paused).toBe(true);
 });
 
+test("gate no fires pause when run is not already paused", async () => {
+  const client = new MockClient() as any;
+  const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
+  const state: ChatUiState = { ...createDefaultChatState(), pendingGate:gate, app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:false } };
+  const [next] = await handleComposerSubmit(client, state, "no");
+  expect(client.calls.filter((call:any[]) => call[0] === "pause")).toEqual([["pause", "run-1", "user declined gate advance"]]);
+  expect(next.pendingGate).toBeUndefined();
+  expect(next.app.paused).toBe(true);
+});
+
 test("gate-safe slash commands pass through and blocked commands show hint", async () => {
   const client = new MockClient() as any;
   const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
@@ -274,6 +295,17 @@ test("gate-safe slash commands pass through and blocked commands show hint", asy
   expect(state.transcript.at(-1)?.kind).toBe("assistant");
   expect(state.transcript.at(-1)?.text).toContain("Type yes to advance to validate");
   expect(client.calls.some((call:any[]) => call[0] === "startPipeline")).toBe(false);
+});
+
+test("pipeline overlay includes pending gate details", async () => {
+  const client = new MockClient() as any;
+  const gate = { completedStage:"design" as const, nextStage:"validate" as const, summary:"Design artifact ready", autoAdvance:false };
+  let state: ChatUiState = { ...createDefaultChatState(), pendingGate:gate, app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true } };
+  [state] = await handleComposerSubmit(client, state, "/pipeline");
+  const rendered = renderChat(state, 180);
+  expect(rendered).toContain("Gate: design → validate");
+  expect(rendered).toContain("Design artifact ready");
+  expect(rendered).toContain("Type yes to advance | iterate here | no to stay paused");
 });
 
 test("validate gate summary uses tool output text", () => {
@@ -302,9 +334,42 @@ test("pending interview turns plain text into answers instead of Ask mode", asyn
   [state, result] = await handleComposerSubmit(client, state, "Build a local chatbot");
   expect(result.message).toBe("interview answer submitted; composer ready");
   expect(client.calls.some((call:any[]) => call[0] === "chat")).toBe(false);
-  expect(state.pendingInterview).toBeUndefined();
+  expect(state.pendingInterview?.index).toBe(1);
   expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"Build a local chatbot" }]);
   expect(result.stream).toBe(true);
+});
+
+test("interview answer advances index for local multi-question interview", async () => {
+  const client = new MockClient() as any;
+  const state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true }, pendingInterview:{ questions:[{ question_id:"q1", question:"Target platform?" }, { question_id:"q2", question:"Any constraints?" }], answers:{}, index:0 } };
+  const [next] = await handleComposerSubmit(client, state, "web");
+  expect(next.pendingInterview?.index).toBe(1);
+  expect(next.transcript.at(-1)?.text).toContain("next question loading");
+});
+
+test("interview waiting state renders while awaiting SSE", () => {
+  const state: ChatUiState = { ...createDefaultChatState(), pendingInterview:{ questions:[{ question_id:"q1", question:"Target platform?" }], answers:{}, index:1 } };
+  const rendered = renderInterviewBlock(state).join("\n");
+  expect(rendered).toContain("Interview: waiting for next question");
+  expect(rendered).toContain("pipeline is preparing the next question");
+});
+
+test("compact command calls client and records result", async () => {
+  const client = new MockClient() as any;
+  const state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  const [next, result] = await handleComposerSubmit(client, state, "/compact");
+  expect(client.calls.at(-1)).toEqual(["compact", "run-1"]);
+  expect(next.statusMessage).toContain("compacted 1234 tokens");
+  expect(next.transcript.at(-1)?.text).toContain("compacted 1234 tokens");
+  expect(result.message).toContain("compacted 1234 tokens");
+});
+
+test("steer list adds persistent transcript item", async () => {
+  const client = new MockClient() as any;
+  const state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  const [next, result] = await handleComposerSubmit(client, state, "/steer list");
+  expect(result.message).toContain("steer queue: 2");
+  expect(next.transcript.some(item => item.kind === "assistant" && item.text.includes("steer queue: 2"))).toBe(true);
 });
 
 test("empty interview input accepts suggested answer", async () => {

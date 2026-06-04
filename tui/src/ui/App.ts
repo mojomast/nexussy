@@ -38,10 +38,11 @@ function renderGateBlock(state:ChatUiState): string[] {
   ];
 }
 
-function renderInterviewBlock(state:ChatUiState): string[] {
+export function renderInterviewBlock(state:ChatUiState): string[] {
   const pending = state.pendingInterview;
   const question = pending?.questions[pending.index ?? 0];
-  if (!pending || !question) return [];
+  if (!pending) return [];
+  if (!question) return ["╭─ Interview: waiting for next question…", "╰─ Your answer was submitted; the pipeline is preparing the next question.", ""];
   return [
     `╭─ Interview: Question ${pending.index + 1}/${pending.questions.length}`,
     `│ ${question.question}`,
