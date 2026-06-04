@@ -1,6 +1,6 @@
 import { CoreClient, FixtureCoreClient } from "./client";
 import { CONTRACT_EVENT_FIXTURES, FIXTURE_RUN_ID } from "./fixtures";
-import { createState, reduceConnectionError, reduceEvent, reduceStatusSnapshot } from "./state";
+import { createState, reduceConnectionError, reduceEvent, reduceSecrets, reduceStatusSnapshot, type TuiState } from "./state";
 import { loadOptionalPiRuntime, renderPanels } from "./renderer";
 import { createInterface } from "node:readline/promises";
 import { runSlash } from "./commands";
@@ -15,11 +15,12 @@ export const OPENROUTER_MODEL_OPTIONS = [
   "openrouter/meta-llama/llama-3.1-70b-instruct",
 ] as const;
 
-export interface ProviderSetup { id:string; label:string; secretName:string; modelPrefix:string; models:string[]; }
+export interface ProviderSetup { id:string; label:string; secretName:string; modelPrefix:string; models:string[]; passthroughModelNames?:boolean; }
 export const PROVIDER_SETUPS: ProviderSetup[] = [
   { id:"openrouter", label:"OpenRouter", secretName:"OPENROUTER_API_KEY", modelPrefix:"openrouter", models:[...OPENROUTER_MODEL_OPTIONS] },
   { id:"openai", label:"OpenAI", secretName:"OPENAI_API_KEY", modelPrefix:"openai", models:["openai/gpt-5.5-fast", "openai/gpt-4o-mini"] },
   { id:"anthropic", label:"Anthropic", secretName:"ANTHROPIC_API_KEY", modelPrefix:"anthropic", models:["anthropic/claude-sonnet-4", "anthropic/claude-3-5-haiku-latest"] },
+  { id:"agentrouter", label:"AgentRouter", secretName:"AGENTROUTER_API_KEY", modelPrefix:"", passthroughModelNames:true, models:["openai/deepseek-v4-flash", "openai/gpt-5.4", "anthropic/claude-sonnet-4"] },
 ];
 
 export async function readSecretNoEcho(prompt:string, input:NodeJS.ReadStream=process.stdin, output:NodeJS.WriteStream=process.stdout): Promise<string> {
@@ -91,6 +92,7 @@ export function normalizeOpenRouterModel(model:string): string {
 export function normalizeProviderModel(provider:ProviderSetup, model:string): string {
   const trimmed = model.trim();
   if (!trimmed) throw new Error("model is required");
+  if (provider.passthroughModelNames) return trimmed;
   return trimmed.startsWith(`${provider.modelPrefix}/`) ? trimmed : `${provider.modelPrefix}/${trimmed}`;
 }
 
@@ -120,7 +122,8 @@ export async function selectProviderModel(provider:ProviderSetup, readText=readL
   if (!choice) return provider.models[0];
   const n = Number(choice);
   if (Number.isInteger(n) && n >= 1 && n <= provider.models.length) return provider.models[n - 1];
-  if (n === provider.models.length + 1) return normalizeProviderModel(provider, await readText(`Custom model, e.g. ${provider.models[0].replace(`${provider.modelPrefix}/`, "")}: `));
+  const example = provider.passthroughModelNames ? provider.models[0] : provider.models[0].replace(`${provider.modelPrefix}/`, "");
+  if (n === provider.models.length + 1) return normalizeProviderModel(provider, await readText(`Custom model, e.g. ${example}: `));
   return normalizeProviderModel(provider, choice);
 }
 
@@ -163,8 +166,12 @@ export async function waitForCore(client:CoreClient, attempts=30, delayMs=250): 
 
 export function startCoreProcess(output:NodeJS.WriteStream=process.stdout, spawnImpl:typeof Bun.spawn=Bun.spawn): CoreProcess {
   const root = new URL("../../", import.meta.url).pathname;
-  output.write("Core is not running; starting local core for setup...\n");
-  return spawnImpl(["python3", "-m", "nexussy.api.server"], { cwd:root, stdout:"ignore", stderr:"ignore", env:{ ...process.env, NEXUSSY_KEYRING_TIMEOUT_S:process.env.NEXUSSY_KEYRING_TIMEOUT_S ?? "0.5", PYTHONPATH:`${root}/core${process.env.PYTHONPATH ? `:${process.env.PYTHONPATH}` : ""}` } });
+  output.write("Core is not running; starting local core...\n");
+  return spawnImpl(["python3", "-m", "nexussy.api.server"], { cwd:root, stdout:"ignore", stderr:"inherit", env:{ ...process.env, NEXUSSY_CORE_HOST:process.env.NEXUSSY_CORE_HOST ?? "127.0.0.1", NEXUSSY_CORE_PORT:process.env.NEXUSSY_CORE_PORT ?? "7771", NEXUSSY_KEYRING_TIMEOUT_S:process.env.NEXUSSY_KEYRING_TIMEOUT_S ?? "0.5", PYTHONPATH:`${root}/core${process.env.PYTHONPATH ? `:${process.env.PYTHONPATH}` : ""}` } });
+}
+
+export function defaultCoreUrl(env:{ NEXUSSY_CORE_URL?:string; NEXUSSY_CORE_PORT?:string }=process.env as any): string {
+  return env.NEXUSSY_CORE_URL ?? `http://127.0.0.1:${env.NEXUSSY_CORE_PORT ?? "7771"}`;
 }
 
 export function useIsolatedSetupCore(client:CoreClient): void {
@@ -183,6 +190,16 @@ export async function ensureCoreForSetup(client:CoreClient, output:NodeJS.WriteS
   catch { const proc = start(output); await waitForCore(client); return proc; }
 }
 
+export async function ensureCoreForTuiLaunch(client:CoreClient, output:NodeJS.WriteStream=process.stdout, start=startCoreProcess, wait=waitForCore): Promise<CoreProcess|undefined> {
+  if (process.env.NEXUSSY_CORE_URL) return undefined;
+  try { await client.health(); return undefined; }
+  catch {
+    const proc = start(output);
+    try { await wait(client); return proc; }
+    catch (e) { proc.kill(); throw e; }
+  }
+}
+
 export async function setupWizard(client:CoreClient, input:NodeJS.ReadStream=process.stdin, output:NodeJS.WriteStream=process.stdout, readSecret=readSecretNoEcho, readText=readLine, start=startCoreProcess): Promise<string> {
   const proc = await ensureCoreForSetup(client, output, start);
   try {
@@ -195,6 +212,11 @@ export async function setupWizard(client:CoreClient, input:NodeJS.ReadStream=pro
 
 export function hasConfiguredProviderSecret(secrets:SecretSummary[]|unknown): boolean {
   return Array.isArray(secrets) && secrets.some(secret => Boolean((secret as SecretSummary).configured));
+}
+
+export async function hydrateProviderSecrets(client:Pick<CoreClient,"secrets">, state:TuiState): Promise<TuiState> {
+  try { return reduceSecrets(state, await client.secrets()); }
+  catch { return state; }
 }
 
 export async function promptProviderSetupIfNeeded(client:CoreClient, input:NodeJS.ReadStream=process.stdin, output:NodeJS.WriteStream=process.stdout, readSecret=readSecretNoEcho, readText=readLine): Promise<boolean> {
@@ -300,7 +322,7 @@ export async function interactiveShell(client:CoreClient, state=createState(), i
 export async function main() {
   await loadOptionalPiRuntime();
   const mockMode = process.env.NEXUSSY_TUI_MODE === "mock-fixture" || process.argv.includes("--mock-fixture");
-  const client = mockMode ? new FixtureCoreClient(CONTRACT_EVENT_FIXTURES) : new CoreClient({ baseUrl:process.env.NEXUSSY_CORE_URL ?? "http://127.0.0.1:7771", apiKey:process.env.NEXUSSY_API_KEY, mode:"live-core" });
+  const client = mockMode ? new FixtureCoreClient(CONTRACT_EVENT_FIXTURES) : new CoreClient({ baseUrl:defaultCoreUrl(), apiKey:process.env.NEXUSSY_API_KEY, mode:"live-core" });
   const setKeyIndex = process.argv.indexOf("--set-key");
   if (process.argv.includes("--setup") || process.argv.includes("--setup-openrouter")) {
     useIsolatedSetupCore(client);
@@ -329,16 +351,22 @@ export async function main() {
     }
     return;
   }
-  const state = createState();
+  let state = createState();
   const runId = mockMode ? FIXTURE_RUN_ID : process.argv[2];
   if (!runId) {
-    if (!mockMode) {
-      const prompts = createPromptSession();
-      try { await promptProviderSetupIfNeeded(client, process.stdin, process.stdout, prompts.readSecret, prompts.readLine); }
-      finally { prompts.close(); }
+    const proc = !mockMode ? await ensureCoreForTuiLaunch(client) : undefined;
+    try {
+      if (!mockMode) {
+        const prompts = createPromptSession();
+        try { await promptProviderSetupIfNeeded(client, process.stdin, process.stdout, prompts.readSecret, prompts.readLine); }
+        finally { prompts.close(); }
+      }
+      state = await hydrateProviderSecrets(client, state);
+      if (shouldUseOpenTuiRenderer()) await runOpenTui(client, state);
+      else await runPiTui(client, state);
+    } finally {
+      proc?.kill();
     }
-    if (shouldUseOpenTuiRenderer()) await runOpenTui(client, state);
-    else await runPiTui(client, state);
     return;
   }
   let current: typeof state = { ...state, runId };

@@ -1,19 +1,25 @@
 import type { CoreClient } from "./client";
+import { reduceRoutingProfile } from "./state";
 import type { TuiState } from "./state";
 import { renderPanels } from "./renderer";
-import type { StageName, WorkerRole } from "./types";
+import type { RoutingProfileName, StageName, WorkerRole } from "./types";
 
 export type CommandResult = { local?:true; endpoint?:string; method?:"GET"|"POST"|"DELETE"; message:string; html?:string };
 const stages = new Set(["interview","design","validate","plan","review","develop"]);
 const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
 export const WORKER_ID_PATTERN = /^(orchestrator|backend|frontend|qa|devops|writer|analyst)-[a-z0-9]{6,12}$/;
-const providerSecrets = new Set(["OPENAI_API_KEY","ANTHROPIC_API_KEY","OPENROUTER_API_KEY","GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","TOGETHER_API_KEY","FIREWORKS_API_KEY","XAI_API_KEY","GLM_API_KEY","ZAI_API_KEY","REQUESTY_API_KEY","AETHER_API_KEY","OLLAMA_BASE_URL"]);
+const profiles = new Set(["default", "fast", "cheap", "strict"]);
+const providerSecrets = new Set(["OPENAI_API_KEY","ANTHROPIC_API_KEY","OPENROUTER_API_KEY","GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","TOGETHER_API_KEY","FIREWORKS_API_KEY","XAI_API_KEY","GLM_API_KEY","ZAI_API_KEY","REQUESTY_API_KEY","AETHER_API_KEY","OLLAMA_BASE_URL","AGENTROUTER_API_KEY","AGENT_ROUTER_TOKEN"]);
 
 export async function runSlash(input:string, client:CoreClient, state:TuiState): Promise<CommandResult> {
   const [cmd, ...rest] = input.trim().split(/\s+/);
   const run_id = state.runId;
   if (cmd === "/export") return { local:true, message:"exported displayed session data", html:renderPanels(state).html };
   if (cmd === "/handoff") return { local:true, message:"handoff triggered by user" };
+  if (cmd === "/pipeline") return { local:true, message:"pipeline overlay" };
+  if (cmd === "/models" || cmd === "/routing") return { local:true, message:"model routing overlay" };
+  if (cmd === "/profile") { const profile=rest[0] as RoutingProfileName|undefined; if(!profile) return { local:true, message:"profile overlay" }; if(!profiles.has(profile)) throw new Error("usage: /profile <default|fast|cheap|strict>"); Object.assign(state, reduceRoutingProfile(state, profile)); return { local:true, message:`profile ${profile}` }; }
+  if (cmd === "/stage-chat") { const stage=rest[0]; if(!stage || !stages.has(stage)) throw new Error("usage: /stage-chat <stage>"); return { local:true, message:`stage chat ${stage}` }; }
   if (cmd === "/secrets" || cmd === "/keys") { state.secrets = await client.secrets(); return { endpoint:"/secrets", method:"GET", message:"provider key status refreshed" }; }
   if (cmd === "/config") { await client.config(); return { endpoint:"/config", method:"GET", message:"config loaded" }; }
   if (cmd === "/memory") { await client.memory(state.sessionId); return { endpoint:"/memory", method:"GET", message:"memory loaded" }; }

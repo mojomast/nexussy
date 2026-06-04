@@ -13,7 +13,8 @@ import { handleComposerSubmit } from "./ui/Composer";
 import { renderOnboarding } from "./ui/Onboarding";
 import { closeOverlay } from "./ui/Overlay";
 import { renderStatusStrip } from "./ui/StatusStrip";
-import { reduceChatEvent, renderTranscriptItem } from "./ui/Transcript";
+import { actionableError, reduceChatEvent, renderTranscriptItem } from "./ui/Transcript";
+import { modelLabel } from "./lib/routing";
 import type { ChatUiState, TranscriptItem } from "./ui/types";
 
 const WIDE_LAYOUT_MIN_WIDTH = 112;
@@ -25,12 +26,13 @@ function clampLine(line:string, width:number): string {
 function isMainTranscriptItem(item:TranscriptItem): boolean {
   if (item.kind === "assistant" || item.kind === "run_started" || item.kind === "done" || item.kind === "error") return true;
   if (item.kind === "stage") return item.status === "passed" || item.status === "failed" || item.status === "cancelled";
+  if (item.kind === "stage_control") return true;
   if (item.kind === "worker") return /failed|blocked|conflict/i.test(item.text);
   return false;
 }
 
 function renderTranscriptText(state:ChatUiState): string {
-  const visibleItems = state.transcript.filter(isMainTranscriptItem);
+  const visibleItems = state.transcript.filter(item => (!state.stageChat || item.kind === "stage_control" || item.kind === "assistant" || item.kind === "error") && isMainTranscriptItem(item));
   const lines = visibleItems.length ? visibleItems.flatMap(item => [...renderTranscriptItem(item), ""]).slice(0, -1) : renderOnboarding();
   return lines.join("\n");
 }
@@ -43,6 +45,10 @@ function renderSidePanel(state:ChatUiState, width:number): string {
   const lines = [
     "Pipeline",
     ...stages,
+    "",
+    "Routing",
+    `profile ${state.app.routingProfile}`,
+    ...Object.values(state.app.routing).slice(0, 3).map(route => `${route.stage}:${modelLabel(route.primary).slice(0, 20)}`),
     "",
     "Workers",
     ...(workers.length ? workers : ["none"]),
@@ -257,7 +263,10 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
       }
       setStatus(`run ${state.app.finalStatus ?? "finished"}`);
     } catch (e) {
-      setStatus(`stream error: ${e instanceof Error ? e.message : String(e)}`);
+      const message = `stream error: ${e instanceof Error ? e.message : String(e)}`;
+      const err = actionableError(message);
+      state = { ...state, transcript:[...state.transcript, { kind:"error", id:`stream-error-${Date.now()}`, text:err.text, actions:err.actions }] };
+      setStatus(message);
     }
   }
 
@@ -276,7 +285,10 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
         if (result.stream) await streamCurrentRun();
         if (result.exit) stop();
       } catch (e) {
-        setStatus(`error: ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        const err = actionableError(message);
+        state = { ...state, transcript:[...state.transcript, { kind:"error", id:`command-error-${Date.now()}`, text:err.text, actions:err.actions }] };
+        setStatus(`error: ${message}`);
       }
     })();
   };
@@ -298,6 +310,18 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
       state = { ...state, overlay:state.overlay === "none" ? "help" : "none" };
       key.preventDefault();
       render();
+      return;
+    }
+    if (state.overlay === "pipeline" && state.selectedStage && ["p", "r", "x", "c"].includes(key.name)) {
+      const stage = state.selectedStage;
+      if (key.name === "c") submit(`/stage-chat ${stage}`);
+      else {
+        const command = key.name === "p" ? `/pause ${stage} ` : key.name === "r" ? `/resume ${stage} ` : `/cancel ${stage} `;
+        input.value = command;
+        input.focus();
+        render();
+      }
+      key.preventDefault();
     }
   };
 

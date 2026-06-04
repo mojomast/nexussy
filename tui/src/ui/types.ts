@@ -2,11 +2,12 @@ import type { TuiState } from "../state";
 import type { ArtifactRef, EventEnvelope, StageName, Worker, WorkerRole } from "../types";
 
 export type UiMode = "chat" | "dashboard";
-export type OverlayMode = "none" | "help" | "onboarding" | "status" | "stages" | "plan" | "artifacts" | "workers" | "worker" | "doctor" | "secrets" | "handoff" | "data";
+export type OverlayMode = "none" | "help" | "onboarding" | "status" | "stages" | "pipeline" | "models" | "profile" | "stage-chat" | "setup" | "plan" | "artifacts" | "workers" | "worker" | "doctor" | "secrets" | "handoff" | "data";
 
 export type TranscriptItem =
   | { kind:"run_started"; id:string; text:string }
   | { kind:"stage"; id:string; stage:StageName; status:string; text:string }
+  | { kind:"stage_control"; id:string; stage:StageName; action:"pause"|"resume"|"cancel"|"chat"; text:string }
   | { kind:"assistant"; id:string; role:string; text:string }
   | { kind:"tool"; id:string; title:string; text:string; collapsed:boolean }
   | { kind:"worker"; id:string; worker_id:string; text:string }
@@ -23,6 +24,10 @@ export interface ChatUiState {
   mode: UiMode;
   overlay: OverlayMode;
   selectedWorkerId?: string;
+  selectedStage?: StageName;
+  stageChat?: { stage:StageName };
+  transcriptFilter?: { stage:StageName };
+  workerFilter?: "all"|"idle"|"busy"|"failed";
   app: TuiState;
   rawEvents: EventEnvelope[];
   transcript: TranscriptItem[];

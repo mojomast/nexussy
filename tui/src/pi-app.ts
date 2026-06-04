@@ -5,7 +5,7 @@ import { renderApp } from "./ui/App";
 import { handleComposerSubmit } from "./ui/Composer";
 import { COMMANDS } from "./ui/CommandPalette";
 import { closeOverlay } from "./ui/Overlay";
-import { reduceChatEvent } from "./ui/Transcript";
+import { actionableError, reduceChatEvent } from "./ui/Transcript";
 import type { ChatUiState } from "./ui/types";
 
 const plain = (text:string) => text;
@@ -57,7 +57,10 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
       }
       setStatus(`run ${state.app.finalStatus ?? "finished"}`);
     } catch (e) {
-      setStatus(`stream error: ${e instanceof Error ? e.message : String(e)}`);
+      const message = `stream error: ${e instanceof Error ? e.message : String(e)}`;
+      const err = actionableError(message);
+      state = { ...state, transcript:[...state.transcript, { kind:"error", id:`stream-error-${Date.now()}`, text:err.text, actions:err.actions }] };
+      setStatus(message);
     }
   }
 
@@ -75,7 +78,10 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
         if (result.stream) await streamCurrentRun();
         if (result.exit) stopTui();
       } catch (e) {
-        setStatus(`error: ${e instanceof Error ? e.message : String(e)}`);
+        const message = e instanceof Error ? e.message : String(e);
+        const err = actionableError(message);
+        state = { ...state, transcript:[...state.transcript, { kind:"error", id:`command-error-${Date.now()}`, text:err.text, actions:err.actions }] };
+        setStatus(`error: ${message}`);
       }
     })();
   };

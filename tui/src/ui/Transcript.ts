@@ -42,6 +42,7 @@ function summarizeWorkerStatus(p:any): string {
 }
 
 export function actionableError(message:string): {text:string; actions:string[]} {
+  if (/unable to connect|failed to fetch|ECONNREFUSED|core did not become healthy|SSE failed/i.test(message)) return { text:`Core connection problem: ${message}\n\nThe TUI talks to nexussy core through the local API. Direct \`bun run start\` now tries to start core automatically when NEXUSSY_CORE_URL is not set.`, actions:["Check ./nexussy.sh status", "Start core manually with ./nexussy.sh start", "If using a remote core, set NEXUSSY_CORE_URL", "/setup provider menu"] };
   if (/pi cli|missing pi|no such\/pi|missing Pi CLI/i.test(message)) return { text:"Missing dependency: Pi CLI\n\nnexussy can use its bundled Pi-compatible fallback for local runs, or an external `pi` command for production worker subprocesses.", actions:["/doctor inspect environment", "unset NEXUSSY_DISABLE_BUNDLED_PI to allow bundled fallback", "/new ... start another run"] };
   if (/LiteLLM is not installed/i.test(message)) return { text:"Missing dependency: LiteLLM\n\nThe core Python runtime needs LiteLLM for provider calls.", actions:["./install.sh --non-interactive", "./nexussy.sh doctor", "/new ... retry after install"] };
   return { text:message, actions:["/doctor inspect environment", "/secrets check provider keys", "/new ... start another run"] };
@@ -61,6 +62,7 @@ export function transcriptItemFromEvent(env:EventEnvelope): TranscriptItem | nul
     const stage = p.stage as StageName; const status = String(p.status ?? "running"); const icon = status === "passed" ? "✓" : status === "failed" ? "✗" : "●";
     return { kind:"stage", id:env.event_id, stage, status, text:`${icon} ${title(stage)} ${status}` };
   }
+  if (env.type === "pause_state_changed") return { kind:"stage", id:env.event_id, stage:(p.stage ?? "plan") as StageName, status:p.paused ? "paused" : "running", text:p.paused ? `Ⅱ Pipeline paused - ${p.reason ?? "user"}` : `● Pipeline resumed - ${p.reason ?? "user"}` };
   if (env.type === "content_delta") return { kind:"assistant", id:env.event_id, role:p.role ?? "assistant", text:p.delta ?? "" };
   if (env.type === "tool_call") return { kind:"tool", id:p.call_id ?? env.event_id, title:`${p.tool_name}`, text:JSON.stringify(p.arguments ?? {}), collapsed:true };
   if (env.type === "tool_progress") return { kind:"tool", id:p.call_id ?? env.event_id, title:"tool progress", text:p.message ?? "", collapsed:false };
@@ -91,12 +93,20 @@ export function renderTranscriptItem(item:TranscriptItem): string[] {
   if (item.kind === "worker") return [renderWorkerCard(item)];
   if (item.kind === "artifact") return [renderArtifactLink(item)];
   if (item.kind === "file") return [`  └─ ${item.text}`];
+  if (item.kind === "stage_control") return [`${item.action.toUpperCase()} ${title(item.stage)} - ${item.text}`];
   if (item.kind === "error") return [`✗ ${item.text}`, "", "Next actions:", ...item.actions.map(a => `  ${a}`)];
   if (item.kind === "done") return [item.status === "passed" ? "✓ Done" : `✗ Done (${item.status})`, item.text].filter(Boolean);
   if (item.kind === "meta") return [`  ${item.text}`];
   return [item.text];
 }
 
-export function renderTranscript(items:TranscriptItem[]): string[] {
-  return items.flatMap(item => [...renderTranscriptItem(item), ""]).slice(0, -1);
+export function renderTranscript(items:TranscriptItem[], stage?:StageName): string[] {
+  const filtered = stage ? items.filter(item => itemStage(item) === stage || item.kind === "assistant" || item.kind === "error") : items;
+  return filtered.flatMap(item => [...renderTranscriptItem(item), ""]).slice(0, -1);
+}
+
+function itemStage(item:TranscriptItem): StageName|undefined {
+  if (item.kind === "stage" || item.kind === "stage_control") return item.stage;
+  if (item.kind === "artifact") return item.artifact.kind === "devplan" ? "plan" : undefined;
+  return undefined;
 }

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { applyOpenRouterModel, ensureCoreForSetup, hasConfiguredProviderSecret, normalizeOpenRouterModel, parseNewCommand, projectNameFromDescription, promptProviderSetupIfNeeded, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
+import { applyOpenRouterModel, defaultCoreUrl, ensureCoreForSetup, ensureCoreForTuiLaunch, hasConfiguredProviderSecret, hydrateProviderSecrets, normalizeOpenRouterModel, parseNewCommand, projectNameFromDescription, promptProviderSetupIfNeeded, PROVIDER_SETUPS, selectOpenRouterModel, selectProvider, selectProviderModel, setupOpenRouter, setupWizard, shouldUseOpenTuiRenderer, startCoreProcess, startPipelineFromText, useIsolatedSetupCore } from "../src/index";
+import { createState } from "../src/state";
 
 class Output { text=""; write(s:string){ this.text += s; return true; } }
 
@@ -28,6 +29,20 @@ test("provider picker and model picker are provider-generic", async () => {
   const out = new Output() as any;
   expect((await selectProvider(async () => "openai", out)).secretName).toBe("OPENAI_API_KEY");
   expect(await selectProviderModel(PROVIDER_SETUPS[1], async () => "gpt-4o-mini", out)).toBe("openai/gpt-4o-mini");
+});
+
+test("AgentRouter setup keeps route-shaped model names", async () => {
+  const out = new Output() as any;
+  const provider = await selectProvider(async () => "agentrouter", out);
+  expect(provider.secretName).toBe("AGENTROUTER_API_KEY");
+  expect(await selectProviderModel(provider, async () => "1", out)).toBe("openai/deepseek-v4-flash");
+  expect(await selectProviderModel(provider, async () => "anthropic/claude-sonnet-4", out)).toBe("anthropic/claude-sonnet-4");
+});
+
+test("startup secret hydration marks AgentRouter from core env discovery configured", async () => {
+  const state = await hydrateProviderSecrets({ secrets(){ return [{ name:"AGENT_ROUTER_TOKEN", source:"env", configured:true }]; } } as any, createState());
+  expect(state.modelOptions.some(option => option.provider === "agentrouter" && option.configured)).toBe(true);
+  expect(state.routing.interview.primary?.provider).toBe("agentrouter");
 });
 
 test("guided setup stores key and updates model without outputting secret", async () => {
@@ -59,6 +74,50 @@ test("setup wizard starts local core only when needed", async () => {
   expect(proc).toBeTruthy();
   proc?.kill();
   expect(killed).toBe(true);
+});
+
+test("default core URL follows explicit URL or local port", () => {
+  expect(defaultCoreUrl({})).toBe("http://127.0.0.1:7771");
+  expect(defaultCoreUrl({ NEXUSSY_CORE_PORT:"18888" })).toBe("http://127.0.0.1:18888");
+  expect(defaultCoreUrl({ NEXUSSY_CORE_URL:"http://10.0.0.2:9000", NEXUSSY_CORE_PORT:"18888" })).toBe("http://10.0.0.2:9000");
+});
+
+test("autostarted core receives matching local host and port and visible stderr", () => {
+  const out = new Output() as any;
+  let spawnArgs:any[] = [];
+  const oldPort = process.env.NEXUSSY_CORE_PORT;
+  process.env.NEXUSSY_CORE_PORT = "18888";
+  startCoreProcess(out, ((cmd:any, options:any) => { spawnArgs = [cmd, options]; return { kill(){} }; }) as any);
+  expect(spawnArgs[0]).toEqual(["python3", "-m", "nexussy.api.server"]);
+  expect(spawnArgs[1].env.NEXUSSY_CORE_HOST).toBe("127.0.0.1");
+  expect(spawnArgs[1].env.NEXUSSY_CORE_PORT).toBe("18888");
+  expect(spawnArgs[1].stderr).toBe("inherit");
+  if (oldPort === undefined) delete process.env.NEXUSSY_CORE_PORT; else process.env.NEXUSSY_CORE_PORT = oldPort;
+});
+
+test("normal TUI launch autostarts core only when using default local core", async () => {
+  const oldUrl = process.env.NEXUSSY_CORE_URL;
+  delete process.env.NEXUSSY_CORE_URL;
+  const out = new Output() as any;
+  let healthChecks = 0;
+  let started = false;
+  const client = { async health(){ healthChecks++; if (healthChecks === 1) throw new Error("down"); return { ok:true }; } } as any;
+  const proc = await ensureCoreForTuiLaunch(client, out, () => { started = true; return { kill(){} }; });
+  expect(started).toBe(true);
+  expect(proc).toBeTruthy();
+  process.env.NEXUSSY_CORE_URL = "http://remote.example";
+  expect(await ensureCoreForTuiLaunch({ health(){ throw new Error("should not check"); } } as any, out, () => { throw new Error("should not start"); })).toBeUndefined();
+  if (oldUrl === undefined) delete process.env.NEXUSSY_CORE_URL; else process.env.NEXUSSY_CORE_URL = oldUrl;
+});
+
+test("normal TUI autostart kills owned core if health never becomes ready", async () => {
+  const oldUrl = process.env.NEXUSSY_CORE_URL;
+  delete process.env.NEXUSSY_CORE_URL;
+  let killed = false;
+  const client = { async health(){ throw new Error("down"); } } as any;
+  await expect(ensureCoreForTuiLaunch(client, new Output() as any, () => ({ kill(){ killed = true; } }), async () => { throw new Error("core did not become healthy"); })).rejects.toThrow("core did not become healthy");
+  expect(killed).toBe(true);
+  if (oldUrl === undefined) delete process.env.NEXUSSY_CORE_URL; else process.env.NEXUSSY_CORE_URL = oldUrl;
 });
 
 test("single-terminal setup wizard selects provider, stores key, and stops owned core", async () => {

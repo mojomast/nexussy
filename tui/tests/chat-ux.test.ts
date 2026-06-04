@@ -17,6 +17,7 @@ class MockClient {
   injectWorker(id:string, body:any){ this.calls.push(["injectWorker", id, body]); return {}; }
   pause(run_id:string, reason?:string){ this.calls.push(["pause", run_id, reason]); return {}; }
   resume(run_id:string){ this.calls.push(["resume", run_id]); return {}; }
+  cancel(run_id:string, reason:string){ this.calls.push(["cancel", run_id, reason]); return {}; }
   skip(run_id:string, stage:string, reason:string){ this.calls.push(["skip", run_id, stage, reason]); return {}; }
   spawn(body:any){ this.calls.push(["spawn", body]); return {}; }
   secrets(){ this.calls.push(["secrets"]); return [{ name:"OPENROUTER_API_KEY", source:"config", configured:true }]; }
@@ -29,6 +30,8 @@ test("default render is chat transcript, not dashboard columns", () => {
   const state = createDefaultChatState();
   const out = renderApp(state, 120);
   expect(out).toContain("nexussy  session ready");
+  expect(out).toContain("Discover pending");
+  expect(out).toContain("Profile: default");
   expect(out).toContain("nexussy ›");
   expect(out).toContain("One CLI, two speeds");
   expect(out).toContain("What it can do:");
@@ -36,6 +39,20 @@ test("default render is chat transcript, not dashboard columns", () => {
   expect(out).toContain("● Develop");
   expect(out).not.toContain("Agents (0)");
   expect(out).not.toContain("DevPlan\n(no devplan updates)\nProvider Keys");
+});
+
+test("pipeline strip and pipeline overlay show every stage", async () => {
+  const client = new MockClient() as any;
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  [state] = await handleComposerSubmit(client, state, "/pipeline");
+  const out = renderChat(state, 180);
+  expect(out).toContain("Discover");
+  expect(out).toContain("Design");
+  expect(out).toContain("Validate");
+  expect(out).toContain("Plan");
+  expect(out).toContain("Review");
+  expect(out).toContain("Implement");
+  expect(out).toContain("Focused controls");
 });
 
 test("dashboard and chat modes toggle", async () => {
@@ -135,6 +152,66 @@ test("slash commands route or open overlays", async () => {
   [state] = await handleComposerSubmit(client, state, "/artifacts"); expect(state.overlay).toBe("artifacts"); expect(state.app.artifacts[0].kind).toBe("devplan");
   [state] = await handleComposerSubmit(client, state, "/doctor"); expect(state.overlay).toBe("doctor");
   [state] = await handleComposerSubmit(client, state, "/secrets"); expect(state.overlay).toBe("secrets");
+});
+
+test("stage pause resume cancel and chat are structured", async () => {
+  const client = new MockClient() as any;
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", stages:{ ...createDefaultChatState().app.stages, plan:"running" } } };
+  [state] = await handleComposerSubmit(client, state, "/pause plan waiting for product input");
+  expect(client.calls.at(-1)).toEqual(["pause", "run-1", "waiting for product input"]);
+  expect(state.app.stages.plan).toBe("paused");
+  expect(renderChat(state)).toContain("PAUSE Plan - waiting for product input");
+  [state] = await handleComposerSubmit(client, state, "/resume plan continue with defaults");
+  expect(client.calls.at(-1)).toEqual(["resume", "run-1"]);
+  expect(state.app.stages.plan).toBe("running");
+  [state] = await handleComposerSubmit(client, state, "/stage-chat plan");
+  expect(state.stageChat?.stage).toBe("plan");
+  expect(renderChat(state)).toContain("plan ›");
+  [state] = await handleComposerSubmit(client, state, "prefer a smaller task split");
+  expect(client.calls.at(-1)).toEqual(["inject", { run_id:"run-1", message:"prefer a smaller task split", stage:"plan" }]);
+  [state] = await handleComposerSubmit(client, state, "/chat");
+  expect(state.stageChat).toBeUndefined();
+  [state] = await handleComposerSubmit(client, state, "/cancel plan stop now");
+  expect(client.calls.at(-1)).toEqual(["cancel", "run-1", "stop now"]);
+});
+
+test("model routing overlay uses configured providers and profile switch", async () => {
+  const client = new MockClient() as any;
+  let state = createDefaultChatState();
+  [state] = await handleComposerSubmit(client, state, "/models");
+  expect(state.overlay).toBe("models");
+  const models = renderChat(state, 180);
+  expect(models).toContain("Model Routing");
+  expect(models).toContain("openrouter");
+  expect(models).not.toContain("sk-");
+  [state] = await handleComposerSubmit(client, state, "/profile fast");
+  expect(state.app.routingProfile).toBe("fast");
+  expect(renderChat(state)).toContain("Profile: fast");
+});
+
+test("setup overlay offers provider menu without accepting visible secrets", async () => {
+  const client = new MockClient() as any;
+  let state = createDefaultChatState();
+  [state] = await handleComposerSubmit(client, state, "/setup");
+  const menu = renderChat(state, 180);
+  expect(state.overlay).toBe("setup");
+  expect(menu).toContain("Provider Setup");
+  expect(menu).toContain("AgentRouter");
+  expect(menu).toContain("The visible TUI composer never accepts API keys");
+  [state] = await handleComposerSubmit(client, state, "/setup agentrouter");
+  expect(renderChat(state, 180)).toContain("Provider setup for agentrouter");
+  expect(renderChat(state, 180)).not.toContain("sk-");
+});
+
+test("workers overlay supports status and stage filters", async () => {
+  const client = new MockClient() as any;
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  [state] = await handleComposerSubmit(client, state, "/workers busy develop");
+  expect(state.overlay).toBe("workers");
+  expect(state.workerFilter).toBe("busy");
+  expect(state.selectedStage).toBe("develop");
+  expect(renderChat(state)).toContain("filter: busy stage:develop");
+  expect(renderChat(state)).toContain("backend-abc123");
 });
 
 test("heartbeat does not render and stage/tool/worker events become transcript rows", () => {

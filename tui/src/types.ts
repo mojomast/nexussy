@@ -1,5 +1,6 @@
 export type StageName = "interview"|"design"|"validate"|"plan"|"review"|"develop";
 export type StageRunStatus = "pending"|"running"|"passed"|"failed"|"skipped"|"blocked"|"paused"|"retrying";
+export type RoutingProfileName = "default"|"fast"|"cheap"|"strict";
 export type RunStatus = "created"|"running"|"paused"|"passed"|"failed"|"cancelled"|"blocked";
 export type WorkerRole = "orchestrator"|"backend"|"frontend"|"qa"|"devops"|"writer"|"analyst";
 export type WorkerStatus = "starting"|"idle"|"assigned"|"running"|"paused"|"blocked"|"finished"|"failed"|"stopped";
@@ -13,6 +14,9 @@ export type SSEEventType = "heartbeat"|"run_started"|"content_delta"|"tool_call"
 export const EVENT_TYPES: readonly SSEEventType[] = ["heartbeat","run_started","content_delta","tool_call","tool_output","tool_progress","stage_transition","stage_status","checkpoint_saved","artifact_updated","worker_spawned","worker_status","worker_task","worker_stream","file_claimed","file_released","file_lock_waiting","git_event","blocker_created","blocker_resolved","cost_update","pause_state_changed","pipeline_error","done"] as const;
 export type JsonValue = null|boolean|number|string|JsonValue[]|{[k:string]:JsonValue};
 export interface TokenUsage { input_tokens:number; output_tokens:number; cache_read_tokens?:number; cache_write_tokens?:number; total_tokens:number; cost_usd:number; provider?:string|null; model?:string|null; }
+export interface ModelOption { provider:string; model:string; label:string; configured:boolean; disabledReason?:string; agent?:string|null; }
+export interface StageRouting { stage:StageName; primary?:ModelOption; fallback?:ModelOption; profile:RoutingProfileName; notes?:string; workerGroup?:string; }
+export type RoutingTable = Record<StageName, StageRouting>;
 export interface ErrorResponse { ok:false; error_code:ErrorCode; message:string; details?:Record<string,JsonValue>; request_id:string; retryable:boolean; }
 export interface ArtifactRef { kind:ArtifactKind; path:string; sha256:string; bytes:number; updated_at:string; phase_number?:number|null; }
 export interface ToolDisplay { kind:"text"|"json"|"diff"|"table"|"tree"|"markdown"; title?:string|null; text?:string|null; language?:string|null; json?:JsonValue; truncated:boolean; }
