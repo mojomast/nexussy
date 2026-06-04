@@ -1,4 +1,5 @@
 import type { ChatUiState } from "./types";
+import { modelLabel } from "../lib/routing";
 
 export function composerPrompt(state: ChatUiState): string {
   if (state.stageChat) return `${state.stageChat.stage} › `;
@@ -8,9 +9,10 @@ export function composerPrompt(state: ChatUiState): string {
 }
 
 export function renderStatusStrip(state: ChatUiState): string {
-  const model = state.app.usage.model ?? "configured model";
   const run = state.app.runId ? `run: ${state.app.runId.slice(0, 8)}` : "session ready";
   const activeStage = Object.entries(state.app.stages).find(([, status]) => status === "running" || status === "paused")?.[0] ?? "idle";
+  const routedModel = activeStage === "idle" ? undefined : modelLabel(state.app.routing[activeStage as keyof typeof state.app.routing]?.primary);
+  const model = state.app.usage.model ?? routedModel ?? "configured model";
   const cost = `$${state.app.usage.cost_usd.toFixed(4)}`;
   const budget = state.app.contextBudget;
   const pct = Math.round(budget.fillRatio * 100);

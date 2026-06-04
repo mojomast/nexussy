@@ -9,6 +9,7 @@ from nexussy.config import load_config
 from nexussy.db import Database
 from nexussy.pipeline.engine import Engine
 from nexussy.providers import ProviderResult
+from nexussy.pipeline.helpers import parse_interview_questions
 
 
 QUESTIONS = [
@@ -32,7 +33,7 @@ def fake_complete_factory(prompts):
     async def fake_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
         prompts.append((stage, prompt))
         usage={"input_tokens":1,"output_tokens":1,"cost_usd":0.0,"provider":"mock","model":model}
-        if "Generate a JSON array" in prompt:
+        if "Generate a dynamic JSON array" in prompt:
             return ProviderResult(json.dumps(QUESTIONS), usage)
         if "Answer these interview questions" in prompt:
             return ProviderResult(json.dumps({
@@ -73,6 +74,21 @@ async def test_interview_questions_generated(tmp_path, monkeypatch):
     assert len(artifact["questions"]) >= 4
     assert all(q["question"] and q["question"] != "Use defaults?" for q in artifact["questions"])
     assert {q["source"] for q in artifact["questions"]} == {"auto"}
+
+
+def test_interview_question_parser_accepts_fenced_dynamic_json():
+    text = """```json
+    [
+      {"id":"goal","question":"What should the first useful proof of concept do?","suggested_answer":"Start with a local smoke-testable chatbot.","evidence":["README mentions local CLI"]},
+      {"id":"users","question":"Who tries it first?"},
+      {"id":"stack","question":"Should nexussy recommend a stack?"},
+      {"id":"quality","question":"What check proves it works?"}
+    ]
+    ```"""
+    questions = parse_interview_questions(text)
+    assert [q.question_id for q in questions[:2]] == ["goal", "users"]
+    assert questions[0].suggested_answer == "Start with a local smoke-testable chatbot."
+    assert questions[0].evidence == ["README mentions local CLI"]
 
 
 @pytest.mark.asyncio
@@ -155,7 +171,7 @@ async def test_interview_provider_retry_and_question_checkpoint(tmp_path, monkey
     await reset_core(tmp_path, monkeypatch)
     attempts={"questions":0}
     async def flaky_complete(stage, prompt, model, *, allow_mock=False, timeout_s=120, _env=None, db=None):
-        if "Generate a JSON array" in prompt:
+        if "Generate a dynamic JSON array" in prompt:
             attempts["questions"] += 1
             if attempts["questions"] == 1:
                 raise RuntimeError("transient provider failure")

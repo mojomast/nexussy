@@ -1,13 +1,14 @@
 import { parseNewCommand, projectNameFromDescription } from "../index";
 import { renderPanels } from "../renderer";
-import { addStageControlNote, reduceArtifactsSnapshot, reduceRoutingProfile, reduceSecrets, reduceStatusSnapshot, reduceWorkersSnapshot, triggerHandoff } from "../state";
+import { STAGES, addStageControlNote, reduceArtifactsSnapshot, reduceRoutingProfile, reduceSecrets, reduceStageRoutingModel, reduceStatusSnapshot, reduceWorkersSnapshot, triggerHandoff } from "../state";
+import { findModelOption } from "../lib/routing";
 import { WORKER_ID_PATTERN } from "../commands";
-import type { RoutingProfileName, StageName, WorkerRole } from "../types";
+import type { PipelineStartRequest, RoutingProfileName, StageName, WorkerRole } from "../types";
 import { closeOverlay } from "./Overlay";
 import type { ChatUiState, ClientLike, CommandOutcome } from "./types";
 
 const greetingPattern = /^(hi|hello|hey|yo|sup|howdy|hiya|what'?s\s+up|whatsg\s+up|what'?s?\s*good)[!.\s]*$/i;
-const stages = new Set(["interview","design","validate","plan","review","develop"]);
+const stages = new Set<string>(STAGES);
 const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
 const profiles = new Set(["default","fast","cheap","strict"]);
 const workerFilters = new Set(["all","idle","busy","failed"]);
@@ -53,8 +54,27 @@ export async function startNewRun(client:ClientLike, state:ChatUiState, descript
   const parsed = parseNewCommand(trimmed);
   if (!parsed.description) throw new Error("description required");
   const metadata = parsed.designContextPack && parsed.designContextPack !== "none" ? { design_context_pack:parsed.designContextPack } : undefined;
-  const started = await client.startPipeline({ project_name:projectNameFromDescription(parsed.description), description:parsed.description, auto_approve_interview:true, ...(metadata ? { metadata } : {}) });
+  const model_overrides = selectedModelOverrides(state);
+  const request: PipelineStartRequest = { project_name:projectNameFromDescription(parsed.description), description:parsed.description, auto_approve_interview:Boolean(parsed.autoInterview), ...(metadata ? { metadata } : {}), ...(Object.keys(model_overrides).length ? { model_overrides } : {}) };
+  const started = await client.startPipeline(request);
   return [{ ...state, pendingAction:undefined, app:{ ...state.app, runId:started.run_id, sessionId:started.session_id, finalStatus:undefined }, statusMessage:`started ${started.run_id.slice(0,8)}` }, { message:`started run ${started.run_id}`, stream:true }];
+}
+
+export function selectedModelOverrides(state:ChatUiState): Partial<Record<StageName,string>> {
+  return Object.fromEntries(Object.values(state.app.routing).filter(route => route.primary?.configured && route.primary.model && (route.primary.provider === "agentrouter" || route.explicit)).map(route => [route.stage, route.primary!.model])) as Partial<Record<StageName,string>>;
+}
+
+export function pendingInterviewFromArtifact(response:unknown): ChatUiState["pendingInterview"] {
+  const content = typeof response === "string" ? response : response && typeof response === "object" ? String((response as any).content_text ?? (response as any).content ?? "") : "";
+  if (!content.trim()) return undefined;
+  let parsed:unknown;
+  try { parsed = JSON.parse(content); } catch { return undefined; }
+  const questions = Array.isArray((parsed as any)?.questions) ? (parsed as any).questions.map((q:any, index:number) => ({ question_id:String(q.question_id ?? q.id ?? `q${index + 1}`), question:String(q.question ?? q.text ?? ""), suggested_answer:typeof q.suggested_answer === "string" ? q.suggested_answer : undefined })).filter((q:{question_id:string; question:string}) => q.question) : [];
+  return questions.length ? { questions, answers:{}, index:0 } : undefined;
+}
+
+export function formatInterviewQuestion(question:{question:string; suggested_answer?:string|null}, index:number, total:number): string {
+  return `Interview question ${index + 1}/${total}: ${question.question}${question.suggested_answer ? `\nSuggested default: ${question.suggested_answer}` : ""}`;
 }
 
 export async function handleComposerSubmit(client:ClientLike, state:ChatUiState, input:string): Promise<[ChatUiState, CommandOutcome]> {
@@ -63,6 +83,7 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   const withHistory = { ...state, composer:{ ...state.composer, history:[...state.composer.history, line], historyIndex:-1 } };
   const bucket = classifyInteraction(line, withHistory);
   if (bucket !== "command") {
+    if (withHistory.pendingInterview && withHistory.app.sessionId) return answerPendingInterview(client, withHistory, line);
     if (withHistory.stageChat) {
       if (!withHistory.app.runId) throw new Error("run_id is required for stage chat");
       await client.inject({ run_id:withHistory.app.runId, message:line, stage:withHistory.stageChat.stage });
@@ -90,6 +111,15 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
   if (cmd === "/chat") return [{ ...withHistory, mode:"chat", overlay:"none", stageChat:undefined, transcriptFilter:undefined }, { message:"chat" }];
   if (cmd === "/pipeline") return hydrateStatusOverlay(client, { ...withHistory, selectedStage:activeStage(withHistory) ?? "plan" }, "pipeline");
   if (cmd === "/models" || cmd === "/routing") { const secrets = await client.secrets() as any; return [{ ...withHistory, app:reduceSecrets(withHistory.app, secrets), overlay:"models" }, { message:"model routing" }]; }
+  if (cmd === "/model" || cmd === "/fallback") {
+    const stage = rest.shift() as StageName|undefined;
+    const model = rest.join(" ").trim();
+    if (!stage || !isStage(stage) || !model) throw new Error(`usage: ${cmd} <stage> <provider/model>`);
+    const option = findModelOption(withHistory.app.modelOptions, model);
+    if (!option) throw new Error(`model is not available from configured providers: ${model}`);
+    const app = reduceStageRoutingModel(withHistory.app, stage, option, cmd === "/model" ? "primary" : "fallback");
+    return [{ ...withHistory, app, overlay:"models", statusMessage:`${cmd.slice(1)} ${stage} ${option.model}` }, { message:`${cmd.slice(1)} ${stage}` }];
+  }
   if (cmd === "/profile") {
     const profile = rest[0] as RoutingProfileName|undefined;
     if (!profile) return [{ ...withHistory, overlay:"profile" }, { message:"profile" }];
@@ -120,19 +150,42 @@ export async function handleComposerSubmit(client:ClientLike, state:ChatUiState,
     if (!withHistory.app.runId) throw new Error("run_id is required for /events");
     return dataOverlay(withHistory, "Events", await requireClientMethod(client.events, "/events").call(client, withHistory.app.runId, 0, 50), "events loaded");
   }
+  if (cmd === "/interview-answer") {
+    if (!withHistory.app.sessionId) throw new Error("session_id is required for /interview-answer");
+    const answers = parseInterviewAnswers(rest);
+    if (!Object.keys(answers).length) throw new Error("usage: /interview-answer question_id=answer ...");
+    await requireClientMethod(client.interviewAnswer, "/interview-answer").call(client, withHistory.app.sessionId, answers);
+    const app = withHistory.app.runId ? await hydrateRunStatus(client, withHistory.app) : withHistory.app;
+    return [{ ...withHistory, app, pendingInterview:undefined, statusMessage:"interview answers submitted", transcript:[...withHistory.transcript, { kind:"stage_control", id:`interview-answer-${Date.now()}`, stage:"interview", action:"chat", text:"Submitted interview answers" }] }, { message:"interview answers submitted", stream:Boolean(withHistory.app.runId) }];
+  }
   if (cmd === "/export") return [withHistory, { message:"exported displayed session data", html:renderPanels(withHistory.app).html }];
   if (!withHistory.app.runId) throw new Error("start a run first with plain text or /new DESCRIPTION");
-  if (cmd === "/pause") { const { stage, text } = parseStageScoped(rest, "user"); await client.pause(withHistory.app.runId, text); const app = addStageControlNote({ ...withHistory.app, paused:true, stages:{ ...withHistory.app.stages, ...(stage ? { [stage]:"paused" as const } : {}) } }, { stage:stage ?? activeStage(withHistory) ?? "plan", action:"pause", reason:text }); return [{ ...withHistory, app, transcript:[...withHistory.transcript, { kind:"stage_control", id:`pause-${Date.now()}`, stage:stage ?? activeStage(withHistory) ?? "plan", action:"pause", text }], statusMessage:`paused${stage ? ` ${stage}` : ""}` }, { message:"paused" }]; }
-  if (cmd === "/resume-run" || cmd === "/resume") { const { stage, text } = parseStageScoped(rest, "resumed"); await client.resume(withHistory.app.runId); const app = addStageControlNote({ ...withHistory.app, paused:false, stages:{ ...withHistory.app.stages, ...(stage ? { [stage]:"running" as const } : {}) } }, { stage:stage ?? activeStage(withHistory) ?? "plan", action:"resume", reason:text }); return [{ ...withHistory, app, transcript:[...withHistory.transcript, { kind:"stage_control", id:`resume-${Date.now()}`, stage:stage ?? activeStage(withHistory) ?? "plan", action:"resume", text }], statusMessage:`resumed${stage ? ` ${stage}` : ""}` }, { message:"resumed" }]; }
-  if (cmd === "/cancel") { const { stage, text } = parseStageScoped(rest, "user"); await requireClientMethod(client.cancel, "/cancel").call(client, withHistory.app.runId, text); const app = addStageControlNote({ ...withHistory.app, finalStatus:"cancelled", stages:{ ...withHistory.app.stages, ...(stage ? { [stage]:"failed" as const } : {}) } }, { stage:stage ?? activeStage(withHistory) ?? "plan", action:"cancel", reason:text }); return [{ ...withHistory, app, transcript:[...withHistory.transcript, { kind:"stage_control", id:`cancel-${Date.now()}`, stage:stage ?? activeStage(withHistory) ?? "plan", action:"cancel", text }], statusMessage:"cancelled" }, { message:`cancelled: ${text}` }]; }
-  if (cmd === "/stage-chat") { const stage = rest[0] as StageName; if (!stages.has(stage)) throw new Error("usage: /stage-chat <stage>"); return [{ ...withHistory, overlay:"stage-chat", stageChat:{ stage }, selectedStage:stage, transcriptFilter:{ stage }, transcript:[...withHistory.transcript, { kind:"stage_control", id:`stage-chat-open-${Date.now()}`, stage, action:"chat", text:`Opened stage chat for ${stage}` }] }, { message:`stage chat ${stage}` }]; }
-  if (cmd === "/stage") { const stage = rest[0] as StageName; if (!stages.has(stage)) throw new Error("invalid stage"); return [{ ...withHistory, overlay:"stages", selectedStage:stage, statusMessage:`viewing ${stage}` }, { message:`viewing ${stage}; use /skip ${stage} <reason> to mutate the run` }]; }
-  if (cmd === "/skip") { const stage = rest.shift() as StageName; const reason = rest.join(" "); if (!stage || !reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(withHistory.app.runId, stage, reason); return [{ ...withHistory, statusMessage:`skipped ${stage}` }, { message:`skipped ${stage}` }]; }
+  if (cmd === "/pause") return stageControl(client, withHistory, rest, "pause");
+  if (cmd === "/resume-run" || cmd === "/resume") return stageControl(client, withHistory, rest, "resume");
+  if (cmd === "/cancel") return stageControl(client, withHistory, rest, "cancel");
+  if (cmd === "/stage-chat") { const stage = stageFromArg(rest[0]); if (!stage) throw new Error("usage: /stage-chat <stage>"); return [{ ...withHistory, overlay:"stage-chat", stageChat:{ stage }, selectedStage:stage, transcriptFilter:{ stage }, transcript:[...withHistory.transcript, { kind:"stage_control", id:`stage-chat-open-${Date.now()}`, stage, action:"chat", text:`Opened stage chat for ${stage}` }] }, { message:`stage chat ${stage}` }]; }
+  if (cmd === "/stage") { const stage = stageFromArg(rest[0]); if (!stage) throw new Error("invalid stage"); return [{ ...withHistory, overlay:"stages", selectedStage:stage, statusMessage:`viewing ${stage}` }, { message:`viewing ${stage}; use /skip ${stage} <reason> to mutate the run` }]; }
+  if (cmd === "/skip") { const stage = stageFromArg(rest.shift()); const reason = rest.join(" "); if (!stage || !reason) throw new Error("usage: /skip <stage> <reason>"); await client.skip(withHistory.app.runId, stage, reason); return [{ ...withHistory, statusMessage:`skipped ${stage}` }, { message:`skipped ${stage}` }]; }
   if (cmd === "/spawn") { const role = rest.shift() as WorkerRole; if (!role || !roles.has(role)) throw new Error("invalid role"); const task = rest.join(" "); if (!task) throw new Error("task required"); await client.spawn({ run_id:withHistory.app.runId, role, task }); return [{ ...withHistory, statusMessage:"spawned" }, { message:"spawned" }]; }
   if (cmd === "/inject") { const maybe = rest[0]; const workerId = maybe && WORKER_ID_PATTERN.test(maybe) ? rest.shift() : undefined; const message = rest.join(" "); if (!message) throw new Error("message required"); if (workerId) await client.injectWorker(workerId, { run_id:withHistory.app.runId, worker_id:workerId, message }); else await client.inject({ run_id:withHistory.app.runId, message }); return [{ ...withHistory, statusMessage:"injected" }, { message:"injected" }]; }
   if (cmd === "/steer") return handleSteerCommand(client, withHistory, rest);
   if (cmd === "/escape") return [closeOverlay(withHistory), { message:"overlay closed" }];
   throw new Error(`unknown command ${cmd}`);
+}
+
+async function answerPendingInterview(client:ClientLike, state:ChatUiState, text:string): Promise<[ChatUiState, CommandOutcome]> {
+  const pending = state.pendingInterview!;
+  const question = pending.questions[pending.index];
+  if (!question) return [{ ...state, pendingInterview:undefined }, { message:"interview cleared" }];
+  const answers = { ...pending.answers, [question.question_id]:text };
+  const nextIndex = pending.index + 1;
+  if (nextIndex < pending.questions.length) {
+    const next = pending.questions[nextIndex];
+    return [{ ...state, pendingInterview:{ ...pending, answers, index:nextIndex }, transcript:[...state.transcript, { kind:"stage_control", id:`interview-answer-${Date.now()}`, stage:"interview", action:"chat", text:`Answer saved for ${question.question_id}` }, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(next, nextIndex, pending.questions.length) }], statusMessage:`interview ${nextIndex + 1}/${pending.questions.length}` }, { message:"interview answer saved" }];
+  }
+  await requireClientMethod(client.interviewAnswer, "/interview-answer").call(client, state.app.sessionId!, answers);
+  const app = state.app.runId ? await hydrateRunStatus(client, state.app) : state.app;
+  return [{ ...state, app, pendingInterview:undefined, transcript:[...state.transcript, { kind:"stage_control", id:`interview-submit-${Date.now()}`, stage:"interview", action:"chat", text:"Submitted interview answers" }], statusMessage:"interview answers submitted" }, { message:"interview answers submitted", stream:Boolean(state.app.runId) }];
 }
 
 function requireClientMethod<T extends (...args:any[]) => unknown>(method:T|undefined, command:string): T {
@@ -205,10 +258,45 @@ async function hydrateArtifactsOverlay(client:ClientLike, state:ChatUiState): Pr
 }
 
 function parseStageScoped(args:string[], fallback:string): { stage?:StageName; text:string } {
-  const stage = stages.has(args[0]) ? args.shift() as StageName : undefined;
+  const stage = stageFromArg(args[0]);
+  if (stage) args.shift();
   return { stage, text:args.join(" ").trim() || fallback };
 }
 
 function activeStage(state:ChatUiState): StageName|undefined {
   return Object.entries(state.app.stages).find(([, status]) => status === "running" || status === "paused")?.[0] as StageName|undefined;
+}
+
+function selectedOrActiveStage(state:ChatUiState): StageName { return state.selectedStage ?? activeStage(state) ?? "plan"; }
+function isStage(value:string|undefined): value is StageName { return Boolean(value && stages.has(value)); }
+function stageFromArg(value:string|undefined): StageName|undefined { return isStage(value) ? value : undefined; }
+
+async function stageControl(client:ClientLike, state:ChatUiState, args:string[], action:"pause"|"resume"|"cancel"): Promise<[ChatUiState, CommandOutcome]> {
+  const { stage, text } = parseStageScoped(args, action === "resume" ? "resumed" : "user");
+  const targetStage = stage ?? selectedOrActiveStage(state);
+  if (action === "pause") await client.pause(state.app.runId!, text);
+  else if (action === "resume") await client.resume(state.app.runId!);
+  else await requireClientMethod(client.cancel, "/cancel").call(client, state.app.runId!, text);
+  let app = addStageControlNote(state.app, { stage:targetStage, action, reason:text });
+  try { app = await hydrateRunStatus(client, app); } catch {}
+  return [{ ...state, app, selectedStage:targetStage, transcript:[...state.transcript, { kind:"stage_control", id:`${action}-${Date.now()}`, stage:targetStage, action, text }], statusMessage:`${action} ${targetStage}` }, { message:action === "cancel" ? `cancelled: ${text}` : action === "resume" ? "resumed" : "paused" }];
+}
+
+function parseInterviewAnswers(args:string[]): Record<string,string> {
+  const answers:Record<string,string> = {};
+  let current:string|undefined;
+  for (const token of args) {
+    const index = token.indexOf("=");
+    if (index > 0) {
+      const key = token.slice(0, index).trim();
+      const value = token.slice(index + 1).trim();
+      if (key) {
+        current = key;
+        answers[current] = value;
+      }
+      continue;
+    }
+    if (current) answers[current] = `${answers[current]} ${token}`.trim();
+  }
+  return answers;
 }

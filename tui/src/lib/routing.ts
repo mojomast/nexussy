@@ -42,6 +42,16 @@ export function stageRouting(stage:StageName, primary:ModelOption|undefined, fal
   };
 }
 
+export function setStageRoutingModel(table:RoutingTable, stage:StageName, option:ModelOption, slot:"primary"|"fallback"): RoutingTable {
+  const current = table[stage];
+  return { ...table, [stage]:{ ...current, stage, [slot]:option, explicit:true, notes:option.configured ? current?.notes : option.disabledReason } };
+}
+
+export function findModelOption(options:ModelOption[], value:string): ModelOption|undefined {
+  const needle = value.trim().toLowerCase();
+  return options.find(option => option.model.toLowerCase() === needle || `${option.provider}/${option.model}`.toLowerCase() === needle || option.label.toLowerCase() === needle);
+}
+
 export function switchRoutingProfile(table:RoutingTable, profile:RoutingProfileName): RoutingTable {
   return Object.fromEntries(Object.entries(table).map(([stage, route]) => [stage, { ...route, profile }])) as RoutingTable;
 }

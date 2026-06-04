@@ -3,6 +3,7 @@ import { CONTRACT_EVENT_FIXTURES, FIXTURE_RUN_ID } from "./fixtures";
 import { createState, reduceConnectionError, reduceEvent, reduceSecrets, reduceStatusSnapshot, type TuiState } from "./state";
 import { loadOptionalPiRuntime, renderPanels } from "./renderer";
 import { createInterface } from "node:readline/promises";
+import { existsSync } from "node:fs";
 import { runSlash } from "./commands";
 import { runPiTui } from "./pi-app";
 import { runOpenTui } from "./opentui-app";
@@ -104,7 +105,7 @@ export function applyProviderModel(config:any, model:string): any {
   const next = structuredClone(config);
   next.providers = { ...(next.providers ?? {}), default_model:model };
   next.stages = { ...(next.stages ?? {}) };
-  for (const stage of ["interview", "design", "validate", "plan", "review"])
+  for (const stage of ["interview", "design", "validate", "plan", "review", "validate_browser"])
     next.stages[stage] = { ...(next.stages[stage] ?? {}), model };
   next.stages.develop = { ...(next.stages.develop ?? {}), model, orchestrator_model:model };
   return next;
@@ -167,7 +168,10 @@ export async function waitForCore(client:CoreClient, attempts=30, delayMs=250): 
 export function startCoreProcess(output:NodeJS.WriteStream=process.stdout, spawnImpl:typeof Bun.spawn=Bun.spawn): CoreProcess {
   const root = new URL("../../", import.meta.url).pathname;
   output.write("Core is not running; starting local core...\n");
-  return spawnImpl(["python3", "-m", "nexussy.api.server"], { cwd:root, stdout:"ignore", stderr:"inherit", env:{ ...process.env, NEXUSSY_CORE_HOST:process.env.NEXUSSY_CORE_HOST ?? "127.0.0.1", NEXUSSY_CORE_PORT:process.env.NEXUSSY_CORE_PORT ?? "7771", NEXUSSY_KEYRING_TIMEOUT_S:process.env.NEXUSSY_KEYRING_TIMEOUT_S ?? "0.5", PYTHONPATH:`${root}/core${process.env.PYTHONPATH ? `:${process.env.PYTHONPATH}` : ""}` } });
+  const repoEnv = `${root}/.env`;
+  const env = { ...process.env, NEXUSSY_CORE_HOST:process.env.NEXUSSY_CORE_HOST ?? "127.0.0.1", NEXUSSY_CORE_PORT:process.env.NEXUSSY_CORE_PORT ?? "7771", NEXUSSY_KEYRING_TIMEOUT_S:process.env.NEXUSSY_KEYRING_TIMEOUT_S ?? "0.5", PYTHONPATH:`${root}/core${process.env.PYTHONPATH ? `:${process.env.PYTHONPATH}` : ""}` } as Record<string,string>;
+  if (!env.NEXUSSY_ENV_FILE && existsSync(repoEnv)) env.NEXUSSY_ENV_FILE = repoEnv;
+  return spawnImpl(["python3", "-m", "nexussy.api.server"], { cwd:root, stdout:"ignore", stderr:"ignore", env });
 }
 
 export function defaultCoreUrl(env:{ NEXUSSY_CORE_URL?:string; NEXUSSY_CORE_PORT?:string }=process.env as any): string {
@@ -243,9 +247,10 @@ export function projectNameFromDescription(description:string): string {
 export type DesignContextPackSelection = "none"|"stripe"|"linear"|"minimal";
 export const DESIGN_CONTEXT_PACKS: DesignContextPackSelection[] = ["none", "stripe", "linear", "minimal"];
 
-export function parseNewCommand(input:string): { description:string; designContextPack?:DesignContextPackSelection } {
+export function parseNewCommand(input:string): { description:string; designContextPack?:DesignContextPackSelection; autoInterview?:boolean } {
   const tokens = input.trim().split(/\s+/).filter(Boolean);
   let designContextPack:DesignContextPackSelection|undefined;
+  let autoInterview = false;
   const description:string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -255,16 +260,20 @@ export function parseNewCommand(input:string): { description:string; designConte
       designContextPack = value;
       continue;
     }
+    if (token === "--auto-interview" || token === "--skip-interview") {
+      autoInterview = true;
+      continue;
+    }
     description.push(token);
   }
-  return { description:description.join(" "), designContextPack };
+  return { description:description.join(" "), designContextPack, ...(autoInterview ? { autoInterview } : {}) };
 }
 
-export async function startPipelineFromText(client:CoreClient, description:string, designContextPack?:DesignContextPackSelection): Promise<{runId:string; sessionId:string}> {
+export async function startPipelineFromText(client:CoreClient, description:string, designContextPack?:DesignContextPackSelection, autoInterview=false): Promise<{runId:string; sessionId:string}> {
   const trimmed = description.trim();
   if (!trimmed) throw new Error("describe what you want nexussy to build");
   const metadata = designContextPack && designContextPack !== "none" ? { design_context_pack:designContextPack } : undefined;
-  const started = await client.startPipeline({ project_name:projectNameFromDescription(trimmed), description:trimmed, auto_approve_interview:true, ...(metadata ? { metadata } : {}) });
+  const started = await client.startPipeline({ project_name:projectNameFromDescription(trimmed), description:trimmed, auto_approve_interview:autoInterview, ...(metadata ? { metadata } : {}) });
   return { runId:started.run_id, sessionId:started.session_id };
 }
 
@@ -297,8 +306,8 @@ export async function interactiveShell(client:CoreClient, state=createState(), i
       if (line === "/quit" || line === "/exit") return;
       try {
         if (line.startsWith("/new ")) {
-          const { description, designContextPack } = parseNewCommand(line.slice(5));
-          const started = await startPipelineFromText(client, description, designContextPack);
+          const { description, designContextPack, autoInterview } = parseNewCommand(line.slice(5));
+          const started = await startPipelineFromText(client, description, designContextPack, Boolean(autoInterview));
           current = { ...current, runId:started.runId, sessionId:started.sessionId };
           output.write(`started run ${started.runId}\n`);
           current = await streamRunToPanels(client, current, output);

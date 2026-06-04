@@ -8,8 +8,8 @@ import {
   createCliRenderer,
 } from "@opentui/core";
 import type { CoreClient } from "./client";
-import { createState } from "./state";
-import { handleComposerSubmit } from "./ui/Composer";
+import { STAGES, createState } from "./state";
+import { formatInterviewQuestion, handleComposerSubmit, pendingInterviewFromArtifact } from "./ui/Composer";
 import { renderOnboarding } from "./ui/Onboarding";
 import { closeOverlay } from "./ui/Overlay";
 import { renderStatusStrip } from "./ui/StatusStrip";
@@ -20,12 +20,13 @@ import type { ChatUiState, TranscriptItem } from "./ui/types";
 const WIDE_LAYOUT_MIN_WIDTH = 112;
 
 function clampLine(line:string, width:number): string {
-  return line.length > width ? `${line.slice(0, Math.max(0, width - 1))}…` : line;
+  const clean = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  return clean.length > width ? `${clean.slice(0, Math.max(0, width - 1))}…` : clean;
 }
 
 function isMainTranscriptItem(item:TranscriptItem): boolean {
   if (item.kind === "assistant" || item.kind === "run_started" || item.kind === "done" || item.kind === "error") return true;
-  if (item.kind === "stage") return item.status === "passed" || item.status === "failed" || item.status === "cancelled";
+  if (item.kind === "stage") return item.status === "passed" || item.status === "failed" || item.status === "cancelled" || item.status === "paused";
   if (item.kind === "stage_control") return true;
   if (item.kind === "worker") return /failed|blocked|conflict/i.test(item.text);
   return false;
@@ -34,7 +35,7 @@ function isMainTranscriptItem(item:TranscriptItem): boolean {
 function renderTranscriptText(state:ChatUiState): string {
   const visibleItems = state.transcript.filter(item => (!state.stageChat || item.kind === "stage_control" || item.kind === "assistant" || item.kind === "error") && isMainTranscriptItem(item));
   const lines = visibleItems.length ? visibleItems.flatMap(item => [...renderTranscriptItem(item), ""]).slice(0, -1) : renderOnboarding();
-  return lines.join("\n");
+  return lines.slice(-80).join("\n");
 }
 
 function renderSidePanel(state:ChatUiState, width:number): string {
@@ -54,8 +55,8 @@ function renderSidePanel(state:ChatUiState, width:number): string {
     ...(workers.length ? workers : ["none"]),
     "",
     "Options",
-    state.app.runId ? "pipeline active" : "ask mode",
-    "plain text asks",
+    state.pendingInterview ? "interview: answer prompt" : state.app.runId ? "pipeline active" : "ask mode",
+    state.pendingInterview ? "plain text answers" : "plain text asks",
     "build request -> confirm",
     "./nexussy.sh cli --setup",
     "/help commands",
@@ -247,7 +248,7 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
     input.width = Math.max(20, renderer.terminalWidth - 6);
     header.content = `nexussy  ${state.app.runId ? `run ${state.app.runId.slice(0, 8)}` : "session ready"}  model: ${state.app.usage.model ?? "configured"}`;
     transcript.content = renderTranscriptText(state);
-    status.content = renderStatusStrip(state);
+    status.content = clampLine(renderStatusStrip(state), renderer.terminalWidth - 2);
     sidePanel.content = renderSidePanel(state, 30);
     transcriptScroll.scrollTo({ x:0, y:transcriptScroll.scrollHeight });
     renderer.requestRender();
@@ -256,8 +257,19 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
   async function streamCurrentRun() {
     if (!state.app.runId) return;
     try {
-      for await (const env of client.streamRun(state.app.runId)) {
+      const lastEventId = state.connection.lastEventId ?? state.app.lastEventId;
+      for await (const env of client.streamRun(state.app.runId, { retryMs:3000, attempts:0, lastEventId })) {
+        if (state.rawEvents.some(event => event.event_id === env.event_id)) continue;
         state = reduceChatEvent(state, env);
+        if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && !state.pendingInterview && state.app.stages.interview !== "passed") {
+          try {
+            const pendingInterview = pendingInterviewFromArtifact(await client.artifact("interview", state.app.sessionId));
+            if (pendingInterview) {
+              const first = pendingInterview.questions[0];
+              state = { ...state, pendingInterview, transcript:[...state.transcript, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(first, 0, pendingInterview.questions.length) }] };
+            }
+          } catch {}
+        }
         render();
         if (env.type === "done") break;
       }
@@ -311,6 +323,27 @@ export async function runOpenTui(client:CoreClient, initial=createState()): Prom
       key.preventDefault();
       render();
       return;
+    }
+    if (state.overlay === "pipeline") {
+      const currentIndex = Math.max(0, STAGES.indexOf(state.selectedStage ?? "plan"));
+      if (/^[1-9]$/.test(key.name) && Number(key.name) <= STAGES.length) {
+        state = { ...state, selectedStage:STAGES[Number(key.name) - 1] };
+        key.preventDefault();
+        render();
+        return;
+      }
+      if (key.name === "left" || key.name === "up" || key.name === "h" || key.name === "k") {
+        state = { ...state, selectedStage:STAGES[Math.max(0, currentIndex - 1)] };
+        key.preventDefault();
+        render();
+        return;
+      }
+      if (key.name === "right" || key.name === "down" || key.name === "l" || key.name === "j") {
+        state = { ...state, selectedStage:STAGES[Math.min(STAGES.length - 1, currentIndex + 1)] };
+        key.preventDefault();
+        render();
+        return;
+      }
     }
     if (state.overlay === "pipeline" && state.selectedStage && ["p", "r", "x", "c"].includes(key.name)) {
       const stage = state.selectedStage;

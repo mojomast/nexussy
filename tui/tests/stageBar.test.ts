@@ -1,15 +1,27 @@
 import { expect, test } from "bun:test";
 import { renderStageBar, renderStageBarFooter } from "../src/components/StageBar";
-import { createState, reduceEvent } from "../src/state";
+import { STAGES, createState, reduceEvent } from "../src/state";
+import { renderPipelineRows, renderPipelineStrip } from "../src/ui/PipelineStrip";
 import type { EventEnvelope } from "../src/types";
 
 function envelope(type:any, payload:any, sequence=1): EventEnvelope { return { event_id:`e${sequence}`, sequence, contract_version:"1.0", type, session_id:"s", run_id:"r", ts:"2026-04-28T00:00:00Z", source:"core", payload } as EventEnvelope; }
 
-test("shows all six stages in order", () => {
+test("STAGES contains the core pipeline stages in order", () => {
+  expect(STAGES).toEqual(["interview", "design", "validate", "plan", "review", "develop", "validate_browser"]);
+});
+
+test("shows all stages in order", () => {
   const text = renderStageBar(createState());
-  expect(text).toContain("interview");
+  for (const stage of STAGES) expect(text).toContain(stage);
   expect(text.indexOf("interview")).toBeLessThan(text.indexOf("design"));
   expect(text.indexOf("review")).toBeLessThan(text.indexOf("develop"));
+  expect(text.indexOf("develop")).toBeLessThan(text.indexOf("validate_browser"));
+});
+
+test("pipeline strip and rows render exactly one segment per stage", () => {
+  const state = createState();
+  expect(renderPipelineStrip(state).split(" | ").length).toBe(STAGES.length);
+  expect(renderPipelineRows(state).length).toBe(STAGES.length);
 });
 
 test("updates stage to running on stage_transition", () => {

@@ -19,6 +19,7 @@ export type TranscriptItem =
 
 export interface ComposerState { text:string; history:string[]; historyIndex:number; fileRefs:string[]; autocompleteOpen:boolean; autocompleteQuery:string; }
 export interface ConnectionState { connected:boolean; lastEventId?:string; error?:string; }
+export interface PendingInterview { questions:Array<{question_id:string; question:string; suggested_answer?:string|null}>; answers:Record<string,string>; index:number; }
 
 export interface ChatUiState {
   mode: UiMode;
@@ -28,6 +29,7 @@ export interface ChatUiState {
   stageChat?: { stage:StageName };
   transcriptFilter?: { stage:StageName };
   workerFilter?: "all"|"idle"|"busy"|"failed";
+  pendingInterview?: PendingInterview;
   app: TuiState;
   rawEvents: EventEnvelope[];
   transcript: TranscriptItem[];
@@ -43,6 +45,7 @@ export interface CommandOutcome { message:string; stream?:boolean; exit?:boolean
 
 export type ClientLike = {
   startPipeline(body:unknown): Promise<{run_id:string; session_id:string}>|{run_id:string; session_id:string};
+  interviewAnswer?(session_id:string, answers:Record<string,string>): Promise<unknown>|unknown;
   mcpCall?<T=unknown>(name:string, args:Record<string, unknown>): Promise<T>|T;
   chat(body:{message:string; model?:string|null}): Promise<{message:string; model:string; usage?:unknown}>|{message:string; model:string; usage?:unknown};
   inject(body:{run_id:string; message:string; worker_id?:string|null; stage?:StageName|null}): Promise<unknown>|unknown;
@@ -60,5 +63,6 @@ export type ClientLike = {
   status(run_id:string): Promise<unknown>|unknown;
   workers(run_id:string): Promise<unknown>|unknown;
   artifacts(session_id:string, run_id?:string): Promise<unknown>|unknown;
+  artifact?(kind:string, session_id:string, phase_number?:number): Promise<unknown>|unknown;
   compact?(run_id:string): Promise<{compacted_tokens:number}>|{compacted_tokens:number};
 };

@@ -2,7 +2,7 @@ import { CombinedAutocompleteProvider, Editor, ProcessTerminal, TUI, truncateToW
 import type { CoreClient } from "./client";
 import { createState } from "./state";
 import { renderApp } from "./ui/App";
-import { handleComposerSubmit } from "./ui/Composer";
+import { formatInterviewQuestion, handleComposerSubmit, pendingInterviewFromArtifact } from "./ui/Composer";
 import { COMMANDS } from "./ui/CommandPalette";
 import { closeOverlay } from "./ui/Overlay";
 import { actionableError, reduceChatEvent } from "./ui/Transcript";
@@ -50,8 +50,19 @@ export async function runPiTui(client:CoreClient, initial=createState()): Promis
   async function streamCurrentRun() {
     if (!state.app.runId) return;
     try {
-      for await (const env of client.streamRun(state.app.runId)) {
+      const lastEventId = state.connection.lastEventId ?? state.app.lastEventId;
+      for await (const env of client.streamRun(state.app.runId, { retryMs:3000, attempts:0, lastEventId })) {
+        if (state.rawEvents.some(event => event.event_id === env.event_id)) continue;
         state = reduceChatEvent(state, env);
+        if (env.type === "artifact_updated" && (env.payload as any)?.artifact?.kind === "interview" && state.app.sessionId && client.artifact && !state.pendingInterview && state.app.stages.interview !== "passed") {
+          try {
+            const pendingInterview = pendingInterviewFromArtifact(await client.artifact("interview", state.app.sessionId));
+            if (pendingInterview) {
+              const first = pendingInterview.questions[0];
+              state = { ...state, pendingInterview, transcript:[...state.transcript, { kind:"assistant", id:`interview-question-${Date.now()}`, role:"assistant", text:formatInterviewQuestion(first, 0, pendingInterview.questions.length) }] };
+            }
+          } catch {}
+        }
         tui.requestRender(true);
         if (env.type === "done") break;
       }

@@ -14,6 +14,7 @@ test("applies selected OpenRouter model to all pipeline stages", () => {
   const next = applyOpenRouterModel(cfg, "openrouter/openai/gpt-4o-mini");
   expect(next.providers.default_model).toBe("openrouter/openai/gpt-4o-mini");
   expect(next.stages.design.model).toBe("openrouter/openai/gpt-4o-mini");
+  expect(next.stages.validate_browser.model).toBe("openrouter/openai/gpt-4o-mini");
   expect(next.stages.develop.orchestrator_model).toBe("openrouter/openai/gpt-4o-mini");
   expect(cfg.providers.default_model).toBe("openai/gpt-5.5-fast");
 });
@@ -82,7 +83,7 @@ test("default core URL follows explicit URL or local port", () => {
   expect(defaultCoreUrl({ NEXUSSY_CORE_URL:"http://10.0.0.2:9000", NEXUSSY_CORE_PORT:"18888" })).toBe("http://10.0.0.2:9000");
 });
 
-test("autostarted core receives matching local host and port and visible stderr", () => {
+test("autostarted core receives matching local host and port with hidden stderr", () => {
   const out = new Output() as any;
   let spawnArgs:any[] = [];
   const oldPort = process.env.NEXUSSY_CORE_PORT;
@@ -91,7 +92,7 @@ test("autostarted core receives matching local host and port and visible stderr"
   expect(spawnArgs[0]).toEqual(["python3", "-m", "nexussy.api.server"]);
   expect(spawnArgs[1].env.NEXUSSY_CORE_HOST).toBe("127.0.0.1");
   expect(spawnArgs[1].env.NEXUSSY_CORE_PORT).toBe("18888");
-  expect(spawnArgs[1].stderr).toBe("inherit");
+  expect(spawnArgs[1].stderr).toBe("ignore");
   if (oldPort === undefined) delete process.env.NEXUSSY_CORE_PORT; else process.env.NEXUSSY_CORE_PORT = oldPort;
 });
 
@@ -187,13 +188,14 @@ test("explicit new helper can start a pipeline run", async () => {
   expect(projectNameFromDescription("build a tiny api with tests please")).toBe("build a tiny api with tests");
   const started = await startPipelineFromText(client, "build a tiny api with tests please");
   expect(started).toEqual({ runId:"run-1", sessionId:"sess-1" });
-  expect(calls[0]).toEqual({ project_name:"build a tiny api with tests", description:"build a tiny api with tests please", auto_approve_interview:true });
+  expect(calls[0]).toEqual({ project_name:"build a tiny api with tests", description:"build a tiny api with tests please", auto_approve_interview:false });
 });
 
 test("pipeline start design pack selection is sent only when selected", async () => {
   const calls:any[] = [];
   const client = { startPipeline(body:any){ calls.push(body); return { run_id:"run-1", session_id:"sess-1", status:"running", stream_url:"/s", status_url:"/p" }; } } as any;
   expect(parseNewCommand("--design-pack stripe build a polished checkout")).toEqual({ description:"build a polished checkout", designContextPack:"stripe" });
+  expect(parseNewCommand("--auto-interview build a polished checkout")).toEqual({ description:"build a polished checkout", autoInterview:true });
   await startPipelineFromText(client, "build a polished checkout", "stripe");
   await startPipelineFromText(client, "build a plain docs site", "none");
   expect(calls[0].metadata).toEqual({ design_context_pack:"stripe" });

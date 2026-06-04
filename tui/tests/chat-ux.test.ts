@@ -1,8 +1,12 @@
 import { expect, test } from "bun:test";
 import { createDefaultChatState, renderApp, renderChat } from "../src/ui/App";
-import { classifyInteraction, handleComposerSubmit, looksLikeProjectRequest, wantsInterviewFirst } from "../src/ui/Composer";
+import { classifyInteraction, handleComposerSubmit, looksLikeProjectRequest, pendingInterviewFromArtifact, wantsInterviewFirst } from "../src/ui/Composer";
 import { insertFileReference, fileReferenceQuery, fileReferenceSuggestions, rejectPathEscape } from "../src/ui/FileReferenceAutocomplete";
 import { actionableError, reduceChatEvent, transcriptItemFromEvent } from "../src/ui/Transcript";
+import { closeOverlay } from "../src/ui/Overlay";
+import { STAGES, reduceSecrets, reduceStageRoutingModel, reduceStatusSnapshot } from "../src/state";
+import { findModelOption } from "../src/lib/routing";
+import { renderPipelineRows } from "../src/ui/PipelineStrip";
 import type { EventEnvelope } from "../src/types";
 import type { ChatUiState } from "../src/ui/types";
 
@@ -18,11 +22,12 @@ class MockClient {
   pause(run_id:string, reason?:string){ this.calls.push(["pause", run_id, reason]); return {}; }
   resume(run_id:string){ this.calls.push(["resume", run_id]); return {}; }
   cancel(run_id:string, reason:string){ this.calls.push(["cancel", run_id, reason]); return {}; }
+  interviewAnswer(session_id:string, answers:Record<string,string>){ this.calls.push(["interviewAnswer", session_id, answers]); return {}; }
   skip(run_id:string, stage:string, reason:string){ this.calls.push(["skip", run_id, stage, reason]); return {}; }
   spawn(body:any){ this.calls.push(["spawn", body]); return {}; }
   secrets(){ this.calls.push(["secrets"]); return [{ name:"OPENROUTER_API_KEY", source:"config", configured:true }]; }
-  status(run_id:string){ this.calls.push(["status", run_id]); return { ok:true, run:{ run_id, session_id:"sess-1", status:"running", usage }, stages:[{ stage:"design", status:"running" }], workers:[], paused:false, blockers:[] }; }
-  workers(run_id:string){ this.calls.push(["workers", run_id]); return [{ worker_id:"backend-abc123", run_id, role:"backend", status:"running", worktree_path:"", branch_name:"", model:"mock", usage, created_at:"", updated_at:"" }]; }
+  status(run_id:string){ this.calls.push(["status", run_id]); return { ok:true, run:{ run_id, session_id:"sess-1", status:"running", usage }, stages:STAGES.map(stage => ({ stage, status:stage === "design" ? "running" : "pending", attempt:1, max_attempts:1, input_artifacts:[], output_artifacts:[] })), workers:[], paused:false, blockers:[] }; }
+  workers(run_id:string){ this.calls.push(["workers", run_id]); return [{ worker_id:"backend-abc123", run_id, role:"backend", status:"running", stage:"develop", worktree_path:"", branch_name:"", model:"mock", usage, created_at:"", updated_at:"" }]; }
   artifacts(session_id:string, run_id?:string){ this.calls.push(["artifacts", session_id, run_id]); return { artifacts:[{ kind:"devplan", path:".nexussy/artifacts/devplan.md", sha256:"abc", bytes:1, updated_at:"now" }] }; }
 }
 
@@ -52,7 +57,15 @@ test("pipeline strip and pipeline overlay show every stage", async () => {
   expect(out).toContain("Plan");
   expect(out).toContain("Review");
   expect(out).toContain("Implement");
+  expect(out).toContain("Browser");
   expect(out).toContain("Focused controls");
+});
+
+test("status snapshot preserves and renders all stages", () => {
+  const snapshot = { ok:true, run:{ run_id:"run-1", session_id:"sess-1", status:"running", usage }, stages:STAGES.map((stage, index) => ({ stage, status:index % 2 ? "pending" : "running", attempt:1, max_attempts:1, input_artifacts:[], output_artifacts:[] })), workers:[], paused:false, blockers:[] } as any;
+  const app = reduceStatusSnapshot(createDefaultChatState().app, snapshot);
+  for (const stage of STAGES) expect(app.stages[stage]).toBe(snapshot.stages.find((row:any) => row.stage === stage).status);
+  expect(renderPipelineRows(app).length).toBe(STAGES.length);
 });
 
 test("dashboard and chat modes toggle", async () => {
@@ -85,6 +98,45 @@ test("plain text stays in ask mode and slash new starts idle run", async () => {
   expect(result.message).toBe("ask mode");
   expect(client.calls.length).toBe(2);
   expect(renderChat(state)).toContain("This looks buildable");
+});
+
+test("slash new sends configured TUI routing as core model overrides", async () => {
+  const client = new MockClient() as any;
+  let state = createDefaultChatState();
+  state = { ...state, app:reduceSecrets(state.app, [{ name:"AGENTROUTER_API_KEY", source:"env", configured:true }]) };
+  [,] = await handleComposerSubmit(client, state, "/new build api");
+  const body = client.calls.at(-1)[1];
+  expect(body.auto_approve_interview).toBe(false);
+  expect(body.model_overrides.interview).toBe("openai/deepseek-v4-flash");
+  expect(body.model_overrides.plan).toBe("openai/deepseek-v4-flash");
+  expect(body.model_overrides.validate_browser).toBe("openai/deepseek-v4-flash");
+  expect(JSON.stringify(body)).not.toContain("AGENTROUTER_API_KEY");
+});
+
+test("slash new supports explicit auto interview opt-in", async () => {
+  const client = new MockClient() as any;
+  [,] = await handleComposerSubmit(client, createDefaultChatState(), "/new --auto-interview build api");
+  expect(client.calls.at(-1)[1].auto_approve_interview).toBe(true);
+});
+
+test("slash new does not force static OpenRouter catalog defaults", async () => {
+  const client = new MockClient() as any;
+  let state = createDefaultChatState();
+  state = { ...state, app:reduceSecrets(state.app, [{ name:"OPENROUTER_API_KEY", source:"env", configured:true }]) };
+  [,] = await handleComposerSubmit(client, state, "/new build api");
+  expect(client.calls.at(-1)[1].model_overrides).toBeUndefined();
+});
+
+test("slash new uses edited per-stage primary model override", async () => {
+  const client = new MockClient() as any;
+  let state = createDefaultChatState();
+  const app = reduceSecrets(state.app, [{ name:"AGENTROUTER_API_KEY", source:"env", configured:true }]);
+  const option = findModelOption(app.modelOptions, "openai/gpt-5.4");
+  if (!option) throw new Error("missing test model option");
+  state = { ...state, app:reduceStageRoutingModel(app, "plan", option, "primary") };
+  [,] = await handleComposerSubmit(client, state, "/new build api");
+  expect(client.calls.at(-1)[1].model_overrides.plan).toBe("openai/gpt-5.4");
+  expect(client.calls.at(-1)[1].model_overrides.design).toBe("openai/deepseek-v4-flash");
 });
 
 test("plain questions use provider-backed Ask mode", async () => {
@@ -139,9 +191,9 @@ test("slash commands route or open overlays", async () => {
   let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
   let result;
   [state] = await handleComposerSubmit(client, state, "/new build api"); expect(client.calls.at(-1)[0]).toBe("startPipeline");
-  [state] = await handleComposerSubmit(client, state, "/pause stop"); expect(client.calls.at(-1)).toEqual(["pause", "run-123456", "stop"]);
-  [state] = await handleComposerSubmit(client, state, "/resume-run"); expect(client.calls.at(-1)).toEqual(["resume", "run-123456"]);
-  [state, result] = await handleComposerSubmit(client, state, "/stage plan"); expect(result.message).toContain("use /skip"); expect(client.calls.at(-1)[0]).toBe("resume");
+  [state] = await handleComposerSubmit(client, state, "/pause stop"); expect(client.calls.at(-2)).toEqual(["pause", "run-123456", "stop"]);
+  [state] = await handleComposerSubmit(client, state, "/resume-run"); expect(client.calls.at(-2)).toEqual(["resume", "run-123456"]);
+  [state, result] = await handleComposerSubmit(client, state, "/stage plan"); expect(result.message).toContain("use /skip"); expect(client.calls.at(-2)[0]).toBe("resume");
   [state] = await handleComposerSubmit(client, state, "/skip validate reason here"); expect(client.calls.at(-1)).toEqual(["skip", "run-123456", "validate", "reason here"]);
   [state] = await handleComposerSubmit(client, state, "/spawn backend build API"); expect(client.calls.at(-1)).toEqual(["spawn", { run_id:"run-123456", role:"backend", task:"build API" }]);
   [state] = await handleComposerSubmit(client, state, "/inject backend-abc123 hello"); expect(client.calls.at(-1)).toEqual(["injectWorker", "backend-abc123", { run_id:"run-123456", worker_id:"backend-abc123", message:"hello" }]);
@@ -154,16 +206,54 @@ test("slash commands route or open overlays", async () => {
   [state] = await handleComposerSubmit(client, state, "/secrets"); expect(state.overlay).toBe("secrets");
 });
 
+test("interview answers post to core and refresh status", async () => {
+  const client = new MockClient() as any;
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+  [state] = await handleComposerSubmit(client, state, "/interview-answer q1=Use local files q2=Keep it simple");
+  expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"Use local files", q2:"Keep it simple" }]);
+  expect(client.calls.at(-1)).toEqual(["status", "run-1"]);
+  expect(state.statusMessage).toBe("interview answers submitted");
+});
+
+test("pending interview turns plain text into answers instead of Ask mode", async () => {
+  const client = new MockClient() as any;
+  let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", paused:true, stages:{ ...createDefaultChatState().app.stages, interview:"paused" } }, pendingInterview:{ questions:[{ question_id:"q1", question:"What should it do?" }, { question_id:"q2", question:"Any constraints?" }], answers:{}, index:0 } };
+  let result;
+  [state, result] = await handleComposerSubmit(client, state, "Build a local chatbot");
+  expect(result.message).toBe("interview answer saved");
+  expect(client.calls.some((call:any[]) => call[0] === "chat")).toBe(false);
+  expect(state.pendingInterview?.answers.q1).toBe("Build a local chatbot");
+  expect(renderChat(state)).toContain("Interview question 2/2: Any constraints?");
+  [state, result] = await handleComposerSubmit(client, state, "Keep it simple");
+  expect(client.calls.at(-2)).toEqual(["interviewAnswer", "sess-1", { q1:"Build a local chatbot", q2:"Keep it simple" }]);
+  expect(result.stream).toBe(true);
+  expect(state.pendingInterview).toBeUndefined();
+});
+
+test("interview artifact content becomes pending interview questions", () => {
+  const pending = pendingInterviewFromArtifact({ content_text:JSON.stringify({ questions:[{ question_id:"q1", question:"What should it do?", suggested_answer:"Start small" }] }) });
+  expect(pending?.questions[0]).toEqual({ question_id:"q1", question:"What should it do?", suggested_answer:"Start small" });
+  expect(renderChat({ ...createDefaultChatState(), transcript:[{ kind:"assistant", id:"q", role:"assistant", text:`Interview question 1/1: ${pending!.questions[0].question}\nSuggested default: ${pending!.questions[0].suggested_answer}` }] })).toContain("Suggested default: Start small");
+});
+
+test("pause state changed for interview marks interview paused and renders visibly", () => {
+  let state = createDefaultChatState();
+  state = reduceChatEvent(state, env("pause_state_changed", { paused:true, reason:"waiting for interview answers" }, 1));
+  expect(state.app.stages.interview).toBe("paused");
+  expect(renderChat(state)).toContain("Interview paused");
+});
+
 test("stage pause resume cancel and chat are structured", async () => {
   const client = new MockClient() as any;
   let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1", stages:{ ...createDefaultChatState().app.stages, plan:"running" } } };
   [state] = await handleComposerSubmit(client, state, "/pause plan waiting for product input");
-  expect(client.calls.at(-1)).toEqual(["pause", "run-1", "waiting for product input"]);
-  expect(state.app.stages.plan).toBe("paused");
+  expect(client.calls.at(-2)).toEqual(["pause", "run-1", "waiting for product input"]);
+  expect(client.calls.at(-1)).toEqual(["status", "run-1"]);
+  expect(state.app.stageControlNotes.at(-1)?.stage).toBe("plan");
   expect(renderChat(state)).toContain("PAUSE Plan - waiting for product input");
   [state] = await handleComposerSubmit(client, state, "/resume plan continue with defaults");
-  expect(client.calls.at(-1)).toEqual(["resume", "run-1"]);
-  expect(state.app.stages.plan).toBe("running");
+  expect(client.calls.at(-2)).toEqual(["resume", "run-1"]);
+  expect(client.calls.at(-1)).toEqual(["status", "run-1"]);
   [state] = await handleComposerSubmit(client, state, "/stage-chat plan");
   expect(state.stageChat?.stage).toBe("plan");
   expect(renderChat(state)).toContain("plan ›");
@@ -172,7 +262,28 @@ test("stage pause resume cancel and chat are structured", async () => {
   [state] = await handleComposerSubmit(client, state, "/chat");
   expect(state.stageChat).toBeUndefined();
   [state] = await handleComposerSubmit(client, state, "/cancel plan stop now");
-  expect(client.calls.at(-1)).toEqual(["cancel", "run-1", "stop now"]);
+  expect(client.calls.at(-2)).toEqual(["cancel", "run-1", "stop now"]);
+});
+
+test("stage scoped controls and stage chat work for every stage", async () => {
+  for (const stage of STAGES) {
+    const client = new MockClient() as any;
+    let state: ChatUiState = { ...createDefaultChatState(), app:{ ...createDefaultChatState().app, runId:"run-1", sessionId:"sess-1" } };
+    [state] = await handleComposerSubmit(client, state, `/pause ${stage} hold`);
+    expect(client.calls.at(-2)).toEqual(["pause", "run-1", "hold"]);
+    expect(state.app.stageControlNotes.at(-1)?.stage).toBe(stage);
+    [state] = await handleComposerSubmit(client, state, `/resume ${stage} go`);
+    expect(client.calls.at(-2)).toEqual(["resume", "run-1"]);
+    [state] = await handleComposerSubmit(client, state, `/stage-chat ${stage}`);
+    expect(state.overlay).toBe("stage-chat");
+    expect(state.stageChat?.stage).toBe(stage);
+    expect(renderChat(state)).toContain(`${stage} ›`);
+    [state] = await handleComposerSubmit(client, state, "focus here");
+    expect(client.calls.at(-1)).toEqual(["inject", { run_id:"run-1", message:"focus here", stage }]);
+    state = closeOverlay(state);
+    expect(state.stageChat).toBeUndefined();
+    expect(state.transcriptFilter).toBeUndefined();
+  }
 });
 
 test("model routing overlay uses configured providers and profile switch", async () => {
@@ -187,6 +298,16 @@ test("model routing overlay uses configured providers and profile switch", async
   [state] = await handleComposerSubmit(client, state, "/profile fast");
   expect(state.app.routingProfile).toBe("fast");
   expect(renderChat(state)).toContain("Profile: fast");
+  [state] = await handleComposerSubmit(client, state, "/model plan openrouter/openai/gpt-4o-mini");
+  expect(state.app.routing.plan.primary?.model).toBe("openrouter/openai/gpt-4o-mini");
+  [state] = await handleComposerSubmit(client, state, "/fallback validate_browser openrouter/anthropic/claude-sonnet-4");
+  expect(state.app.routing.validate_browser.fallback?.model).toBe("openrouter/anthropic/claude-sonnet-4");
+});
+
+test("configured providers create routing entries for every stage", () => {
+  const app = reduceSecrets(createDefaultChatState().app, [{ name:"AGENTROUTER_API_KEY", source:"env", configured:true }]);
+  expect(Object.keys(app.routing)).toEqual(STAGES);
+  for (const stage of STAGES) expect(app.routing[stage].primary?.configured).toBe(true);
 });
 
 test("setup overlay offers provider menu without accepting visible secrets", async () => {
@@ -227,6 +348,14 @@ test("heartbeat does not render and stage/tool/worker events become transcript r
   expect(rendered).toContain("◇ backend-123 running: write files");
 });
 
+test("duplicate SSE event ids do not replay transcript rows", () => {
+  let state = createDefaultChatState();
+  const event = env("run_started", { status:"running", current_stage:"interview", usage }, 1);
+  state = reduceChatEvent(state, event);
+  state = reduceChatEvent(state, event);
+  expect(state.transcript.filter(item => item.kind === "run_started").length).toBe(1);
+});
+
 test("git events, worker status, and RPC JSON render as readable agent activity", () => {
   let state = createDefaultChatState();
   state = reduceChatEvent(state, env("git_event", { action:"worktree_created", worker_id:"backend-123", branch_name:"worker/backend-123", message:"worktree created" }, 1));
@@ -254,6 +383,28 @@ test("done with error renders actionable block", () => {
   const item = transcriptItemFromEvent(env("done", { final_status:"failed", summary:"pipeline failed", usage, error:{ message:"LiteLLM is not installed" } }, 1));
   expect(item?.kind).toBe("error");
   expect(JSON.stringify(item)).toContain("LiteLLM");
+});
+
+test("OpenRouter quota traceback is summarized and redacted", () => {
+  const raw = `Traceback (most recent call last):\n  File "/tmp/litellm.py", line 1, in x\nlitellm.APIError: APIError: OpenrouterException - {"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/3add9d32b66c4a82d83bcc849e18319f18a95993f3e41314020bc1c744994230","code":403}}`;
+  let state = createDefaultChatState();
+  state = reduceChatEvent(state, env("pipeline_error", { ok:false, error_code:"provider_unavailable", message:raw, request_id:"req", retryable:false }, 1));
+  const rendered = renderChat(state, 180);
+  expect(rendered).toContain("OpenRouter provider limit reached");
+  expect(rendered).toContain("/models choose another configured provider");
+  expect(rendered).not.toContain("Traceback (most recent call last)");
+  expect(rendered).not.toContain("File \"/tmp/litellm.py\"");
+  expect(rendered).not.toContain("3add9d32b66c4a82d83bcc849e18319f18a95993f3e41314020bc1c744994230");
+});
+
+test("generic Python traceback is shortened before transcript rendering", () => {
+  const raw = `Traceback (most recent call last):\n  File "/home/me/core.py", line 10, in run\n    explode()\nValueError: provider failed loudly`;
+  const item = transcriptItemFromEvent(env("done", { final_status:"failed", summary:"pipeline failed", usage, error:{ message:raw } }, 1));
+  expect(item?.kind).toBe("error");
+  const rendered = renderChat({ ...createDefaultChatState(), transcript:item ? [item] : [] }, 160);
+  expect(rendered).toContain("provider failed loudly");
+  expect(rendered).toContain("Traceback omitted");
+  expect(rendered).not.toContain("File \"/home/me/core.py\"");
 });
 
 test("file reference autocomplete inserts refs and rejects escape", () => {

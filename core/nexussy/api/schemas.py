@@ -237,7 +237,7 @@ class AssistantReplyResponse(StrictModel):
     ok:bool=True; message:str; model:str; usage:TokenUsage=Field(default_factory=TokenUsage)
 
 class InterviewQuestionAnswer(StrictModel):
-    question_id:str; question:str; answer:str; source:Literal["user","auto","default"]="user"; confidence:Literal["low","high"]="high"
+    question_id:str; question:str; answer:str; source:Literal["user","auto","default","suggested"]="user"; confidence:Literal["low","high"]="high"; suggested_answer:str|None=None; evidence:list[str]=Field(default_factory=list)
 class InterviewArtifact(StrictModel):
     project_name:str; project_slug:str; description:str; questions:list[InterviewQuestionAnswer]=Field(default_factory=list); requirements:list[str]=Field(default_factory=list); constraints:list[str]=Field(default_factory=list); risks:list[str]=Field(default_factory=list); created_at:datetime=Field(default_factory=now_utc)
 class ComplexityProfile(StrictModel):

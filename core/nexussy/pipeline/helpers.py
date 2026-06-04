@@ -207,6 +207,7 @@ def devplan_with_task_contract(text: str) -> tuple[str, bool, list[str]]:
 
 
 def parse_interview_questions(text: str) -> list[InterviewQuestionAnswer]:
+    text = _extract_json_text(text)
     try:
         raw = json.loads(text)
     except Exception:
@@ -223,18 +224,21 @@ def parse_interview_questions(text: str) -> list[InterviewQuestionAnswer]:
         if not question or question_id in seen:
             continue
         seen.add(question_id)
-        questions.append(InterviewQuestionAnswer(question_id=question_id, question=question, answer="pending", source="user"))
+        suggested = item.get("suggested_answer") if isinstance(item.get("suggested_answer"), str) else None
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+        questions.append(InterviewQuestionAnswer(question_id=question_id, question=question, answer="pending", source="user", suggested_answer=suggested, evidence=[str(x) for x in evidence[:4]]))
     if len(questions) < 4:
         questions = [
-            InterviewQuestionAnswer(question_id="q_name", question="What is the name of your project?", answer="pending", source="user"),
-            InterviewQuestionAnswer(question_id="q_lang", question="What programming language(s) will you use?", answer="pending", source="user"),
-            InterviewQuestionAnswer(question_id="q_desc", question="Describe what your project does in 1-2 sentences.", answer="pending", source="user"),
-            InterviewQuestionAnswer(question_id="q_type", question="What type of project is this? (API, Web App, CLI, Game, etc.)", answer="pending", source="user"),
+            InterviewQuestionAnswer(question_id="q_goal", question="What outcome should this project deliver for its first useful proof of concept? If you are unsure, say so and nexussy will suggest a small default.", answer="pending", source="user", suggested_answer="Start with the smallest working proof of concept."),
+            InterviewQuestionAnswer(question_id="q_users", question="Who will use it first, and what is the main job they need it to do?", answer="pending", source="user"),
+            InterviewQuestionAnswer(question_id="q_stack", question="Do you have a preferred stack, or should nexussy recommend one based on this repository and the requested outcome?", answer="pending", source="user", suggested_answer="Let nexussy recommend a stack if there is no strong preference."),
+            InterviewQuestionAnswer(question_id="q_quality", question="What local testing or quality check should prove the first version works?", answer="pending", source="user", suggested_answer="Include a small automated smoke test."),
         ]
     return questions[:8]
 
 
 def parse_auto_answers(text: str, questions: list[InterviewQuestionAnswer], req: PipelineStartRequest) -> dict[str, str]:
+    text = _extract_json_text(text)
     try:
         raw = json.loads(text)
     except Exception:
@@ -247,6 +251,22 @@ def parse_auto_answers(text: str, questions: list[InterviewQuestionAnswer], req:
             answer = req.project_name if "name" in question.question.lower() else req.description
         out[question.question_id] = answer.strip()
     return out
+
+
+def _extract_json_text(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I).strip()
+        stripped = re.sub(r"\s*```$", "", stripped).strip()
+    first_array = stripped.find("[")
+    last_array = stripped.rfind("]")
+    first_obj = stripped.find("{")
+    last_obj = stripped.rfind("}")
+    if first_array >= 0 and last_array > first_array:
+        return stripped[first_array:last_array + 1]
+    if first_obj >= 0 and last_obj > first_obj:
+        return stripped[first_obj:last_obj + 1]
+    return stripped
 
 
 def interview_summary(artifact: InterviewArtifact | None) -> str:

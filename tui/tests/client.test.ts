@@ -9,10 +9,11 @@ function env(n=1): EventEnvelope { return { event_id:`e${n}`, sequence:n, contra
 test("live-core mode preserves auth headers across HTTP routes used by UI", async () => {
   const seen: Array<{url:string; init:RequestInit}> = [];
   const client = new CoreClient({ mode:"live-core", apiKey:"secret", fetchImpl: (async (url, init) => { seen.push({url:String(url), init:init ?? {}}); return response({ok:true}); }) as typeof fetch });
-  await client.health(); await client.status("r"); await client.spawn({run_id:"r", role:"backend", task:"Do it"}); await client.fileLocks("r"); await client.events("r"); await client.mcpCall("nexussy_steer_status", {run_id:"r"}); await client.secrets(); await client.setSecret("OPENAI_API_KEY", "sk-secret"); await client.deleteSecret("OPENAI_API_KEY");
+  await client.health(); await client.status("r"); await client.interviewAnswer("sess 1", { q1:"answer" }); await client.spawn({run_id:"r", role:"backend", task:"Do it"}); await client.fileLocks("r"); await client.events("r"); await client.mcpCall("nexussy_steer_status", {run_id:"r"}); await client.secrets(); await client.setSecret("OPENAI_API_KEY", "sk-secret"); await client.deleteSecret("OPENAI_API_KEY");
   expect(client.mode).toBe("live-core");
-  expect(seen.map(s => new URL(s.url).pathname)).toEqual(["/health","/pipeline/status","/swarm/spawn","/swarm/file-locks","/events","/mcp/call","/secrets","/secrets/OPENAI_API_KEY","/secrets/OPENAI_API_KEY"]);
-  expect(JSON.parse(String(seen[5].init.body))).toEqual({name:"nexussy_steer_status", arguments:{run_id:"r"}});
+  expect(seen.map(s => new URL(s.url).pathname)).toEqual(["/health","/pipeline/status","/pipeline/sess%201/interview/answer","/swarm/spawn","/swarm/file-locks","/events","/mcp/call","/secrets","/secrets/OPENAI_API_KEY","/secrets/OPENAI_API_KEY"]);
+  expect(JSON.parse(String(seen[2].init.body))).toEqual({answers:{q1:"answer"}});
+  expect(JSON.parse(String(seen[6].init.body))).toEqual({name:"nexussy_steer_status", arguments:{run_id:"r"}});
   expect(seen.every(s => (s.init.headers as Record<string,string>)["X-API-Key"] === "secret")).toBe(true);
 });
 
@@ -25,6 +26,10 @@ test("contract artifacts route uses session and optional run query", async () =>
   expect(url.searchParams.get("session_id")).toBe("sess 1");
   expect(url.searchParams.get("run_id")).toBe("run-1");
   expect(seen[0].init.method).toBe("GET");
+  await client.artifact("interview", "sess 1");
+  const artifactUrl = new URL(seen[1].url);
+  expect(artifactUrl.pathname).toBe("/pipeline/artifacts/interview");
+  expect(artifactUrl.searchParams.get("session_id")).toBe("sess 1");
 });
 
 test("HTTP auth and connection errors are surfaced with core error body", async () => {

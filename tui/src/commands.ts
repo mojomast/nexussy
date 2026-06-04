@@ -1,11 +1,11 @@
 import type { CoreClient } from "./client";
-import { reduceRoutingProfile } from "./state";
+import { STAGES, reduceRoutingProfile } from "./state";
 import type { TuiState } from "./state";
 import { renderPanels } from "./renderer";
 import type { RoutingProfileName, StageName, WorkerRole } from "./types";
 
 export type CommandResult = { local?:true; endpoint?:string; method?:"GET"|"POST"|"DELETE"; message:string; html?:string };
-const stages = new Set(["interview","design","validate","plan","review","develop"]);
+const stages = new Set<string>(STAGES);
 const roles = new Set(["orchestrator","backend","frontend","qa","devops","writer","analyst"]);
 export const WORKER_ID_PATTERN = /^(orchestrator|backend|frontend|qa|devops|writer|analyst)-[a-z0-9]{6,12}$/;
 const profiles = new Set(["default", "fast", "cheap", "strict"]);

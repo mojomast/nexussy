@@ -32,11 +32,14 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
         ia = InterviewArtifact(project_name=req.project_name, project_slug=detail.session.project_slug, description=req.description, questions=answered, requirements=[qa.answer for qa in answered])
         return [await engine._save_art(rid, sid, root, "interview", ia.model_dump_json(indent=2)), await engine._save_art(rid, sid, root, "complexity_profile", cp.model_dump_json(indent=2))]
     question_prompt = (
-        "Generate a JSON array of 4-8 plain-language interview questions for a non-technical project owner. "
-        "Cover project name, primary languages, short description/requirements, project type, and optional frameworks, database, auth, deployment, and testing preferences. "
-        "Return only JSON objects with id and question fields.\n\n"
+        "You are nexussy's interactive discovery interviewer for a software-delivery pipeline. "
+        "Generate a dynamic JSON array of 4-8 plain-language questions tailored to this specific request and repository context. "
+        "Ask only high-value unknowns that affect design, implementation, testing, or deployment. Do not ask facts that are already strongly indicated by the project graph. "
+        "If the owner may be unsure, include a useful suggested_answer and brief evidence so the TUI can help them choose instead of blocking. "
+        "Questions may offer recommendations, tradeoffs, or defaults, but must still be answerable by a non-technical owner. "
+        "Return only JSON objects with id, question, optional suggested_answer, and optional evidence fields.\n\n"
         f"{graph_context}\n"
-        f"Project description: {req.description}"
+        f"Project name: {req.project_name}\nProject description: {req.description}"
     )
     questions = parse_interview_questions(await engine._provider_text(st, sid, rid, question_prompt, selected_models, allow_mock))
     engine.interview_questions[sid] = questions
@@ -47,7 +50,7 @@ async def run(engine, req, detail, rid, cp, root, selected_models, allow_mock, *
         threshold = int(getattr(engine.config.stages.interview, "min_description_words", 50) or 50)
         confidence = "low" if len(req.description.split()) < threshold else "high"
         answer_prompt = (
-            "Answer these interview questions as JSON using only the project description. "
+            "Answer these interview questions as JSON using the project description and project graph context. Prefer small, conservative defaults when the description is ambiguous. "
             "Return a JSON object mapping each question id to a concise answer.\n\n"
             f"{graph_context}\n"
             f"Project name: {req.project_name}\nProject description: {req.description}\nQuestions: {json.dumps([{'id': q.question_id, 'question': q.question} for q in questions])}"

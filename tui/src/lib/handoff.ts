@@ -83,7 +83,7 @@ export async function generateLocalHandoffAndPause(client:HandoffClient, input:H
 
 function artifactsForStage(state:TuiState, stage:StageName): string[] {
   const byStage:Record<StageName,string[]> = {
-    interview:["interview","complexity_profile"], design:["design_draft"], validate:["validated_design","validation_report"], plan:["devplan","handoff","phase"], review:["review_report"], develop:["develop_report","merge_report","changed_files"],
+    interview:["interview","complexity_profile"], design:["design_draft"], validate:["validated_design","validation_report"], plan:["devplan","devplan_tasks","handoff","phase"], review:["review_report"], develop:["develop_report","merge_report","conflict_report","changed_files"], validate_browser:["validate_browser_report"],
   };
   return state.artifacts.filter(a => byStage[stage].includes(a.kind)).map(a => a.path);
 }
