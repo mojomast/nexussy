@@ -110,12 +110,16 @@ def apply_status_snapshot(state: AppState, snapshot: dict[str, Any]) -> AppState
 
 
 def apply_providers(state: AppState, secrets: list[dict[str, Any]], config: dict[str, Any] | None = None) -> AppState:
-    provider_models = {
+    fallback_provider_models = {
         "openai": ("gpt-5.4", "gpt-5.4-mini"),
         "anthropic": ("claude-opus-4.5", "claude-sonnet-4.5"),
         "agentrouter": ("openai/deepseek-v4-flash", "openai/gpt-5.4"),
         "mock": ("mock-fast", "mock-safe"),
     }
+    if config and isinstance(config.get("providers"), dict):
+        provider_models = {str(key): tuple(value) if isinstance(value, (list, tuple)) else (str(value),) for key, value in config["providers"].items()}
+    else:
+        provider_models = fallback_provider_models
     configured_names = {str(item.get("name", "")).lower() for item in secrets if item.get("configured")}
     providers = []
     for provider, models in provider_models.items():
@@ -199,6 +203,8 @@ def _stage_transition(state: AppState, payload: dict[str, Any], event_id: str) -
 
 
 def _refresh_stale_gate(state: AppState) -> AppState:
+    if state.profile == "fast":
+        return state
     gate = state.pending_gate
     if gate is None or gate.next_stage is None:
         return state

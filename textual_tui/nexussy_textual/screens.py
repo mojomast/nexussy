@@ -43,6 +43,9 @@ COMMAND_ROWS = [
 class HelpScreen(ModalScreen[None]):
     BINDINGS = [("escape", "dismiss", "Close help")]
 
+    async def on_mount(self) -> None:
+        self.query_one(DataTable).focus()
+
     def compose(self) -> ComposeResult:
         yield Static("Keyboard Help", classes="modal-title")
         table = DataTable()
@@ -51,10 +54,14 @@ class HelpScreen(ModalScreen[None]):
             table.add_row(*row)
         yield table
         yield Static("All visible buttons are also reachable by Tab and Enter. Escape returns focus to the invoking area.")
+        yield Footer()
 
 
 class CommandPaletteScreen(ModalScreen[None]):
     BINDINGS = [("escape", "dismiss", "Close commands")]
+
+    async def on_mount(self) -> None:
+        self.query_one(DataTable).focus()
 
     def compose(self) -> ComposeResult:
         yield Static("Command Palette", classes="modal-title")
@@ -64,6 +71,7 @@ class CommandPaletteScreen(ModalScreen[None]):
             table.add_row(*row)
         yield table
         yield Static("Use the listed key or Tab to the visible control. This palette is discoverability-first; actions stay visible in the main UI.")
+        yield Footer()
 
 
 class RoutingScreen(Screen[None]):
@@ -76,6 +84,7 @@ class RoutingScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Label(f"Routing and Settings | active profile: {self.snapshot.profile}")
+        yield Label("Read-only snapshot. To edit: press Escape, then use [r] in the main view and press Enter on the routing table.")
         table = DataTable()
         table.add_columns("stage", "primary", "fallback", "profile", "gate", "provider status")
         for stage in STAGES:
@@ -84,6 +93,9 @@ class RoutingScreen(Screen[None]):
             table.add_row(STAGE_LABELS[stage], route.primary.label, route.fallback.label, route.profile, "enabled" if route.gate_enabled else "disabled", status)
         yield table
         yield Footer()
+
+    async def on_mount(self) -> None:
+        self.query_one(DataTable).focus()
 
 
 class SimpleTableScreen(Screen[None]):

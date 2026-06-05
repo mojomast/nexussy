@@ -66,6 +66,7 @@ class StageControlPanel(Vertical):
             super().__init__()
 
     def compose(self) -> ComposeResult:
+        self._current_stage: StageName = "interview"
         yield Label("Stage Controls", classes="panel-title")
         with Horizontal(classes="button-row"):
             yield Button("Pause [p]", id="pause")
@@ -82,19 +83,19 @@ class StageControlPanel(Vertical):
 
     def render_state(self, state: AppState) -> None:
         stage = state.selected_stage
+        self._current_stage = stage
         row = state.stages[stage]
         route = row.routing
         self.query_one("#pause", Button).disabled = state.paused or row.status not in {"running", "retrying"}
-        self.query_one("#resume", Button).disabled = not state.paused and not state.pending_gate
+        self.query_one("#resume", Button).disabled = not state.paused and not bool(state.pending_gate)
         self.query_one("#advance-gate", Button).display = bool(state.pending_gate and state.pending_gate.completed_stage == stage)
         self.query_one("#stage-detail", Static).update(
             f"{row.label}: {row.status}\nActivity: {row.activity}\nPrimary: {route.primary.label if route else '-'}\nFallback: {route.fallback.label if route else '-'}\nWorker group: {route.worker_group if route else '-'}\nArtifacts: {len(stage_artifacts(state, stage))} | Workers: {len(stage_workers(state, stage))}"
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        app_state = self.app.state
         action = str(event.button.id)
-        self.post_message(self.StageAction(action, app_state.selected_stage))
+        self.post_message(self.StageAction(action, getattr(self, "_current_stage", "interview")))
 
 
 class GateCard(Vertical):
@@ -128,19 +129,31 @@ class GateCard(Vertical):
 
 
 class TranscriptPanel(Vertical):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_count = 0
+        self._last_scope: StageName | None = None
+
     def compose(self) -> ComposeResult:
         yield Label("Transcript", classes="panel-title")
         yield RichLog(id="transcript-log", wrap=True, highlight=True)
 
     def render_state(self, state: AppState) -> None:
         log = self.query_one(RichLog)
-        log.clear()
-        title = f"Viewing stage: {STAGE_LABELS[state.stage_chat_scope]}" if state.stage_chat_scope else "Global transcript"
-        log.write(title)
-        for item in filtered_transcript(state)[-80:]:
+        items = filtered_transcript(state)[-80:]
+        scope_changed = state.stage_chat_scope != self._last_scope
+        if scope_changed:
+            log.clear()
+            self._last_count = 0
+            self._last_scope = state.stage_chat_scope
+            title = f"Viewing stage: {STAGE_LABELS[state.stage_chat_scope]}" if state.stage_chat_scope else "Global transcript"
+            log.write(title)
+        new_items = items[self._last_count:]
+        for item in new_items:
             scope = f"[{STAGE_LABELS[item.stage]}] " if item.stage else ""
             worker = f" {item.worker_id}" if item.worker_id else ""
             log.write(f"{scope}{item.role}{worker}: {item.text}")
+        self._last_count = len(items)
 
 
 class InterviewPanel(Vertical):
@@ -188,6 +201,11 @@ class InspectorPanel(Vertical):
                 table.add_row(provider, status)
             for missing in state.diagnostics.missing:
                 table.add_row(missing, "missing dependency/secret")
+        elif mode == "logs":
+            table.add_columns("stage", "role", "worker", "text")
+            for item in filtered_transcript(state)[-50:]:
+                stage_label = STAGE_LABELS[item.stage] if item.stage else "global"
+                table.add_row(stage_label, item.role, item.worker_id or "-", item.text[:80])
         else:
             table.add_columns("field", "value")
             row = state.stages[stage]
@@ -207,6 +225,10 @@ class InspectorPanel(Vertical):
 
 
 class Composer(Vertical):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_suggested = ""
+
     class Submitted(Message):
         def __init__(self, text: str) -> None:
             self.text = text
@@ -230,8 +252,10 @@ class Composer(Vertical):
         self.query_one("#composer-label", Label).update(f"{scope} › type below, then Enter")
         input_widget = self.query_one("#composer", Input)
         input_widget.disabled = False
-        if state.interview.question_id and state.interview.suggested_answer and not input_widget.value and not state.interview.waiting:
-            input_widget.value = state.interview.suggested_answer
+        new_suggestion = state.interview.suggested_answer
+        if new_suggestion and not input_widget.value and not state.interview.waiting and new_suggestion != self._last_suggested:
+            input_widget.value = new_suggestion
+            self._last_suggested = new_suggestion
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()

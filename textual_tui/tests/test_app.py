@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from nexussy_textual.app import NexussyTextualApp
@@ -52,6 +54,21 @@ class FakeClient:
 class DownClient(FakeClient):
     async def start_pipeline(self, body):
         raise OSError("All connection attempts failed")
+
+
+class FakeSSEClient(FakeClient):
+    async def start_pipeline(self, body):
+        self.calls.append(("start_pipeline", body))
+        return {"run_id": "run-sse", "session_id": "sess-sse"}
+
+    async def stream_run(self, run_id):
+        for event in [
+            {"type": "run_started", "run_id": "run-sse", "payload": {"current_stage": "interview"}},
+            {"type": "content_delta", "run_id": "run-sse", "payload": {"stage": "interview", "role": "assistant", "delta": "Hello from SSE"}},
+            {"type": "stage_transition", "run_id": "run-sse", "payload": {"from_stage": "interview", "to_stage": "design", "from_status": "passed"}},
+            {"type": "done", "run_id": "run-sse", "payload": {"final_status": "passed"}},
+        ]:
+            yield event
 
 
 @pytest.mark.asyncio
@@ -189,3 +206,16 @@ async def test_routing_tab_enter_edits_selected_stage_model():
         app.action_inspector("routing")
         await pilot.press("enter")
         assert app.state.routing["interview"].primary != before
+
+
+@pytest.mark.asyncio
+async def test_sse_events_update_transcript_and_sidebar():
+    client = FakeSSEClient()
+    app = NexussyTextualApp(client=client, state=create_state())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("b", "u", "i", "l", "d", "enter")
+        await asyncio.sleep(0.1)
+        assert any(item.text == "Hello from SSE" for item in app.state.transcript)
+        assert app.state.stages["interview"].status == "passed"
+        assert app.state.stages["design"].status == "running"
+        assert app.state.final_status == "passed"

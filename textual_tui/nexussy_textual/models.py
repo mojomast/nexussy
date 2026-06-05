@@ -20,6 +20,15 @@ STAGE_LABELS: dict[StageName, str] = {
     "develop": "Develop",
 }
 GATED_PROFILES: dict[ProfileName, bool] = {"default": True, "strict": True, "cheap": True, "fast": False}
+STAGE_MODEL_PREFERENCE: dict[StageName, str] = {
+    "interview": "fast",
+    "design": "smart",
+    "validate": "smart",
+    "validate_browser": "fast",
+    "plan": "smart",
+    "review": "smart",
+    "develop": "fast",
+}
 
 
 @dataclass(frozen=True)
@@ -161,9 +170,17 @@ def default_model_options(providers: tuple[ProviderState, ...] = ()) -> tuple[Mo
 
 def create_routing(profile: ProfileName, options: tuple[ModelRef, ...]) -> dict[StageName, StageRouting]:
     enabled = [option for option in options if option.configured]
-    primary = enabled[0] if enabled else ModelRef("unconfigured", "none", False, "no provider configured")
-    fallback = enabled[1] if len(enabled) > 1 else primary
-    return {stage: StageRouting(primary=primary, fallback=fallback, profile=profile, gate_enabled=GATED_PROFILES[profile]) for stage in STAGES}
+    unconfigured = ModelRef("unconfigured", "none", False, "no provider configured")
+    fast_options = [option for option in enabled if any(token in option.model.lower() for token in ("mini", "flash", "fast"))]
+    smart_options = [option for option in enabled if option not in fast_options or any(token in option.model.lower() for token in ("opus", "sonnet", "gpt-5"))]
+    fast_primary = fast_options[0] if fast_options else (enabled[0] if enabled else unconfigured)
+    smart_primary = smart_options[0] if smart_options else fast_primary
+    routing: dict[StageName, StageRouting] = {}
+    for stage in STAGES:
+        primary = smart_primary if STAGE_MODEL_PREFERENCE[stage] == "smart" else fast_primary
+        fallback = fast_primary if primary == smart_primary else smart_primary
+        routing[stage] = StageRouting(primary=primary, fallback=fallback, profile=profile, gate_enabled=GATED_PROFILES[profile])
+    return routing
 
 
 def create_state(profile: ProfileName = "default") -> AppState:

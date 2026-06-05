@@ -1,5 +1,5 @@
 from nexussy_textual.models import ModelRef, PendingGate, create_state
-from nexussy_textual.state import advance_gate, apply_event, apply_providers, edit_stage_route, open_stage_chat, stage_workers, stay_paused, switch_profile
+from nexussy_textual.state import advance_gate, apply_event, apply_providers, apply_status_snapshot, edit_stage_route, open_stage_chat, stage_workers, stay_paused, switch_profile
 
 
 def env(event_type, payload, sequence=1):
@@ -86,3 +86,13 @@ def test_done_clears_gate_and_sets_final_status():
     state = apply_event(state, env("done", {"final_status": "passed"}, 1))
     assert state.pending_gate is None
     assert state.final_status == "passed"
+
+
+def test_fast_profile_suppresses_stage_transition_and_snapshot_gates():
+    state = switch_profile(create_state(), "fast")
+    state = apply_event(state, env("stage_transition", {"from_stage": "interview", "to_stage": "design", "from_status": "passed"}, 1))
+    assert state.pending_gate is None
+    state = state.__class__(**{**state.__dict__, "pending_gate": PendingGate("interview", "design", "stale")})
+    state = apply_status_snapshot(state, {"run": {"run_id": "run-1", "session_id": "sess-1"}, "paused": False, "stages": [{"stage": "design", "status": "passed"}], "workers": []})
+    assert state.pending_gate is not None
+    assert state.pending_gate.completed_stage == "interview"

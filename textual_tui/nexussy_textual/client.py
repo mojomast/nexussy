@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -90,23 +91,32 @@ class CoreClient:
     async def stream_run(self, run_id: str, reconnect: ReconnectState | None = None) -> AsyncIterator[dict[str, Any]]:
         reconnect = reconnect or ReconnectState()
         while True:
-            headers = self.headers({"Accept": "text/event-stream"})
-            if reconnect.last_event_id:
-                headers["Last-Event-ID"] = reconnect.last_event_id
-            async with self._client.stream("GET", f"/pipeline/runs/{run_id}/stream", headers=headers) as response:
-                if response.status_code >= 400:
-                    raise CoreClientError(f"SSE failed {response.status_code}")
-                async for frame in parse_sse(response):
-                    event = parse_envelope(frame)
-                    reconnect.last_event_id = event.get("event_id")
-                    if frame.get("retry"):
-                        reconnect.retry_ms = int(frame["retry"])
-                    yield event
-                    if event.get("type") == "done":
-                        return
+            try:
+                headers = self.headers({"Accept": "text/event-stream"})
+                if reconnect.last_event_id:
+                    headers["Last-Event-ID"] = reconnect.last_event_id
+                async with self._client.stream("GET", f"/pipeline/runs/{run_id}/stream", headers=headers) as response:
+                    if response.status_code >= 400:
+                        raise CoreClientError(f"SSE failed {response.status_code}")
+                    async for frame in parse_sse(response):
+                        try:
+                            event = parse_envelope(frame)
+                        except CoreClientError as exc:
+                            yield {"type": "pipeline_error", "event_id": "parse-error", "payload": {"message": str(exc)}}
+                            continue
+                        reconnect.last_event_id = event.get("event_id")
+                        if frame.get("retry"):
+                            reconnect.retry_ms = int(frame["retry"])
+                        yield event
+                        if event.get("type") == "done":
+                            return
+            except (httpx.ReadError, httpx.ConnectError):
+                await asyncio.sleep(reconnect.retry_ms / 1000)
+                reconnect.retry_ms = min(reconnect.retry_ms * 2, 30000)
+                continue
 
 
-async def parse_sse(response: httpx.Response) -> AsyncIterator[dict[str, str]]:
+async def parse_sse(response: httpx.Response) -> AsyncGenerator[dict[str, str], None]:
     buffer = ""
     async for chunk in response.aiter_text():
         buffer += chunk
@@ -141,7 +151,10 @@ def parse_envelope(frame: dict[str, str]) -> dict[str, Any]:
     data = frame.get("data", "")
     if data == "[DONE]":
         return {"type": "done", "event_id": frame.get("id", "done"), "payload": {"final_status": "passed"}}
-    envelope = json.loads(data)
+    try:
+        envelope = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise CoreClientError(f"invalid SSE envelope JSON: {exc}") from exc
     if frame.get("id") and envelope.get("event_id") != frame["id"]:
         raise CoreClientError("SSE id does not match envelope event_id")
     if frame.get("event") and envelope.get("type") != frame["event"]:

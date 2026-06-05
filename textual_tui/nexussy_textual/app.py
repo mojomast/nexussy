@@ -23,8 +23,10 @@ class NexussyTextualApp(App[None]):
         Binding("ctrl+p", "command_palette", "Commands", priority=True),
         Binding("?", "help", "Help"),
         Binding("escape", "escape", "Back", priority=True),
-        Binding("up,k", "stage_prev", "Prev stage"),
-        Binding("down,j", "stage_next", "Next stage"),
+        Binding("up", "history_prev", "History prev", priority=True),
+        Binding("down", "history_next", "History next", priority=True),
+        Binding("k", "stage_prev", "Prev stage"),
+        Binding("j", "stage_next", "Next stage"),
         Binding("c", "stage_chat", "Stage chat"),
         Binding("a", "inspector('artifacts')", "Artifacts"),
         Binding("w", "inspector('workers')", "Workers"),
@@ -46,6 +48,7 @@ class NexussyTextualApp(App[None]):
         self.state: AppState = state or create_state()
         self.inspector_mode = "artifacts"
         self._stream_task: asyncio.Task[None] | None = None
+        self._render_pending = False
 
     def compose(self) -> ComposeResult:
         yield HeaderBar(id="header-bar")
@@ -76,10 +79,6 @@ class NexussyTextualApp(App[None]):
             self.action_escape()
             event.stop()
             event.prevent_default()
-        elif event.key in {"up", "down"} and self.focused and self.focused.id == "composer":
-            self.cycle_history(-1 if event.key == "up" else 1)
-            event.stop()
-            event.prevent_default()
         elif event.key == "enter" and self.focused and self.focused.id == "inspector-table" and self.inspector_mode == "routing":
             self.cycle_selected_stage_model()
             event.stop()
@@ -87,21 +86,8 @@ class NexussyTextualApp(App[None]):
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if self.focused and self.focused.id == "composer":
-            blocked = {
-                "stage_prev",
-                "stage_next",
-                "stage_chat",
-                "inspector",
-                "routing",
-                "pause",
-                "resume",
-                "cancel",
-                "skip",
-                "advance_gate",
-                "stay_paused",
-            }
-            if action in blocked:
-                return False
+            composer_allowed = {"escape", "command_palette", "help", "history_prev", "history_next"}
+            return action in composer_allowed or None
         return True
 
     async def refresh_from_core(self) -> None:
@@ -122,6 +108,15 @@ class NexussyTextualApp(App[None]):
         self.query_one(InspectorPanel).render_state(self.state, self.inspector_mode)
         self.query_one(Composer).render_state(self.state)
         self.query_one(StatusBar).render_state(self.state)
+
+    def _schedule_render(self) -> None:
+        if not self._render_pending:
+            self._render_pending = True
+            self.call_after_refresh(self._do_render)
+
+    def _do_render(self) -> None:
+        self._render_pending = False
+        self.render_all()
 
     def focus_composer(self) -> None:
         self.set_focus(self.query_one("#composer", Input))
@@ -150,11 +145,21 @@ class NexussyTextualApp(App[None]):
 
     def reduce_event(self, env: dict) -> None:
         self.state = apply_event(self.state, env)
-        self.render_all()
+        self._schedule_render()
 
     async def watch_run(self, run_id: str) -> None:
         async for event in self.client.stream_run(run_id):
             self.reduce_event(event)
+
+    async def _stream_events(self, run_id: str) -> None:
+        try:
+            async for event in self.client.stream_run(run_id):
+                self.reduce_event(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.state = replace(self.state, connection="error", status_message=f"Stream error: {exc}")
+            self._schedule_render()
 
     def on_pipeline_sidebar_stage_selected(self, event: PipelineSidebar.StageSelected) -> None:
         self.state = self.dispatcher.open_stage_chat(replace(self.state, selected_stage=event.stage), event.stage)
@@ -227,7 +232,12 @@ class NexussyTextualApp(App[None]):
         if text.strip() and text != "__accept_suggestion__":
             self.state = replace(self.state, command_history=(*self.state.command_history, text), history_index=None)
         try:
+            before_run_id = self.state.run_id
             self.state = await self.dispatcher.send_chat(self.state, text)
+            if self.state.run_id and self.state.run_id != before_run_id:
+                if self._stream_task and not self._stream_task.done():
+                    self._stream_task.cancel()
+                self._stream_task = asyncio.ensure_future(self._stream_events(self.state.run_id))
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             if isinstance(exc, CoreClientError) or "connection" in message.lower() or "connect" in message.lower():
@@ -272,15 +282,23 @@ class NexussyTextualApp(App[None]):
         self.state = replace(self.state, selected_stage=STAGES[index])
         self.render_all()
 
+    def action_history_prev(self) -> None:
+        if self.focused and self.focused.id == "composer":
+            self.cycle_history(-1)
+
+    def action_history_next(self) -> None:
+        if self.focused and self.focused.id == "composer":
+            self.cycle_history(1)
+
     def action_stage_chat(self) -> None:
         self.state = self.dispatcher.open_stage_chat(self.state, self.state.selected_stage)
         self.render_all()
         self.focus_composer()
 
     def action_inspector(self, mode: str) -> None:
-        self.inspector_mode = "artifacts" if mode == "logs" else mode
+        self.inspector_mode = mode
         self.render_all()
-        if mode in {"artifacts", "workers", "routing", "diagnostics"}:
+        if mode in {"artifacts", "workers", "routing", "diagnostics", "logs"}:
             self.set_focus(self.query_one("#inspector-table", DataTable))
 
     def action_routing(self) -> None:
