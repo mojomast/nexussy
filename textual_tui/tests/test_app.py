@@ -219,3 +219,44 @@ async def test_sse_events_update_transcript_and_sidebar():
         assert app.state.stages["interview"].status == "passed"
         assert app.state.stages["design"].status == "running"
         assert app.state.final_status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_idle_state_has_onboarding_and_start_placeholder():
+    app = NexussyTextualApp(client=FakeClient(), state=create_state())
+    async with app.run_test(size=(100, 30)):
+        assert "Describe what to build" in app.query_one("#composer").placeholder
+        transcript = app.query_one("#transcript-log")
+        assert any("Start here" in str(strip) for strip in transcript.lines)
+        assert "Enter starts a run" in str(app.query_one("#composer-label").render())
+
+
+@pytest.mark.asyncio
+async def test_contextual_controls_prioritize_gate_actions():
+    base = create_state()
+    state = base.__class__(**{**base.__dict__, "run_id": "run-1", "pending_gate": PendingGate("interview", "design", "ready"), "paused": True})
+    app = NexussyTextualApp(client=FakeClient(), state=state)
+    async with app.run_test(size=(100, 30)):
+        assert app.query_one("#advance-gate").display is True
+        assert app.query_one("#resume").display is True
+        assert app.query_one("#pause").display is False
+        assert "confirm to advance" in str(app.query_one("#composer-label").render())
+
+
+@pytest.mark.asyncio
+async def test_compact_layout_composes_on_small_terminal():
+    app = NexussyTextualApp(client=FakeClient(), state=create_state())
+    async with app.run_test(size=(72, 22)):
+        assert app.query_one("#composer") is not None
+        assert app.query_one("#pipeline-sidebar") is not None
+        assert app.focused.id == "composer"
+
+
+@pytest.mark.asyncio
+async def test_empty_inspector_modes_show_guidance():
+    app = NexussyTextualApp(client=FakeClient(), state=create_state())
+    async with app.run_test(size=(100, 30)):
+        app.action_inspector("workers")
+        assert "no active workers" in str(app.query_one("#inspector-hint").render()).lower()
+        app.action_inspector("diagnostics")
+        assert "actionable health" in str(app.query_one("#inspector-hint").render()).lower()

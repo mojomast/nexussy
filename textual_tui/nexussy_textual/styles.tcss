@@ -19,20 +19,24 @@ Screen {
 }
 
 #pipeline-sidebar {
-  width: 34;
-  border: solid #4cc9f0;
+  width: 31;
+  min-width: 24;
+  max-width: 36;
+  border: tall #294b70;
   padding: 0 1;
 }
 
 #main-pane {
   width: 1fr;
-  border: solid #4361ee;
+  border: solid #263a73;
   padding: 0 1;
 }
 
 #inspector-panel {
-  width: 42;
-  border: solid #7209b7;
+  width: 36;
+  min-width: 26;
+  max-width: 44;
+  border: tall #432061;
   padding: 0 1;
 }
 
@@ -56,6 +60,8 @@ Screen {
 
 Button:focus, Input:focus, ListView:focus, DataTable:focus {
   border: heavy #ffd166;
+  background: #1b2750;
+  color: #ffffff;
 }
 
 Button:disabled {
@@ -71,7 +77,7 @@ Button:disabled {
 }
 
 #gate-card {
-  border: heavy #ffd166;
+  border: heavy #d7a21b;
   padding: 0 1;
   height: auto;
   max-height: 10;
@@ -91,4 +97,13 @@ Button:disabled {
 
 #transcript-panel {
   height: 1fr;
+}
+
+#inspector-hint {
+  color: #9fb3d9;
+  height: 1;
+}
+
+DataTable {
+  scrollbar-size: 1 1;
 }
